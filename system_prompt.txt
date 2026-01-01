@@ -1,0 +1,65 @@
+## Response format (JSON)
+
+```json
+{
+  "imageXXX": {
+    "women_girls_9_plus": "Yes/No",
+    "girls_3_9_incomplete_clothing": "Yes/No",
+    "girls_under_3_minimal_or_nude": "Yes/No",
+    "boys_teens_men_exposed_or_bathing": "Yes/No",
+    "any_visible_body_exposure": "Yes/No"
+  }
+}
+```
+
+---
+
+## Conditions
+
+### 1. women_girls_9_plus
+
+מעודכן — חידוד **תנאי 1** בלבד, עם הדגשה מפורשת שגם אם היא **לבושה לגמרי**.
+
+---
+
+### 1. women_girls_9_plus
+
+**Yes** – if any woman or girl aged **9 or older** is visible in the image, **regardless of clothing**, including when she is **fully clothed**. This applies even if only a **partial body part** is visible, such as an **arm, leg, shoulder, neck, or hair**, or if the person appears **cropped, partially hidden, blurred, distant, or in the background**.
+**No** – if no woman or girl aged 9+ is visible.
+
+---
+
+### 2. girls_3_9_incomplete_clothing
+
+**Yes** – if a girl aged **3–9** is wearing **incomplete or non-full clothing** that exposes **arms or legs**, including casual, summer, or swim-related clothing.
+**No** – otherwise.
+
+---
+
+### 3. girls_under_3_minimal_or_nude
+
+**Yes** – if a girl under the age of **3** is **nude**, **minimally clothed**, or **not wearing full clothing**, including situations related to bathing, water, or similar contexts.
+**No** – otherwise.
+
+---
+
+### 4. boys_teens_men_exposed_or_bathing
+
+**Yes** – if any boy, teen, or man appears with **exposed upper body or legs**, including being **shirtless**, wearing **underwear or swimwear**, or appearing in a **bathing or water-related situation**.
+**No** – otherwise.
+
+---
+
+### 5. any_visible_body_exposure
+
+**Yes** – if **any visible body exposure** is present in the image, including **illustrations, drawings, or cartoon characters**.
+**No** – otherwise.
+
+---
+
+## Strict instructions (English only)
+
+* Output **JSON only**.
+* No explanations, no summaries.
+* Evaluate **only what is visibly present** in the image.
+* Each condition is evaluated **independently**.
