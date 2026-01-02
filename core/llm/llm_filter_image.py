@@ -1,3 +1,4 @@
+import binascii
 import json
 import mimetypes
 from llama_cpp import Llama
@@ -21,7 +22,7 @@ class ResponseValidationError(Exception):
         self.item_key = item_key
 
     def __str__(self):
-        parts = [str(self)]
+        parts = [self.__class__.__name__]
         if self.item_key:
             parts.append(f"item={self.item_key}")
         if self.details:
@@ -43,7 +44,7 @@ class ResponseValidationError(Exception):
 class FilterImage(): 
     MODEL_PATH = "models/qwen_3_vl_8B_Q8/Qwen3VL-8B-Instruct-Q8_0.gguf"
     NMPROJ_MODEL_PATH = "models/qwen_3_vl_8B_Q8/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf"
-    SYSTEM_PROMPT = open("system_prompt.txt", "r", encoding="utf-8").read()
+    SYSTEM_PROMPT = open("config/llm/system_prompt.txt", "r", encoding="utf-8").read()
     CONDITIONS_CHECK = (
         "female_visible_9_plus",
         "female_3_to_9_partial_clothing",
@@ -62,12 +63,21 @@ class FilterImage():
         )
 
 
-    def _image_to_base64_data_uri(self, file_path):
-        with open(file_path, "rb") as img_file:
-            base64_data = base64.b64encode(img_file.read()).decode("utf-8")
-            mime_type = mimetypes.guess_type(file_path)[0] or "application/octet-stream"
+    def _image_to_base64_data_uri(self, image:  bytes) -> str:
+            base64_data = base64.b64encode(image).decode("utf-8")
+            mime_type =  "application/octet-stream"
             return f"data:{mime_type};base64,{base64_data}"
 
+    def _is_base64_string(self, s: str) -> bool:
+        try:
+            # remove common headers if exist
+            if s.startswith("data:image"):
+                s = s.split(",", 1)[1]
+
+            base64.b64decode(s, validate=True)
+            return True
+        except (binascii.Error, ValueError):
+            return False
 
 
     def _validate_response_structure(self,
@@ -150,7 +160,13 @@ class FilterImage():
 
 
 
-    def analyze_image(self, file_path):
+    def analyze_image(self, image: str|bytes) -> tuple[tuple[bool, ...], ...]:
+        if isinstance(image, str):
+            if not self._is_base64_string(image):
+                with open(image, "rb") as img_file:
+                    image = self._image_to_base64_data_uri(img_file.read())
+        elif isinstance(image, bytes):
+            image = self._image_to_base64_data_uri(image)
         messages = [
             {"role": "system", "content": self.SYSTEM_PROMPT},
             {
@@ -158,12 +174,13 @@ class FilterImage():
                 "content": [
                     {
                         "type": "image_url",
-                        "image_url": {"url": self._image_to_base64_data_uri(file_path)},
+                        "image_url": {"url": image},
                     }
                 ],
             },
         ]
         llm_response = self.llm.create_chat_completion(messages=messages, temperature=0.0)
+        self.llm.reset()
         response_content = llm_response["choices"][0]["message"]["content"]
         try:
             response_json = json.loads(response_content)
