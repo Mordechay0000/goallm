@@ -53,7 +53,7 @@
 
 ---
 
-## Strict instructions (English only)
+## Strict instructions
 
 * Output **JSON only**.
 * No explanations, no summaries.
