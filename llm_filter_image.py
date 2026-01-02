@@ -45,11 +45,12 @@ class FilterImage():
     NMPROJ_MODEL_PATH = "models/qwen_3_vl_8B_Q8/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf"
     SYSTEM_PROMPT = open("../system_prompt.txt", "r", encoding="utf-8").read()
     CONDITIONS_CHECK = (
-        "women_girls_9_plus",
-        "girls_3_9_incomplete_clothing",
-        "girls_under_3_minimal_or_nude",
+        "female_visible_9_plus",
+        "female_3_to_9_partial_clothing",
+        "female_under_3_minimal_clothing",
         "boys_teens_men_exposed_or_bathing",
-        "any_visible_body_exposure")
+        "any_visible_body_exposure"
+    )
     
     def __init__(self): 
         self.llm = Llama(

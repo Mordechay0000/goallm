@@ -1,9 +1,9 @@
 {
   "conditions": {
-    "female_visible_9_plus": false,
-    "female_3_to_9_partial_clothing": false,
-    "female_under_3_minimal_clothing": false,
-    "male_exposed_or_bathing": false,
-    "any_body_exposure": false
+    "female_visible_9_plus": "Yes/No",
+    "female_3_to_9_partial_clothing": "Yes/No",
+    "female_under_3_minimal_clothing": "Yes/No",
+    "boys_teens_men_exposed_or_bathing": "Yes/No",
+    "any_visible_body_exposure": "Yes/No"
   }
 }
