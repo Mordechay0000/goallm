@@ -43,7 +43,7 @@ class ResponseValidationError(Exception):
 class FilterImage(): 
     MODEL_PATH = "models/qwen_3_vl_8B_Q8/Qwen3VL-8B-Instruct-Q8_0.gguf"
     NMPROJ_MODEL_PATH = "models/qwen_3_vl_8B_Q8/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf"
-    SYSTEM_PROMPT = open("../system_prompt.txt", "r", encoding="utf-8").read()
+    SYSTEM_PROMPT = open("system_prompt.txt", "r", encoding="utf-8").read()
     CONDITIONS_CHECK = (
         "female_visible_9_plus",
         "female_3_to_9_partial_clothing",
