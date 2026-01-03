@@ -21,7 +21,7 @@ class TaskStatus(Enum):
 
 @dataclass
 class ImageTask:
-    image_path: str
+    image: bytes
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     status: TaskStatus = TaskStatus.PENDING
     result: tuple | None = None
@@ -48,8 +48,8 @@ class ImageProcessingQueue:
         self.queue.join()
 
 
-    def enqueue(self, image_path: str) -> str:
-        task = ImageTask(image_path=image_path)
+    def enqueue(self, image: str|bytes) -> str:
+        task = ImageTask(image=image)
         self.tasks[task.id] = task
         self.queue.put(task)
         return task.id
@@ -63,7 +63,7 @@ class ImageProcessingQueue:
             task = self.queue.get()
             try:
                 task.status = TaskStatus.PROCESSING
-                result = self.filter.analyze_image(task.image_path)
+                result = self.filter.analyze_image(task.image)
 
                 task.result = result
                 task.status = TaskStatus.DONE
@@ -82,5 +82,3 @@ class ImageProcessingQueue:
                 )
 
                 self.queue.task_done()
-    def global_task_callback(task_id, status, result, error):
-        pass

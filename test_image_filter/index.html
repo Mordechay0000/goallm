@@ -254,14 +254,15 @@
   <script>
 
     const CONDITION_LABELS = {
-      "women_girls_9_plus": "נשים/בנות מעל גיל 9?",
-      "girls_3_9_incomplete_clothing": "ילדות (3-9) בלבוש לא הולם",
-      "girls_under_3_minimal_or_nude": "ילדות מתחת לגיל 3 בלבוש מינימלי או בלי לבוש בכלל",
+      "female_visible_9_plus": "נשים/בנות מעל גיל 9?",
+      "female_3_to_9_partial_clothing": "ילדות (3-9) בלבוש לא הולם",
+      "female_under_3_minimal_clothing": "ילדות מתחת לגיל 3 בלבוש מינימלי או בלי לבוש בכלל",
       "boys_teens_men_exposed_or_bathing": "ילדים/נערים/גברים חשופים או מתרחצים",
       "any_visible_body_exposure": "חשיפה נראית לעין",
     };
 
     let selectedFile = null;
+    let isAnalyzing = false;
 
     const dropzone = document.getElementById("dropzone");
     const hiddenFileInput = document.getElementById("hiddenFileInput");
@@ -271,6 +272,10 @@
     const urlInput = document.getElementById("urlInput");
     const removeImageBtn = document.getElementById("removeImage");
 
+
+    function sleep(ms) {
+      return new Promise(r => setTimeout(r, ms));
+    }
     // ---------- state helpers ----------
     function setImage(file) {
       resetResultUI();
@@ -406,7 +411,6 @@
 
 
     // ---------- analyze ----------
-    let isAnalyzing = false;
     async function analyze() {
       if (isAnalyzing) return;
       isAnalyzing = true;
@@ -436,10 +440,27 @@
           throw new Error(await res.text());
         }
 
-        const data = await res.json();
+        const task_id = await res.json();
 
-        const imageKey = Object.keys(data)[0];
-        const conditions = data[imageKey];
+          /* ---------- שלב 2: polling ---------- */
+        let data;
+        while (true) {
+          await sleep(500);
+          const r = await fetch(`/result/${task_id}`);
+          data = await r.json();
+
+          if (data.status === "done") {
+            console.log(data);
+            break;
+          }
+          if (data.status === "error") {
+            throw new Error(data.error || "שגיאה בעיבוד");
+          }
+        }
+        /* ---------- שלב 3: מחיקה מהשרת ---------- */
+        fetch(`/result/${task_id}`, { method: "DELETE" });
+
+        const conditions = data["result"];
 
         const hasYes = Object.values(conditions).includes("Yes");
 

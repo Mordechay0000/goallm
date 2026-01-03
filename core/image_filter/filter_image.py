@@ -10,30 +10,25 @@ class ResponseValidationError(Exception):
     def __init__(
         self,
         *,
-        details: dict | None = None,
+        message: dict | None = None,
         raw_response: str | None = None,
         parsed_response: dict | None = None,
-        item_key: str | None = None,
     ):
         super().__init__()
-        self.details = details
+        self.message = message
         self.raw_response = raw_response
         self.parsed_response = parsed_response
-        self.item_key = item_key
 
     def __str__(self):
         parts = [self.__class__.__name__]
-        if self.item_key:
-            parts.append(f"item={self.item_key}")
-        if self.details:
-            parts.append(f"details={self.details}")
+        if self.message:
+            parts.append(f"message={self.message}")
         return " | ".join(parts)
 
     def to_dict(self):
         return {
             "error": self.message,
-            "item_key": self.item_key,
-            "details": self.details,
+            "message": self.message,
             "raw_response": self.raw_response,
             "parsed_response": self.parsed_response,
         }
@@ -93,72 +88,34 @@ class FilterImage():
 
         if not isinstance(response_json, dict):
             raise ResponseValidationError(
-                "Top-level response must be a JSON object",
+                message = "Top-level response must be a JSON object",
                 parsed_response=str(response_json))
-        for item_key, item_data in response_json.items():
-            if not isinstance(item_key, str):
+        
+        response_condition = response_json.keys()
+        # Check that all expected conditions exist
+        missing_conditions = set(self.CONDITIONS_CHECK) - response_condition
+        if missing_conditions:
+            raise ResponseValidationError(
+                message = f"missing conditions: {missing_conditions}",
+                parsed_response=str(response_json),
+            )
+
+        # Check for unexpected conditions (optional but recommended)
+        extra_conditions = response_condition - set(self.CONDITIONS_CHECK)
+        if extra_conditions:
+            raise ResponseValidationError(
+                message = f"has unexpected conditions: {extra_conditions}",
+                parsed_response=str(response_json),
+            )
+
+        # Validate values
+        for condition, value in response_json.items():
+            if value not in ("Yes", "No"):
                 raise ResponseValidationError(
-                    f"Invalid item key type: {item_key}",
+                    message = f"Invalid value for condition '{condition}': {value}",
                     parsed_response=str(response_json),
-                    item_key=item_key,
                 )
-
-            if not isinstance(item_data, dict):
-                raise ResponseValidationError(
-                    f"Item '{item_key}' must be an object",
-                    parsed_response=str(response_json),
-                    item_key=item_key,
-                )
-
-            # Check that all expected conditions exist
-            missing_conditions = set(self.CONDITIONS_CHECK) - item_data.keys()
-            if missing_conditions:
-                raise ResponseValidationError(
-                    f"Item '{item_key}' is missing conditions: {missing_conditions}",
-                    parsed_response=str(response_json),
-                    item_key=item_key,
-                )
-
-            # Check for unexpected conditions (optional but recommended)
-            extra_conditions = item_data.keys() - set(self.CONDITIONS_CHECK)
-            if extra_conditions:
-                raise ResponseValidationError(
-                    f"Item '{item_key}' has unexpected conditions: {extra_conditions}",
-                    parsed_response=str(response_json),
-                    item_key=item_key,
-                )
-
-            # Validate values
-            for condition, value in item_data.items():
-                if value not in ("Yes", "No"):
-                    raise ResponseValidationError(
-                        f"Invalid value for condition '{condition}' in '{item_key}': {value}",
-                        parsed_response=str(response_json),
-                        item_key=item_key,
-                    )
-
-
-    def _evaluate_item_conditions(self, 
-        item_data: dict[str, str],
-    ) -> tuple[bool, ...]:
-        """
-        Evaluate whether each condition is satisfied for a single item.
-        """
-        return tuple(item_data.get(condition) == "Yes" for condition in self.CONDITIONS_CHECK)
-
-
-    def _evaluate_all_items(self,
-        all_items: dict[str, dict[str, str]],
-    ) -> tuple[tuple[bool, ...], ...]:
-        """
-        Evaluate conditions for all items.
-        """
-        return tuple(
-            self._evaluate_item_conditions(item_data)
-            for item_data in all_items.values()
-        )
-
-
+            
 
     def analyze_image(self, image: str|bytes) -> tuple[tuple[bool, ...], ...]:
         if isinstance(image, str):
@@ -186,10 +143,9 @@ class FilterImage():
             response_json = json.loads(response_content)
         except json.JSONDecodeError as e:
             raise ResponseValidationError(
-                "Failed to parse LLM response as JSON",
+                message = "Failed to parse LLM response as JSON",
                 raw_response=response_content,
             ) from e
         self._validate_response_structure(response_json)
-        
-        conditions_status = self._evaluate_all_items(response_json)
-        return conditions_status
+        print("\n\n\n\n\n\n\n" + response_content)
+        return response_json
