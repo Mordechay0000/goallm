@@ -37,8 +37,8 @@ class ResponseValidationError(Exception):
 
 
 class FilterImage(): 
-    MODEL_PATH = "models/qwen_3_vl_8B_Q8/Qwen3VL-8B-Instruct-Q8_0.gguf"
-    NMPROJ_MODEL_PATH = "models/qwen_3_vl_8B_Q8/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf"
+    MODEL_PATH = "models/qwen3_vl_8B_Q8/Qwen3VL-8B-Instruct-Q8_0.gguf"
+    NMPROJ_MODEL_PATH = "models/qwen3_vl_8B_Q8/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf"
     SYSTEM_PROMPT = open("config/llm/system_prompt.txt", "r", encoding="utf-8").read()
     CONDITIONS_CHECK = (
         "female_visible_9_plus",
@@ -58,9 +58,8 @@ class FilterImage():
         )
 
 
-    def _image_to_base64_data_uri(self, image:  bytes) -> str:
+    def _image_to_base64_data_uri(self, image:  bytes, mime_type: str) -> str:
             base64_data = base64.b64encode(image).decode("utf-8")
-            mime_type =  "application/octet-stream"
             return f"data:{mime_type};base64,{base64_data}"
 
     def _is_base64_string(self, s: str) -> bool:
@@ -117,13 +116,13 @@ class FilterImage():
                 )
             
 
-    def analyze_image(self, image: str|bytes) -> tuple[tuple[bool, ...], ...]:
+    def analyze_image(self, image: str|bytes, mime) -> dict:
         if isinstance(image, str):
             if not self._is_base64_string(image):
                 with open(image, "rb") as img_file:
-                    image = self._image_to_base64_data_uri(img_file.read())
+                    image = self._image_to_base64_data_uri(img_file.read(), mime_type=mime)
         elif isinstance(image, bytes):
-            image = self._image_to_base64_data_uri(image)
+            image = self._image_to_base64_data_uri(image, mime_type=mime)
         messages = [
             {"role": "system", "content": self.SYSTEM_PROMPT},
             {
