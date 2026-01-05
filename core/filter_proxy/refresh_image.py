@@ -1,93 +1,86 @@
-# flask server code
+import eventlet
+eventlet.monkey_patch()
+
 import os
-import eventlet.wsgi
-from flask import Flask, send_from_directory, jsonify, request
-from flask_socketio import SocketIO
+import json
 
-# אתחול אפליקציית Flask
+from eventlet.websocket import WebSocketWSGI
+from eventlet import wsgi
+from eventlet.websocket import WebSocketWSGI
+from werkzeug.middleware.dispatcher import DispatcherMiddleware
+
+from flask import Flask, request, jsonify
+
+
+
 app = Flask(__name__)
-# app.config['SECRET_KEY'] = 'your_very_secret_key_here!' # מומלץ להוסיף בסביבת Production
 
-# אתחול SocketIO
-socketio = SocketIO(app, cors_allowed_origins='*', async_mode='eventlet')
+# רשימת קליינטים מחוברים
+clients = set()
 
-# --- Routes ---
-
-@app.route('/static/<path:filename>')
-def serve_static(filename: str):
-    """מגיש קבצים סטטיים מהתיקייה 'static'."""
-    return send_from_directory('static', filename)
-
-@app.route('/notify', methods=['POST'])
-def notify():
-    """
-    מקבל הודעות (סטטוס עיבוד תמונה + URL) דרך POST
-    ומשדר את ה-URL והסטטוס ללקוחות SocketIO.
-    """
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "Invalid JSON payload"}), 400
-
-    # קבלת הנתונים מהבקשה
-    image_hash = data.get('image_hash') # עדיין יכול להגיע מ-mitmproxy
-    image_url = data.get('image_url')   # <-- הנתון החדש והחשוב לקליינט
-    status = data.get('status')
-
-    # !!! בדיקת תקינות - ודא שגם URL וגם סטטוס קיימים !!!
-    if not image_url or not status:
-        # אפשר להוסיף בדיקה גם ל-image_hash אם משתמשים בו ללוגים
-        return jsonify({"error": "Missing 'image_url' or 'status' in JSON payload"}), 400
-
-    # הדפסת לוג עם ה-URL (וה-hash אם רוצים)
-    log_message = f"Received notification: url={image_url}, status={status}"
-    if image_hash:
-        log_message += f" (hash={image_hash})"
-    print(log_message)
-
-    # !!! שידור ה-URL והסטטוס ללקוחות !!!
-    socketio.emit('image_update', {'image_url': image_url, 'status': status})
-
-    return jsonify({'status': 'ok'}), 200
-
-# --- SocketIO Event Handlers ---
-
-@socketio.on('connect')
-def handle_connect():
-    print(f"Client connected: {request.sid}")
-
-@socketio.on('disconnect')
-def handle_disconnect():
-    print(f"Client disconnected: {request.sid}")
-
-# --- Main Execution ---
-if __name__ == '__main__':
-    CERT_FILE = '../../ca/flask.crt'
-    KEY_FILE = '../../ca/flask.key'
-
-    if not os.path.exists(CERT_FILE) or not os.path.exists(KEY_FILE):
-        print(f"Error: SSL certificate ('{CERT_FILE}') or key ('{KEY_FILE}') not found.")
-        print("Please ensure the certificate and key files are in the correct location.")
-        exit(1)
-
-    ssl_args = {
-        'certfile': CERT_FILE,
-        'keyfile': KEY_FILE
-    }
-
-    print(f"Starting server on https://127.0.0.1:8081")
-    print("Using eventlet with SSL.")
+# ---------- WebSocket handler ----------
+def ws_handler(ws):
+    clients.add(ws)
+    print("WS client connected")
 
     try:
-        listener = eventlet.wrap_ssl(
-            eventlet.listen(('127.0.0.1', 8081)),
-            **ssl_args,
-            server_side=True
-        )
-        eventlet.wsgi.server(
-            listener,
-            app,
-            log_output=True
-        )
-    except Exception as e:
-        print(f"Failed to start server: {e}")
-        exit(1)
+        while True:
+            eventlet.sleep(999999)
+
+    except Exception:
+        pass
+    finally:
+        clients.discard(ws)
+        print("WS client disconnected")
+
+
+@app.route("/notify", methods=["POST"])
+def notify():
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    image_url = data.get("image_url")
+    status = data.get("status")
+
+    if not image_url or not status:
+        return jsonify({"error": "Missing image_url or status"}), 400
+
+    payload = json.dumps({
+        "image_url": image_url,
+        "status": status
+    })
+
+    dead = []
+    for ws in clients:
+        try:
+            ws.send(payload)
+        except Exception:
+            dead.append(ws)
+
+    for ws in dead:
+        clients.discard(ws)
+
+    print(f"Notify sent: {image_url} ({status})")
+    return jsonify({"ok": True})
+
+
+# ---------- Main ----------
+if __name__ == "__main__":
+    CERT_FILE = "ca/flask.crt"
+    KEY_FILE = "ca/flask.key"
+
+    listener = eventlet.wrap_ssl(
+        eventlet.listen(("127.0.0.1", 8081)),
+        certfile=CERT_FILE,
+        keyfile=KEY_FILE,
+        server_side=True,
+    )
+
+    # חיבור Flask + WebSocket באותו שרת
+    application = DispatcherMiddleware(app, {
+        "/ws": WebSocketWSGI(ws_handler)
+    })
+
+    print("WS server running on wss://127.0.0.1:8081/ws")
+    wsgi.server(listener, application)
