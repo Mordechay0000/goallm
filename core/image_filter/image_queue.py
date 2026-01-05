@@ -7,6 +7,8 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 import uuid
+import queue
+import threading
 
 import threading
 from dataclasses import dataclass, field
@@ -23,17 +25,13 @@ class TaskStatus(Enum):
 
 @dataclass
 class ImageTask:
-    image: bytes
-    image_hash: str
+    image_content: bytes
+    task_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    image_details: dict = field(default_factory=dict)
     image_mime_type: str = None
     status: TaskStatus = TaskStatus.PENDING
     result: tuple | None = None
     error: str | None = None
-
-
-
-import queue
-import threading
 
 
 class ImageProcessingQueue:
@@ -54,31 +52,26 @@ class ImageProcessingQueue:
         return hashlib.sha256(image).hexdigest()
 
 
-    def enqueue(self, image: bytes, image_hash: str = None, image_mime_type: str = "application/octet-stream") -> str:
-        if image_hash is None:
-            image_hash = self._image_hash(image)
-        if image_hash in self.tasks:
-            return image_hash
-
+    def enqueue(self, image_content: bytes, image_mime_type: str, image_details: dict = dict()) -> str:
         task = ImageTask(
-            image=image,
+            image_content=image_content,
             image_mime_type=image_mime_type,
-            image_hash=image_hash,
+            image_details=image_details,
         )
-        self.tasks[image_hash] = task
+        self.tasks[task.task_id] = task
         self.queue.put(task)
-        return task.image_hash
+        return task.task_id
 
 
-    def get_task(self, image_hash: str) -> ImageTask:
-        return self.tasks[image_hash]
+    def get_task(self, task_id: str) -> ImageTask:
+        return self.tasks[task_id]
 
     def _worker_loop(self):
         while True:
             task = self.queue.get()
             try:
                 task.status = TaskStatus.PROCESSING
-                result = self.filter_image.analyze_image(task.image, task.image_mime_type)
+                result = self.filter_image.analyze_image(task.image_content, task.image_mime_type)
 
                 task.result = result
                 task.status = TaskStatus.DONE
@@ -90,9 +83,10 @@ class ImageProcessingQueue:
             finally:
                 # ← כאן ה-event
                 self.on_task_done(
-                    task.image_hash,
+                    task.task_id,
                     task.status,
                     task.result,
+                    task.image_details,
                     task.error,
                 )
 

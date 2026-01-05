@@ -1,6 +1,7 @@
 import binascii
 import json
 import mimetypes
+import cairosvg
 from llama_cpp import Llama
 from llama_cpp.llama_chat_format import Qwen3VLChatHandler
 import base64
@@ -37,7 +38,7 @@ class ResponseValidationError(Exception):
 
 
 class FilterImage(): 
-    MODEL_PATH = "models/qwen3_vl_8B_Q8/Qwen3VL-8B-Instruct-Q8_0.gguf"
+    MODEL_PATH = "models/Qwen3VL-8B-Instruct-Q4_k_m.gguf"
     NMPROJ_MODEL_PATH = "models/qwen3_vl_8B_Q8/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf"
     SYSTEM_PROMPT = open("config/llm/system_prompt.txt", "r", encoding="utf-8").read()
     CONDITIONS_CHECK = (
@@ -57,8 +58,28 @@ class FilterImage():
             swa_full=False,
         )
 
+    import cairosvg
+
+    def _svg_to_png(self, svg_data: bytes,
+                width: int | None = None,
+                height: int | None = None) -> bytes:
+        """
+        Convert SVG bytes to PNG bytes.
+        width/height optional; if None uses SVG viewBox.
+        """
+        return cairosvg.svg2png(
+            bytestring=svg_data,
+            output_width=width,
+            output_height=height
+        )
+
 
     def _image_to_base64_data_uri(self, image:  bytes, mime_type: str) -> str:
+            if mime_type == 'image/svg+xml':
+                # SVG images should be directly encoded as UTF-8 text
+                image = self._svg_to_png(image, width=512, height=512)
+                mime_type = 'image/png'
+
             base64_data = base64.b64encode(image).decode("utf-8")
             return f"data:{mime_type};base64,{base64_data}"
 
@@ -116,13 +137,13 @@ class FilterImage():
                 )
             
 
-    def analyze_image(self, image: str|bytes, mime) -> dict:
-        if isinstance(image, str):
-            if not self._is_base64_string(image):
-                with open(image, "rb") as img_file:
-                    image = self._image_to_base64_data_uri(img_file.read(), mime_type=mime)
-        elif isinstance(image, bytes):
-            image = self._image_to_base64_data_uri(image, mime_type=mime)
+    def analyze_image(self, image_content: str|bytes, mime) -> dict:
+        if isinstance(image_content, str):
+            if not self._is_base64_string(image_content):
+                with open(image_content, "rb") as img_file:
+                    image_content = self._image_to_base64_data_uri(img_file.read(), mime_type=mime)
+        elif isinstance(image_content, bytes):
+            image_content = self._image_to_base64_data_uri(image_content, mime_type=mime)
         messages = [
             {"role": "system", "content": self.SYSTEM_PROMPT},
             {
@@ -130,11 +151,12 @@ class FilterImage():
                 "content": [
                     {
                         "type": "image_url",
-                        "image_url": {"url": image},
+                        "image_url": {"url": image_content},
                     }
                 ],
             },
         ]
+        print(f"Sending image to LLM: {image_content[0:20]}")
         llm_response = self.llm.create_chat_completion(messages=messages, temperature=0.0)
         self.llm.reset()
         response_content = llm_response["choices"][0]["message"]["content"]
