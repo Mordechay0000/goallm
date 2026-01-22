@@ -6,14 +6,14 @@ import uuid
 import magic
 import requests
 
-from core.image_filter.filter_image import *
-from core.image_filter.image_queue import *
+from core.image_processing.llm_image_analyzer import LLMImageAnalyzer
+from core.image_processing.image_processing_queue import ImageProcessingQueue, TaskStatus
 
 app = FastAPI()
 
 TASK_RESULTS = {}
 
-def on_task_update(task_id, status, result=None, error=None):
+def on_task_update(task_id, status, result=None, image_details=None, error=None):
     short_id = task_id[:8]
 
     if status == TaskStatus.PROCESSING:
@@ -34,7 +34,7 @@ def on_task_update(task_id, status, result=None, error=None):
 
 
 QUEUE = ImageProcessingQueue(
-        FilterImage(),
+        LLMImageAnalyzer(),
         on_task_done=on_task_update
     )
 
@@ -99,7 +99,7 @@ async def analyze_image(
     else:
         image_bytes = requests.get(image_url).content
 
-    task_id = QUEUE.enqueue(image=image_bytes, image_mime_type=detect_image_mime(image_bytes))
+    task_id = QUEUE.enqueue(image_content=image_bytes, image_mime_type=detect_image_mime(image_bytes))
 
     return task_id
 
