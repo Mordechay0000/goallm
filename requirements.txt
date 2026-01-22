@@ -1,0 +1,19 @@
+# Core dependencies - required for mitmproxy addon
+mitmproxy>=12.2.0
+
+# Image processing
+Pillow>=12.0.0
+python-magic>=0.4.27
+beautifulsoup4>=4.12.0
+
+# SVG to image conversion (used in image_status_manager)
+CairoSVG>=2.8.0
+cairocffi>=1.7.0
+
+# Optional: LLM image analyzer (comment out if not needed)
+# llama-cpp-python>=0.2.0
+
+# Optional: Testing server dependencies (only needed for test_image_filter)
+# fastapi>=0.100.0
+# requests>=2.31.0
+# uvicorn>=0.23.0
