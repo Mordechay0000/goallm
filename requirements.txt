@@ -17,3 +17,7 @@ cairocffi>=1.7.0
 # fastapi>=0.100.0
 # requests>=2.31.0
 # uvicorn>=0.23.0
+
+# CRM Web Interface
+flask>=3.0.0
+flask-cors>=4.0.0
