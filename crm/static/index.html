@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ניהול סינון - CRM</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <h1>ניהול כללי סינון</h1>
+            <button class="btn btn-primary" onclick="openAddModal()">
+                <span class="icon">+</span>
+                הוסף כלל חדש
+            </button>
+        </header>
+
+        <!-- Filters -->
+        <div class="filters">
+            <div class="search-box">
+                <input type="text" id="searchInput" placeholder="חפש לפי דומיין או תיאור..." 
+                       oninput="filterPolicies()">
+            </div>
+            <div class="filter-group">
+                <label>
+                    <input type="checkbox" id="enabledFilter" checked onchange="filterPolicies()">
+                    הצג רק כללים פעילים
+                </label>
+            </div>
+        </div>
+
+        <!-- Policies Table -->
+        <div class="table-container">
+            <table class="policies-table">
+                <thead>
+                    <tr>
+                        <th>דומיין</th>
+                        <th>נתיב</th>
+                        <th>סוג</th>
+                        <th>סטטוס</th>
+                        <th>תיאור</th>
+                        <th>פעיל</th>
+                        <th>פעולות</th>
+                    </tr>
+                </thead>
+                <tbody id="policiesTableBody">
+                    <tr>
+                        <td colspan="7" class="loading">טוען...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Empty State -->
+        <div id="emptyState" class="empty-state" style="display: none;">
+            <p>אין כללים להצגה</p>
+        </div>
+    </div>
+
+    <!-- Add/Edit Modal -->
+    <div id="policyModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle">הוסף כלל חדש</h2>
+                <button class="close-btn" onclick="closeModal()">&times;</button>
+            </div>
+            <form id="policyForm" onsubmit="savePolicy(event)">
+                <div class="form-group">
+                    <label for="domain">דומיין *</label>
+                    <input type="text" id="domain" required 
+                           placeholder="example.com או *.example.com">
+                    <small>דומיין לחסימה. ניתן להשתמש ב-*. לחסימת תת-דומיינים</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="path">נתיב (אופציונלי)</label>
+                    <input type="text" id="path" 
+                           placeholder="/api/images או /images/*">
+                    <small>נתיב ספציפי. השאר ריק לחסימת כל הנתיבים. ניתן להשתמש ב-*</small>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="type">סוג</label>
+                        <select id="type">
+                            <option value="*">כל הסוגים</option>
+                            <option value="image">תמונות</option>
+                            <option value="html">HTML</option>
+                            <option value="script">סקריפטים</option>
+                            <option value="css">CSS</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="state">פעולה</label>
+                        <select id="state">
+                            <option value="block">חסום</option>
+                            <option value="allow">אפשר</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="description">תיאור (אופציונלי)</label>
+                    <textarea id="description" rows="2" 
+                              placeholder="תיאור קצר של הכלל..."></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="enabled" checked>
+                        כלל פעיל
+                    </label>
+                </div>
+
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal()">
+                        ביטול
+                    </button>
+                    <button type="submit" class="btn btn-primary">
+                        שמור
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div id="deleteModal" class="modal" style="display: none;">
+        <div class="modal-content modal-small">
+            <div class="modal-header">
+                <h2>מחיקת כלל</h2>
+                <button class="close-btn" onclick="closeDeleteModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p>האם אתה בטוח שברצונך למחוק את הכלל הזה?</p>
+                <p class="delete-warning">פעולה זו לא ניתנת לביטול.</p>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn btn-secondary" onclick="closeDeleteModal()">
+                    ביטול
+                </button>
+                <button type="button" class="btn btn-danger" onclick="confirmDelete()">
+                    מחק
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
