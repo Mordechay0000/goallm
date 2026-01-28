@@ -1,12 +1,15 @@
-import hashlib
-import threading
-import queue
 import logging
+import queue
+import threading
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-import uuid
 
 logger = logging.getLogger(__name__)
+
+
+def _hash_prefix(h: str) -> str:
+    return h[:8] + "..." if isinstance(h, str) and len(h) >= 8 else "unknown"
 
 
 class TaskStatus(Enum):
@@ -41,28 +44,34 @@ class ImageProcessingQueue:
         self.worker.start()
         logger.info("ImageProcessingQueue initialized successfully")
 
-    def wait_until_done(self):
+    def wait_until_done(self) -> None:
         self.queue.join()
 
-    def _image_hash(self, image: bytes) -> str:
-        return hashlib.sha256(image).hexdigest()
-
-
-    def enqueue(self, image_content: bytes, image_mime_type: str, image_details: dict = dict()) -> str:
-        image_hash = image_details.get('image_hash', 'unknown')
-        logger.info(f"Enqueueing image for processing - Hash: {image_hash[:8] if isinstance(image_hash, str) else 'unknown'}..., "
-                   f"MIME: {image_mime_type}, Size: {len(image_content)} bytes")
-        logger.debug(f"Image details: {image_details}")
+    def enqueue(
+        self,
+        image_content: bytes,
+        image_mime_type: str,
+        image_details: dict | None = None,
+    ) -> str:
+        details = image_details or {}
+        image_hash = details.get("image_hash", "unknown")
+        logger.info(
+            "Enqueueing image for processing - Hash: %s, MIME: %s, Size: %s bytes",
+            _hash_prefix(image_hash),
+            image_mime_type,
+            len(image_content),
+        )
+        logger.debug("Image details: %s", details)
         
         task = ImageTask(
             image_content=image_content,
             image_mime_type=image_mime_type,
-            image_details=image_details,
+            image_details=details,
         )
         self.tasks[task.task_id] = task
-        logger.debug(f"Created task with ID: {task.task_id}")
+        logger.debug("Created task with ID: %s", task.task_id)
         self.queue.put(task)
-        logger.info(f"Task {task.task_id} added to queue. Queue size: {self.queue.qsize()}")
+        logger.info("Task %s added to queue. Queue size: %s", task.task_id, self.queue.qsize())
         return task.task_id
 
 
@@ -74,30 +83,47 @@ class ImageProcessingQueue:
         while True:
             logger.debug("Waiting for task from queue...")
             task = self.queue.get()
-            image_hash = task.image_details.get('image_hash', 'unknown')
-            logger.info(f"Processing task {task.task_id} - Hash: {image_hash[:8] if isinstance(image_hash, str) else 'unknown'}...")
-            logger.debug(f"Task details: MIME={task.image_mime_type}, Image size={len(task.image_content)} bytes")
-            
+            image_hash = task.image_details.get("image_hash", "unknown")
+            logger.info(
+                "Processing task %s - Hash: %s",
+                task.task_id,
+                _hash_prefix(image_hash),
+            )
+            logger.debug(
+                "Task details: MIME=%s, Image size=%s bytes",
+                task.image_mime_type,
+                len(task.image_content),
+            )
+
             try:
                 task.status = TaskStatus.PROCESSING
-                logger.debug(f"Task {task.task_id} status changed to PROCESSING")
-                logger.info(f"Starting LLM analysis for task {task.task_id}")
-                result = self.image_analyzer.analyze_image(task.image_content, task.image_mime_type)
-                logger.debug(f"LLM analysis completed for task {task.task_id}, result: {result}")
+                logger.debug("Task %s status changed to PROCESSING", task.task_id)
+                logger.info("Starting image analysis for task %s", task.task_id)
+                result = self.image_analyzer.analyze_image(
+                    task.image_content, task.image_mime_type
+                )
+                logger.debug("Analysis completed for task %s, result: %s", task.task_id, result)
 
                 task.result = result
                 task.status = TaskStatus.DONE
-                logger.info(f"Task {task.task_id} completed successfully - Hash: {image_hash[:8] if isinstance(image_hash, str) else 'unknown'}...")
+                logger.info(
+                    "Task %s completed successfully - Hash: %s",
+                    task.task_id,
+                    _hash_prefix(image_hash),
+                )
 
             except Exception as e:
                 task.error = str(e)
                 task.status = TaskStatus.ERROR
-                logger.error(f"Task {task.task_id} failed with error: {str(e)}")
-                logger.debug(f"Error type: {type(e).__name__}, Hash: {image_hash[:8] if isinstance(image_hash, str) else 'unknown'}...")
+                logger.error("Task %s failed: %s", task.task_id, e)
+                logger.debug(
+                    "Error type: %s, Hash: %s",
+                    type(e).__name__,
+                    _hash_prefix(image_hash),
+                )
 
             finally:
-                # ← כאן ה-event
-                logger.debug(f"Calling on_task_done callback for task {task.task_id}")
+                logger.debug("Calling on_task_done callback for task %s", task.task_id)
                 self.on_task_done(
                     task.task_id,
                     task.status,
@@ -105,7 +131,10 @@ class ImageProcessingQueue:
                     task.image_details,
                     task.error,
                 )
-                logger.debug(f"Task {task.task_id} callback completed")
-
+                logger.debug("Task %s callback completed", task.task_id)
                 self.queue.task_done()
-                logger.debug(f"Task {task.task_id} marked as done. Remaining queue size: {self.queue.qsize()}")
+                logger.debug(
+                    "Task %s marked as done. Remaining queue size: %s",
+                    task.task_id,
+                    self.queue.qsize(),
+                )
