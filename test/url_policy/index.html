@@ -1,0 +1,860 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>בדיקת כללי URL Policy</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --surface: #ffffff;
+      --surface2: #f1f5f9;
+      --surface3: #e2e8f0;
+      --border: #e2e8f0;
+      --border-focus: #94a3b8;
+      --text: #0f172a;
+      --text-dim: #64748b;
+      --accent: #0ea5e9;
+      --accent-dim: #0ea5e933;
+      --allow: #059669;
+      --allow-bg: #d1fae5;
+      --block: #dc2626;
+      --block-bg: #fee2e2;
+      --radius: 12px;
+      --radius-sm: 8px;
+      --shadow: 0 1px 3px rgba(0,0,0,0.06);
+      --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+      --shadow-lg: 0 10px 40px rgba(0,0,0,0.06);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Heebo', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      min-height: 100vh;
+      line-height: 1.5;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 1fr 400px;
+      gap: 28px;
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 32px 28px;
+    }
+
+    @media (max-width: 1000px) {
+      .layout { grid-template-columns: 1fr; }
+    }
+
+    h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      margin: 0 0 6px 0;
+      color: var(--text);
+      letter-spacing: -0.02em;
+    }
+
+    .subtitle {
+      color: var(--text-dim);
+      font-size: 0.95rem;
+      margin-bottom: 24px;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      margin-bottom: 20px;
+      box-shadow: var(--shadow);
+      transition: box-shadow 0.2s;
+    }
+
+    .card:hover {
+      box-shadow: var(--shadow-md);
+    }
+
+    .card h2 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin: 0 0 18px 0;
+      color: var(--accent);
+      letter-spacing: -0.01em;
+    }
+
+    label {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: var(--text-dim);
+      margin-bottom: 6px;
+    }
+
+    input, select {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.9rem;
+      width: 100%;
+      padding: 10px 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      direction: ltr;
+      text-align: left;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+
+    input:focus, select:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-dim);
+    }
+
+    input::placeholder {
+      color: var(--text-dim);
+      opacity: 0.6;
+    }
+
+    .row {
+      display: flex;
+      gap: 14px;
+      align-items: flex-end;
+      flex-wrap: wrap;
+    }
+
+    .field {
+      flex: 1;
+      min-width: 140px;
+    }
+
+    .btn {
+      font-family: 'Heebo', sans-serif;
+      font-size: 0.9rem;
+      font-weight: 500;
+      padding: 10px 20px;
+      border: none;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s, box-shadow 0.15s;
+    }
+
+    .btn:active { transform: scale(0.98); }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+      box-shadow: 0 1px 2px rgba(14,165,233,0.2);
+    }
+    .btn-primary:hover {
+      filter: brightness(1.05);
+      box-shadow: 0 2px 6px rgba(14,165,233,0.3);
+    }
+
+    .btn-ghost {
+      background: var(--surface2);
+      color: var(--text-dim);
+      border: 1px solid var(--border);
+    }
+    .btn-ghost:hover { background: var(--surface3); color: var(--text); }
+
+    .btn-danger {
+      background: var(--block-bg);
+      color: var(--block);
+      padding: 6px 14px;
+      font-size: 0.85rem;
+    }
+    .btn-danger:hover { background: #fecaca; }
+
+    .rules-list {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .rule-item {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 18px;
+      display: grid;
+      grid-template-columns: 1fr 1fr auto;
+      gap: 14px;
+      align-items: end;
+      transition: box-shadow 0.15s;
+    }
+
+    .rule-item:hover {
+      box-shadow: var(--shadow);
+    }
+
+    @media (max-width: 700px) {
+      .rule-item { grid-template-columns: 1fr auto; }
+      .rule-item .rule-meta { grid-column: 1 / -1; }
+    }
+
+    .rule-item .field { min-width: 0; }
+
+    .rule-item .domain { font-family: 'JetBrains Mono', monospace; font-weight: 500; }
+    .rule-item .url-display { word-break: break-all; }
+
+    .rule-examples {
+      grid-column: 1 / -1;
+      margin-top: 8px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+      font-size: 0.85rem;
+    }
+
+    .rule-examples h4 {
+      margin: 0 0 8px 0;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-dim);
+    }
+
+    .examples-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    @media (max-width: 600px) {
+      .examples-grid { grid-template-columns: 1fr; }
+    }
+
+    .examples-list {
+      background: var(--surface2);
+      border-radius: var(--radius-sm);
+      padding: 12px;
+      max-height: 160px;
+      overflow-y: auto;
+      border: 1px solid var(--border);
+    }
+
+    .examples-list.allow { border-right: 4px solid var(--allow); }
+    .examples-list.deny { border-right: 4px solid var(--block); }
+
+    .examples-list .ex {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      padding: 5px 0;
+      color: var(--text);
+      word-break: break-all;
+    }
+
+    .examples-list .ex + .ex { border-top: 1px solid var(--border); }
+
+    .examples-loading, .examples-empty {
+      color: var(--text-dim);
+      font-size: 0.85rem;
+      padding: 8px 0;
+    }
+
+    .examples-error {
+      color: var(--block);
+      font-size: 0.85rem;
+    }
+
+    .test-panel {
+      position: sticky;
+      top: 32px;
+      height: fit-content;
+    }
+
+    .test-result {
+      margin-top: 18px;
+      padding: 16px;
+      border-radius: var(--radius-sm);
+      font-size: 0.95rem;
+      font-weight: 500;
+    }
+
+    .test-result.none {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+    }
+
+    .test-result.allow {
+      background: var(--allow-bg);
+      border: 1px solid var(--allow);
+      color: var(--allow);
+    }
+
+    .test-result.block {
+      background: var(--block-bg);
+      border: 1px solid var(--block);
+      color: var(--block);
+    }
+
+    .test-result.error {
+      background: var(--block-bg);
+      border: 1px solid var(--block);
+      color: var(--block);
+    }
+
+    .test-result .rule-detail {
+      margin-top: 8px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+      font-weight: 400;
+      word-break: break-all;
+      opacity: 0.9;
+    }
+
+    .detail-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+      margin-top: 8px;
+    }
+    .detail-table th {
+      text-align: right;
+      font-weight: 500;
+      color: var(--text-dim);
+      padding: 4px 10px 4px 8px;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+      width: 1%;
+    }
+    .detail-table td {
+      padding: 4px 8px 4px 0;
+      border-bottom: 1px solid var(--border);
+      word-break: break-all;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .detail-table tr:last-child th,
+    .detail-table tr:last-child td {
+      border-bottom: none;
+    }
+    .detail-table.inline th {
+      padding-left: 12px;
+      border-left: 1px solid var(--border);
+    }
+    .detail-table.inline th:first-child {
+      border-left: none;
+      padding-left: 0;
+    }
+
+    .detail-table-result th { color: inherit; opacity: 0.85; }
+    .detail-table-result td { font-weight: 500; }
+
+    .rule-item .rule-meta { min-width: 0; }
+    .rule-item .rule-meta .detail-table { margin-top: 0; }
+
+    .test-result .debug {
+      margin-top: 12px;
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      max-height: 120px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .add-rule-form .row { margin-bottom: 14px; }
+    .add-rule-form .row:last-child { margin-bottom: 0; }
+
+    .form-error {
+      margin-top: 12px;
+      padding: 10px 14px;
+      background: var(--block-bg);
+      border: 1px solid var(--block);
+      color: var(--block);
+      border-radius: var(--radius-sm);
+      font-size: 0.9rem;
+    }
+    .form-error[hidden] { display: none !important; }
+
+    .type-select { min-width: 130px; }
+    .state-select { min-width: 110px; }
+
+    .type-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .type-wrap .custom-type-input {
+      margin-top: 0;
+    }
+    .type-wrap .custom-type-input[hidden] { display: none !important; }
+
+    .debug-toggle {
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      cursor: pointer;
+      font-size: 0.8rem;
+      margin-top: 8px;
+      padding: 0;
+    }
+    .debug-toggle:hover { color: var(--accent); }
+
+    .debug-log {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      background: var(--surface2);
+      padding: 12px;
+      border-radius: var(--radius-sm);
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 160px;
+      overflow-y: auto;
+      border: 1px solid var(--border);
+    }
+
+    code {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.9em;
+      background: var(--surface2);
+      padding: 2px 6px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+    }
+
+    .field-hint {
+      display: block;
+      margin-top: 4px;
+      font-size: 0.8rem;
+      color: var(--text-dim);
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <main>
+      <h1>כללי URL Policy</h1>
+      <p class="subtitle">הוסף כללים, צפה בדוגמאות התאמה, ובדוק URLs מול המאגר.</p>
+
+      <section class="card">
+        <h2>הוספת כלל</h2>
+        <form class="add-rule-form" id="addForm">
+          <div class="row">
+            <div class="field" style="flex: 2;">
+              <label for="newUrl">כתובת (דומיין + נתיב, למשל <code>example.com</code> או <code>example.com/api</code> או <code>example.com/api/*/bar</code>)</label>
+              <input type="text" id="newUrl" name="url" placeholder="example.com/api" dir="ltr" />
+              <small class="field-hint">הקלדה או הדבקה של https:// או http:// — הפרוטוקול יוסר אוטומטית (רק אחרי ://).</small>
+            </div>
+          </div>
+          <div class="row">
+            <div class="field">
+              <label for="newType">סוג בקשה</label>
+              <div class="type-wrap">
+                <select id="newType" name="type" class="type-select">
+                  <option value="*">* (הכל)</option>
+                  <option value="image">image</option>
+                  <option value="script">script</option>
+                  <option value="stylesheet">stylesheet</option>
+                  <option value="xhr">xhr</option>
+                  <option value="document">document</option>
+                  <option value="other">אחר (מותאם אישית)</option>
+                </select>
+                <input type="text" id="newTypeCustom" class="custom-type-input" placeholder="הקלד סוג (למשל fetch, media)" dir="ltr" hidden />
+              </div>
+            </div>
+            <div class="field">
+              <label for="newState">מצב</label>
+              <select id="newState" name="state" class="state-select">
+                <option value="allow">פתוח</option>
+                <option value="block">חסום</option>
+              </select>
+            </div>
+            <div class="field" style="flex: 0;">
+              <label>&nbsp;</label>
+              <button type="submit" class="btn btn-primary">הוסף כלל</button>
+            </div>
+          </div>
+          <div id="addRuleError" class="form-error" role="alert" hidden></div>
+        </form>
+      </section>
+
+      <section class="card">
+        <h2>דוגמאות לכלל הנוכחי</h2>
+        <p class="subtitle" style="margin-bottom: 12px;">הזן כתובת למעלה (בטופס הוספה) כדי לראות מה יתאים ומה לא.</p>
+        <div class="examples-grid" id="examplesContainer">
+          <div>
+            <h4 class="examples-list allow" style="border: none; margin-bottom: 6px;">כן יתאים</h4>
+            <div class="examples-list allow" id="examplesMatch">
+              <span class="examples-empty">הזן כתובת כדי לראות דוגמאות.</span>
+            </div>
+          </div>
+          <div>
+            <h4 class="examples-list deny" style="border: none; margin-bottom: 6px;">לא יתאים</h4>
+            <div class="examples-list deny" id="examplesNoMatch">
+              <span class="examples-empty">הזן כתובת כדי לראות דוגמאות.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>רשימת כללים</h2>
+        <div class="rules-list" id="rulesList"></div>
+      </section>
+    </main>
+
+    <aside class="test-panel">
+      <section class="card">
+        <h2>בדיקת URL</h2>
+        <div class="field">
+          <label for="testUrl">כתובת לבדיקה</label>
+          <input type="text" id="testUrl" placeholder="https://example.com/api/img/1" dir="ltr" />
+        </div>
+        <div class="field" style="margin-top: 12px;">
+          <label for="testType">סוג בקשה</label>
+          <div class="type-wrap">
+            <select id="testType" class="type-select">
+              <option value="image">image</option>
+              <option value="script">script</option>
+              <option value="stylesheet">stylesheet</option>
+              <option value="xhr">xhr</option>
+              <option value="document">document</option>
+              <option value="other">אחר (מותאם אישית)</option>
+            </select>
+            <input type="text" id="testTypeCustom" class="custom-type-input" placeholder="הקלד סוג (למשל fetch, media)" dir="ltr" hidden />
+          </div>
+        </div>
+        <div class="test-result none" id="testResult">
+          הזן URL ובחר סוג כדי לראות איזה כלל נבחר ומצבו.
+        </div>
+        <button type="button" class="debug-toggle" id="debugToggle" style="display: none;">הצג/הסתר debug</button>
+        <pre class="debug-log" id="debugLog" style="display: none; margin-top: 8px;"></pre>
+      </section>
+    </aside>
+  </div>
+
+  <script>
+    const API = { resolve: '/api/resolve', examples: '/api/examples' };
+    let exampleDebounce = null;
+    let lastDebug = [];
+
+    const rules = [
+      { domain: '*.example.com', path: '/api', type: 'image', state: 'block' },
+      { domain: 'cdn.example.com', path: '/img', type: '*', state: 'allow' },
+    ];
+
+    function emitExamples(domain, path) {
+      fetch(API.examples, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domain: domain || '', path: path || '' }),
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          const matchEl = document.getElementById('examplesMatch');
+          const noMatchEl = document.getElementById('examplesNoMatch');
+          matchEl.innerHTML = '';
+          noMatchEl.innerHTML = '';
+          if (data.error) {
+            matchEl.innerHTML = `<span class="examples-error">${data.error}</span>`;
+            return;
+          }
+          if ((data.match || []).length === 0 && (data.noMatch || []).length === 0) {
+            matchEl.innerHTML = '<span class="examples-empty">אין דוגמאות.</span>';
+            noMatchEl.innerHTML = '<span class="examples-empty">אין דוגמאות.</span>';
+            return;
+          }
+          (data.match || []).forEach((u) => {
+            const ex = document.createElement('div');
+            ex.className = 'ex';
+            ex.textContent = u;
+            matchEl.appendChild(ex);
+          });
+          (data.noMatch || []).forEach((u) => {
+            const ex = document.createElement('div');
+            ex.className = 'ex';
+            ex.textContent = u;
+            noMatchEl.appendChild(ex);
+          });
+          if ((data.match || []).length === 0) matchEl.innerHTML = '<span class="examples-empty">אין דוגמאות מתאימות.</span>';
+          if ((data.noMatch || []).length === 0) noMatchEl.innerHTML = '<span class="examples-empty">אין דוגמאות לא מתאימות.</span>';
+        })
+        .catch((e) => {
+          document.getElementById('examplesMatch').innerHTML = `<span class="examples-error">שגיאה: ${e.message}</span>`;
+          document.getElementById('examplesNoMatch').innerHTML = '';
+        });
+    }
+
+    function refreshExamples() {
+      const raw = document.getElementById('newUrl').value.trim();
+      const { domain, path } = parseUrlInput(raw);
+      if (exampleDebounce) clearTimeout(exampleDebounce);
+      exampleDebounce = setTimeout(() => emitExamples(domain, path || null), 280);
+    }
+
+    function toggleCustomType(selectId, inputId) {
+      const sel = document.getElementById(selectId);
+      const inp = document.getElementById(inputId);
+      const isOther = sel.value === 'other';
+      inp.hidden = !isOther;
+      if (isOther) inp.focus();
+    }
+
+    function getNewType() {
+      const sel = document.getElementById('newType');
+      if (sel.value !== 'other') return sel.value;
+      const custom = document.getElementById('newTypeCustom').value.trim();
+      return custom || 'other';
+    }
+
+    function getTestType() {
+      const sel = document.getElementById('testType');
+      if (sel.value !== 'other') return sel.value;
+      const custom = document.getElementById('testTypeCustom').value.trim();
+      return custom || 'other';
+    }
+
+    function stripScheme(s) {
+      return (s || '').replace(/^https?:\/\//i, '').trim();
+    }
+
+    function parseUrlInput(val) {
+      const s = stripScheme(val || '');
+      const i = s.indexOf('/');
+      if (i === -1) return { domain: s, path: '' };
+      return { domain: s.slice(0, i), path: s.slice(i) };
+    }
+
+    function validateAddRule() {
+      const raw = document.getElementById('newUrl').value.trim();
+      const s = stripScheme(raw);
+      if (!s) return { ok: false, error: 'נא להזין כתובת (דומיין + נתיב).' };
+      const { domain, path } = parseUrlInput(s);
+      if (!domain) return { ok: false, error: 'נא להזין דומיין.' };
+      if (/\//.test(domain)) return { ok: false, error: 'דומיין לא יכול להכיל נתיב (הפרד עם / אחרי הדומיין).' };
+      if (path) {
+        if (!path.startsWith('/')) return { ok: false, error: 'נתיב חייב להתחיל ב-/' };
+        if (/\/\//.test(path)) return { ok: false, error: 'נתיב לא יכול להכיל //.' };
+      }
+      return { ok: true };
+    }
+
+    function validateTestUrl(url) {
+      const u = (url || '').trim();
+      if (!u) return { ok: false, error: 'הזן URL כדי לבדוק.' };
+      try {
+        const parsed = new URL(u);
+        if (!parsed.hostname || !parsed.hostname.trim())
+          return { ok: false, error: 'ה-URL חייב לכלול דומיין חוקי (כתובת עם hostname).' };
+        return { ok: true };
+      } catch {
+        return { ok: false, error: 'ה-URL לא תקין. נא להזין כתובת מלאה (למשל https://example.com/).' };
+      }
+    }
+
+    document.getElementById('newType').addEventListener('change', () => toggleCustomType('newType', 'newTypeCustom'));
+    document.getElementById('testType').addEventListener('change', () => {
+      toggleCustomType('testType', 'testTypeCustom');
+      runTest();
+    });
+    document.getElementById('testTypeCustom').addEventListener('input', runTest);
+
+    function clearAddRuleError() {
+      const el = document.getElementById('addRuleError');
+      if (el) { el.textContent = ''; el.hidden = true; }
+    }
+
+    function showAddRuleError(msg) {
+      const el = document.getElementById('addRuleError');
+      if (el) { el.textContent = msg; el.hidden = false; }
+    }
+
+    const newUrlEl = document.getElementById('newUrl');
+    newUrlEl.addEventListener('input', () => {
+      const v = newUrlEl.value;
+      const cleaned = stripScheme(v);
+      if (cleaned !== v && /^https?:\/\//i.test(v)) {
+        const len = v.length - cleaned.length;
+        const start = Math.min(cleaned.length, Math.max(0, (newUrlEl.selectionStart || 0) - len));
+        const end = Math.min(cleaned.length, Math.max(0, (newUrlEl.selectionEnd || 0) - len));
+        newUrlEl.value = cleaned;
+        newUrlEl.setSelectionRange(start, end);
+      }
+      clearAddRuleError();
+      refreshExamples();
+    });
+    newUrlEl.addEventListener('blur', () => {
+      const v = newUrlEl.value.trim();
+      const cleaned = stripScheme(v);
+      if (cleaned !== v && v) {
+        newUrlEl.value = cleaned;
+        newUrlEl.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    });
+    newUrlEl.addEventListener('paste', (e) => {
+      const pasted = (e.clipboardData || window.clipboardData).getData('text');
+      const cleaned = stripScheme(pasted);
+      if (cleaned !== pasted.trim()) {
+        e.preventDefault();
+        const start = newUrlEl.selectionStart || 0;
+        const end = newUrlEl.selectionEnd || 0;
+        const val = newUrlEl.value;
+        const next = val.slice(0, start) + cleaned + val.slice(end);
+        newUrlEl.value = next;
+        const newEnd = start + cleaned.length;
+        newUrlEl.setSelectionRange(newEnd, newEnd);
+        newUrlEl.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    });
+
+    document.getElementById('addForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const v = validateAddRule();
+      if (!v.ok) {
+        showAddRuleError(v.error);
+        return;
+      }
+      clearAddRuleError();
+      const raw = newUrlEl.value.trim();
+      const s = stripScheme(raw);
+      const { domain, path } = parseUrlInput(s);
+      const type = getNewType();
+      const state = document.getElementById('newState').value;
+      const rule = { domain, path: path || undefined, type, state };
+      rules.push(rule);
+      renderRules();
+      newUrlEl.value = '';
+      document.getElementById('newType').value = '*';
+      document.getElementById('newTypeCustom').value = '';
+      document.getElementById('newTypeCustom').hidden = true;
+      refreshExamples();
+      runTest();
+    });
+
+    function deleteRule(i) {
+      rules.splice(i, 1);
+      renderRules();
+      runTest();
+    }
+
+    function renderRules() {
+      const list = document.getElementById('rulesList');
+      list.innerHTML = '';
+      rules.forEach((r, i) => {
+        const div = document.createElement('div');
+        div.className = 'rule-item';
+        const urlDisplay = escapeHtml((r.domain || '') + (r.path || ''));
+        const typeDisplay = escapeHtml(r.type);
+        const stateDisplay = r.state === 'block' ? 'חסום' : 'פתוח';
+        div.innerHTML = `
+          <div class="field">
+            <label>כתובת</label>
+            <div class="domain url-display">${urlDisplay}</div>
+          </div>
+          <div class="field rule-meta">
+            <table class="detail-table">
+              <tr><th>סוג</th><td>${typeDisplay}</td></tr>
+              <tr><th>מצב</th><td>${stateDisplay}</td></tr>
+            </table>
+          </div>
+          <div class="field" style="flex: 0;">
+            <button type="button" class="btn btn-danger" data-delete="${i}">מחק</button>
+          </div>
+        `;
+        div.querySelector('[data-delete]').addEventListener('click', () => deleteRule(i));
+        list.appendChild(div);
+      });
+    }
+
+    function escapeHtml(s) {
+      const n = document.createElement('div');
+      n.textContent = s;
+      return n.innerHTML;
+    }
+
+    function runTest() {
+      const url = document.getElementById('testUrl').value.trim();
+      const type = getTestType();
+      const resEl = document.getElementById('testResult');
+      const dbgEl = document.getElementById('debugLog');
+      const toggleEl = document.getElementById('debugToggle');
+
+      const v = validateTestUrl(url);
+      if (!v.ok) {
+        resEl.className = 'test-result ' + (v.error === 'הזן URL כדי לבדוק.' ? 'none' : 'error');
+        resEl.innerHTML = v.error;
+        toggleEl.style.display = 'none';
+        dbgEl.style.display = 'none';
+        return;
+      }
+
+      fetch(API.resolve, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, type, policies: rules }),
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          lastDebug = data.debug || [];
+          const rule = data.rule;
+
+          if (data.error) {
+            resEl.className = 'test-result error';
+            resEl.innerHTML = data.error;
+            toggleEl.style.display = 'none';
+            dbgEl.style.display = 'none';
+            return;
+          }
+
+          if (!rule) {
+            resEl.className = 'test-result none';
+            resEl.innerHTML = 'אין כלל מתאים.';
+          } else {
+            const isBlock = rule.state === 'block';
+            resEl.className = 'test-result ' + (isBlock ? 'block' : 'allow');
+            const stateLabel = isBlock ? 'חסום' : 'פתוח';
+            const ruleVal = (rule.domain || '') + (rule.path || '');
+            resEl.innerHTML = `
+              <table class="detail-table detail-table-result">
+                <tr><th>מצב</th><td>${stateLabel}</td></tr>
+                <tr><th>כלל</th><td>${escapeHtml(ruleVal)}</td></tr>
+                <tr><th>סוג</th><td>${escapeHtml(rule.type || '')}</td></tr>
+              </table>
+            `;
+          }
+
+          if (lastDebug.length) {
+            toggleEl.style.display = 'block';
+            dbgEl.textContent = lastDebug.join('\n');
+            dbgEl.style.display = 'none';
+          } else {
+            toggleEl.style.display = 'none';
+            dbgEl.style.display = 'none';
+          }
+        })
+        .catch((e) => {
+          resEl.className = 'test-result error';
+          resEl.innerHTML = 'שגיאה: ' + e.message;
+          toggleEl.style.display = 'none';
+          dbgEl.style.display = 'none';
+        });
+    }
+
+    document.getElementById('debugToggle').addEventListener('click', () => {
+      const dbg = document.getElementById('debugLog');
+      dbg.style.display = dbg.style.display === 'none' ? 'block' : 'none';
+    });
+
+    document.getElementById('testUrl').addEventListener('input', runTest);
+    document.getElementById('testUrl').addEventListener('change', runTest);
+
+    renderRules();
+    toggleCustomType('newType', 'newTypeCustom');
+    toggleCustomType('testType', 'testTypeCustom');
+    refreshExamples();
+    setTimeout(runTest, 100);
+  </script>
+</body>
+</html>
