@@ -2,22 +2,26 @@ import base64
 import hashlib
 import logging
 
+from core.image_processing.analyzers.base import ImageAnalyzer
+
 logger = logging.getLogger(__name__)
 
+CONDITIONS_CHECK = (
+    "female_visible_9_plus",
+    "female_3_to_9_partial_clothing",
+    "female_under_3_minimal_clothing",
+    "boys_teens_men_exposed_or_bathing",
+    "any_visible_body_exposure",
+)
 
-class SimulatedImageAnalyzer():
-    CONDITIONS_CHECK = (
-        "female_visible_9_plus",
-        "female_3_to_9_partial_clothing",
-        "female_under_3_minimal_clothing",
-        "boys_teens_men_exposed_or_bathing",
-        "any_visible_body_exposure"
-    )
-    
-    def __init__(self):
-        logger.info("Initializing LLMImageAnalyzer (simulated mode)")
 
-    def analyze_image(self, image_content: str | bytes, mime) -> dict:
+class SimulatedImageAnalyzer(ImageAnalyzer):
+    CONDITIONS_CHECK = CONDITIONS_CHECK
+
+    def __init__(self) -> None:
+        logger.info("Initializing SimulatedImageAnalyzer")
+
+    def analyze_image(self, image_content: str | bytes, mime: str | None) -> dict:
         logger.info("Starting simulated image analysis")
         
         # Convert to bytes

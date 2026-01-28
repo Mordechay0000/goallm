@@ -1,12 +1,15 @@
+import base64
 import binascii
 import json
 import logging
+import os
+
 import cairosvg
+import magic
 from llama_cpp import Llama
 from llama_cpp.llama_chat_format import Qwen3VLChatHandler
-import base64
 
-import magic
+from core.image_processing.analyzers.base import ImageAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +44,10 @@ class ResponseValidationError(Exception):
 
 
 
-class LLMImageAnalyzer(): 
+class LLMImageAnalyzer(ImageAnalyzer):
     MODEL_PATH = "models/Qwen3VL-8B-Instruct-Q4_k_m.gguf"
-    NMPROJ_MODEL_PATH = "models/qwen3_vl_8B_Q8/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf"
-    
+    MMPROJ_MODEL_PATH = "models/qwen3_vl_8B_Q8/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf"
+
     CONDITIONS_CHECK = (
         "female_visible_9_plus",
         "female_3_to_9_partial_clothing",
@@ -67,26 +70,28 @@ class LLMImageAnalyzer():
                 f"System prompt file not found: config/llm/system_prompt.txt"
             )
         
-        # Check if model files exist
-        import os
-        logger.debug(f"Checking model files - Main: {self.MODEL_PATH}, MMProj: {self.NMPROJ_MODEL_PATH}")
+        logger.debug(
+            "Checking model files - Main: %s, MMProj: %s",
+            self.MODEL_PATH,
+            self.MMPROJ_MODEL_PATH,
+        )
         if not os.path.exists(self.MODEL_PATH):
-            logger.error(f"Model file not found: {self.MODEL_PATH}")
+            logger.error("Model file not found: %s", self.MODEL_PATH)
             raise FileNotFoundError(
                 f"Model file not found: {self.MODEL_PATH}. "
-                f"Please ensure the model file exists in the models/ directory."
+                "Please ensure the model file exists in the models/ directory."
             )
-        if not os.path.exists(self.NMPROJ_MODEL_PATH):
-            logger.error(f"MMProj model file not found: {self.NMPROJ_MODEL_PATH}")
+        if not os.path.exists(self.MMPROJ_MODEL_PATH):
+            logger.error("MMProj model file not found: %s", self.MMPROJ_MODEL_PATH)
             raise FileNotFoundError(
-                f"MMProj model file not found: {self.NMPROJ_MODEL_PATH}. "
-                f"Please ensure the mmproj model file exists in the models/ directory."
+                f"MMProj model file not found: {self.MMPROJ_MODEL_PATH}. "
+                "Please ensure the mmproj model file exists in the models/ directory."
             )
         logger.info("Model files found, loading LLM model...")
-        
+
         self.llm = Llama(
             model_path=self.MODEL_PATH,
-            chat_handler=Qwen3VLChatHandler(clip_model_path=self.NMPROJ_MODEL_PATH),
+            chat_handler=Qwen3VLChatHandler(clip_model_path=self.MMPROJ_MODEL_PATH),
             n_gpu_layers=-1,  # Offload all layers to the GPU
             n_ctx=10240,  # Set the context window size
             swa_full=False,
@@ -166,18 +171,21 @@ class LLMImageAnalyzer():
 
 
 
-    def _image_to_base64_data_uri(self, image:  bytes, mime_type: str) -> str:
-            logger.debug(f"Converting image to base64 data URI - MIME: {mime_type}, Size: {len(image)} bytes")
-            if mime_type == 'image/svg+xml':
-                # SVG images should be directly encoded as UTF-8 text
-                logger.debug("Converting SVG to PNG before base64 encoding")
-                image = self._svg_to_png(image)
-                mime_type = 'image/png'
+    def _image_to_base64_data_uri(self, image: bytes, mime_type: str) -> str:
+        logger.debug(
+            "Converting image to base64 data URI - MIME: %s, Size: %s bytes",
+            mime_type,
+            len(image),
+        )
+        if mime_type == "image/svg+xml":
+            logger.debug("Converting SVG to PNG before base64 encoding")
+            image = self._svg_to_png(image)
+            mime_type = "image/png"
 
-            base64_data = base64.b64encode(image).decode("utf-8")
-            data_uri = f"data:{mime_type};base64,{base64_data}"
-            logger.debug(f"Base64 encoding complete - Data URI length: {len(data_uri)} characters")
-            return data_uri
+        b64 = base64.b64encode(image).decode("utf-8")
+        data_uri = f"data:{mime_type};base64,{b64}"
+        logger.debug("Base64 encoding complete - Data URI length: %s", len(data_uri))
+        return data_uri
 
     def _is_base64_string(self, s: str) -> bool:
         try:
@@ -241,7 +249,7 @@ class LLMImageAnalyzer():
         logger.debug("Response structure validation passed")
             
 
-    def analyze_image(self, image_content: str|bytes, mime) -> dict:
+    def analyze_image(self, image_content: str | bytes, mime: str | None) -> dict:
         logger.info("Starting image analysis")
         logger.debug(f"Input type: {type(image_content)}, MIME: {mime}")
         
