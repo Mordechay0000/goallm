@@ -1,0 +1,7 @@
+/* App styles - RTL support */
+
+#root {
+  min-height: 100vh;
+  direction: rtl;
+  text-align: right;
+}

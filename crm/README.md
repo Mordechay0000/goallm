@@ -1,91 +1,74 @@
-# CRM - ניהול כללי סינון
+# CRM - מערכת ניהול סינון
 
-מערכת ניהול מודרנית ומסודרת לניהול כללי הסינון של המערכת.
+מערכת CRM מלאה לניהול פרופילי סינון, חוקים ותזמונים.
 
-## תכונות
+## מבנה המערכת
 
-- ✅ ניהול מלא של כללי סינון (הוספה, עריכה, מחיקה)
-- ✅ ממשק משתמש נקי ומודרני
-- ✅ חיפוש וסינון כללים
-- ✅ שמירה במסד נתונים SQLite
-- ✅ אימות נתונים מלא
-- ✅ תמיכה בעברית (RTL)
+### Backend (FastAPI)
+- `main.py` - FastAPI application עם כל ה-endpoints
+- `database.py` - DB schema ו-management
+- `models.py` - Pydantic models
+- `services.py` - Business logic
+- `auth.py` - Authentication utilities
+- `resolver_integration.py` - אינטגרציה עם url_policy_resolver הקיים
 
-## התקנה
+### Frontend (React + TypeScript)
+- `frontend/src/` - React application
+- `frontend/src/pages/` - מסכים עיקריים
+- `frontend/src/components/` - Components
+- `frontend/src/api/` - API clients
+- `frontend/src/store/` - Zustand stores
 
-1. התקן את התלויות:
+## התקנה והרצה
+
+### Backend
+
 ```bash
+# התקן תלויות
 pip install -r requirements.txt
+
+# הרץ את השרת
+cd crm
+./run_fastapi.sh
 ```
 
-## הרצה
+השרת יעלה על: http://127.0.0.1:8000
+API docs: http://127.0.0.1:8000/docs
 
-### שיטה 1: הרצה ישירה
+### Frontend
+
 ```bash
-python3 -m crm.app
+cd crm/frontend
+npm install
+npm run dev
 ```
 
-### שיטה 2: שימוש בסקריפט
-```bash
-./crm/run_crm.sh
-```
+האפליקציה תעלה על: http://localhost:5173
 
-השרת יעלה על `http://127.0.0.1:5000`
+## תכונות עיקריות
 
-## שימוש
+1. **משתמשים** - הרשמה והתחברות
+2. **פרופילים** - ניהול פרופילי סינון עם tabs
+3. **חוקים** - הוספה/עריכה/מחיקה של חוקי סינון
+4. **תזמונים** - הגדרת זמנים לפרופילים
+5. **Realtime** - עדכונים בזמן אמת דרך WebSocket
+6. **RTL** - תמיכה מלאה בעברית ו-RTL
 
-1. פתח את הדפדפן ונווט ל-`http://127.0.0.1:5000`
-2. לחץ על "הוסף כלל חדש" כדי ליצור כלל חדש
-3. מלא את הפרטים:
-   - **דומיין**: דומיין לחסימה (לדוגמה: `example.com` או `*.example.com`)
-   - **נתיב** (אופציונלי): נתיב ספציפי (לדוגמה: `/api/images` או `/images/*`)
-   - **סוג**: סוג התוכן (כל הסוגים, תמונות, HTML, וכו')
-   - **פעולה**: חסום או אפשר
-   - **תיאור** (אופציונלי): תיאור קצר של הכלל
-4. לחץ על "שמור"
+## מודל URL
 
-## מבנה הכללים
+- הזנה: שדה אחד בלבד (URL מלא)
+- הפרוטוקול (`http/https`) מוסר אוטומטית
+- תמיכה ב-subdomain wildcard (`*.example.com`)
+- Path prefix בלבד עם `*` לסגמנט אחד
 
-כל כלל כולל:
-- **domain**: דומיין (חובה) - יכול להיות `example.com` או `*.example.com` לחסימת תת-דומיינים
-- **path**: נתיב (אופציונלי) - נתיב ספציפי. ניתן להשתמש ב-`*` למיקום יחיד
-- **type**: סוג התוכן - `*` (כל הסוגים), `image`, `html`, `script`, `css`
-- **state**: פעולה - `block` (חסום) או `allow` (מותר)
-- **description**: תיאור (אופציונלי)
-- **enabled**: האם הכלל פעיל
+## פילוסופיית סינון
 
-## אינטגרציה עם המערכת
+- **רשימה לבנה**: כל האתרים פתוחים למעט אלו שחסומים
+- **רשימה שחורה**: כל האתרים חסומים למעט אלו שפתוחים
+- הכלל הכי ספציפי מנצח
 
-הכללים נשמרים במסד נתונים SQLite ב-`.storage/policies.db`.
+## אינטגרציה
 
-כדי לטעון את הכללים במערכת הסינון, השתמש ב:
-
-```python
-from core.policy_processor.policy_loader import get_policy_resolver
-
-resolver = get_policy_resolver()
-rule = resolver.resolve("https://example.com/image.jpg", "image")
-```
-
-## API
-
-המערכת מספקת REST API מלא:
-
-- `GET /api/policies` - קבלת כל הכללים
-- `POST /api/policies` - יצירת כלל חדש
-- `GET /api/policies/<id>` - קבלת כלל ספציפי
-- `PUT /api/policies/<id>` - עדכון כלל
-- `DELETE /api/policies/<id>` - מחיקת כלל
-- `POST /api/policies/validate` - אימות כלל
-
-## מבנה הקבצים
-
-```
-crm/
-├── app.py              # Flask backend
-├── static/
-│   ├── index.html      # דף הבית
-│   ├── styles.css      # עיצוב
-│   └── app.js          # לוגיקה frontend
-└── README.md           # תיעוד זה
-```
+המערכת משולבת עם `url_policy_resolver` הקיים דרך:
+- `/api/resolver/rules` - חוקים למשתמש מסוים
+- `/api/resolver/rules/all` - כל החוקים הפעילים (לשימוש פנימי)

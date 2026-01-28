@@ -21,3 +21,16 @@ cairocffi>=1.7.0
 # CRM Web Interface
 flask>=3.0.0
 flask-cors>=4.0.0
+
+# FastAPI CRM
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+PyJWT>=2.8.0
+python-multipart>=0.0.6
+pydantic>=2.0.0
+pydantic[email]>=2.0.0
+websockets>=12.0
+
+# Security libraries (official and industry-standard)
+bcrypt>=4.0.1
+slowapi>=0.1.9
