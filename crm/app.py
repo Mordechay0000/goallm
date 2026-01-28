@@ -18,7 +18,10 @@ from core.policy_processor.policy_database import (
     get_policy, get_all_policies, validate_policy
 )
 
-app = Flask(__name__, static_folder='static', static_url_path='')
+# Get the static folder path before creating Flask app
+_static_folder = Path(__file__).resolve().parent / 'static'
+
+app = Flask(__name__, static_folder=str(_static_folder), static_url_path='')
 CORS(app)
 
 logger = logging.getLogger(__name__)
@@ -27,7 +30,7 @@ logger = logging.getLogger(__name__)
 @app.route('/')
 def index():
     """Serve the main CRM page."""
-    return send_from_directory('static', 'index.html')
+    return send_from_directory(str(_static_folder), 'index.html')
 
 
 @app.route('/api/policies', methods=['GET'])
@@ -159,11 +162,18 @@ def validate_policy_endpoint():
 
 
 if __name__ == '__main__':
-    from core.logger.logging_config import setup_logging
-    setup_logging()
+    
+    # Setup logging (optional)
+    try:
+        from core.logger.logging_config import setup_logging
+        setup_logging()
+    except:
+        print("Logging not configured")
     
     print("\n" + "="*60)
     print("CRM Server starting on http://127.0.0.1:5000")
-    print("="*60 + "\n")
+    print("="*60)
+    print("\nOpen your browser at: http://127.0.0.1:5000")
+    print("Press Ctrl+C to stop the server\n")
     
-    app.run(host='127.0.0.1', port=5000, debug=True)
+    app.run(host='127.0.0.1', port=5000, debug=False, use_reloader=False)
