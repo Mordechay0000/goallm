@@ -28,6 +28,7 @@ import {
   Schedule as ScheduleIcon,
   Settings as SettingsIcon,
   Person as PersonIcon,
+  People as PeopleIcon,
   Logout as LogoutIcon,
 } from '@mui/icons-material';
 import { useAuthStore } from '../store/authStore';
@@ -127,24 +128,71 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 },
               }}
             >
-              <ListItemIcon
-                sx={{
-                  minWidth: 40,
-                  color: isActive(item.path) ? 'primary.main' : 'inherit',
-                }}
-              >
-                {item.icon}
-              </ListItemIcon>
-              <ListItemText
-                primary={item.label}
-                primaryTypographyProps={{
-                  fontSize: '0.95rem',
-                  fontWeight: isActive(item.path) ? 600 : 400,
-                }}
-              />
+              <ListItemIcon sx={{ minWidth: 40 }}>{item.icon}</ListItemIcon>
+              <ListItemText primary={item.label} />
             </ListItemButton>
           </ListItem>
         ))}
+        {user?.is_admin && (
+          <>
+            <ListItem disablePadding>
+              <ListItemButton
+                selected={isActive('/admin/users')}
+                onClick={() => {
+                  navigate('/admin/users');
+                  setMobileOpen(false);
+                }}
+                sx={{
+                  minHeight: 48,
+                  '&.Mui-selected': {
+                    backgroundColor: 'action.selected',
+                    borderRight: '3px solid',
+                    borderColor: 'primary.main',
+                  },
+                }}
+              >
+                <ListItemIcon sx={{ minWidth: 40 }}>
+                  <PeopleIcon />
+                </ListItemIcon>
+                <ListItemText
+                  primary="ניהול משתמשים"
+                  primaryTypographyProps={{
+                    fontSize: '0.95rem',
+                    fontWeight: isActive('/admin/users') ? 600 : 400,
+                  }}
+                />
+              </ListItemButton>
+            </ListItem>
+            <ListItem disablePadding>
+              <ListItemButton
+                selected={isActive('/admin/requests')}
+                onClick={() => {
+                  navigate('/admin/requests');
+                  setMobileOpen(false);
+                }}
+                sx={{
+                  minHeight: 48,
+                  '&.Mui-selected': {
+                    backgroundColor: 'action.selected',
+                    borderRight: '3px solid',
+                    borderColor: 'primary.main',
+                  },
+                }}
+              >
+                <ListItemIcon sx={{ minWidth: 40 }}>
+                  <SecurityIcon />
+                </ListItemIcon>
+                <ListItemText
+                  primary="בקשות משתמשים"
+                  primaryTypographyProps={{
+                    fontSize: '0.95rem',
+                    fontWeight: isActive('/admin/requests') ? 600 : 400,
+                  }}
+                />
+              </ListItemButton>
+            </ListItem>
+          </>
+        )}
       </List>
     </Box>
   );

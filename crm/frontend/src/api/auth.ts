@@ -35,6 +35,7 @@ export interface User {
   avatar_url?: string;
   created_at: number;
   updated_at: number;
+  is_admin?: boolean;
 }
 
 export interface UserUpdate {

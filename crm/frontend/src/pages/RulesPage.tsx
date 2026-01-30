@@ -33,8 +33,8 @@ const RulesPage: React.FC = () => {
       ]);
       setRules(rulesData);
       setProfile(profileData);
-    } catch (error: any) {
-      alert(`שגיאה: ${error.message}`);
+    } catch (error: unknown) {
+      alert(`שגיאה: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setLoading(false);
     }
@@ -42,6 +42,7 @@ const RulesPage: React.FC = () => {
 
   useEffect(() => {
     fetchData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fetch when profileId changes
   }, [profileId]);
 
   if (loading) {

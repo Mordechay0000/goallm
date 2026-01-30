@@ -23,7 +23,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   token: null,
   isAuthenticated: false,
 
-  init: () => {
+  init: async () => {
     const token = localStorage.getItem('access_token');
     const userStr = localStorage.getItem('user');
     if (token && userStr) {
@@ -32,6 +32,14 @@ export const useAuthStore = create<AuthState>((set) => ({
         user: JSON.parse(userStr),
         isAuthenticated: true,
       });
+      // Refresh user from API to get is_admin and latest data
+      try {
+        const user = await authApi.getProfile();
+        localStorage.setItem('user', JSON.stringify(user));
+        set({ user });
+      } catch {
+        // Ignore - keep stored user
+      }
     }
   },
 

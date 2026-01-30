@@ -22,16 +22,24 @@ import {
   DialogActions,
   Chip,
   Divider,
+  Alert,
 } from '@mui/material';
-import { Add as AddIcon, Close as CloseIcon } from '@mui/icons-material';
+import { Add as AddIcon, Close as CloseIcon, ExitToApp as ExitIcon } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { useProfilesStore } from '../store/profilesStore';
+import { useManagedUserStore } from '../store/managedUserStore';
+import { useAuthStore } from '../store/authStore';
 import { RulesTable } from '../components/RulesTable';
-import { rulesApi } from '../api/rules';
+import { rulesApi, resolverApi } from '../api/rules';
+import { adminApi } from '../api/admin';
 import type { Rule } from '../api/rules';
+import { Lock as LockIcon } from '@mui/icons-material';
+import { Tooltip } from '@mui/material';
 
 const ProfilesPage: React.FC = () => {
   const navigate = useNavigate();
+  const { user } = useAuthStore();
+  const { managedUserId, managedUserPhone, clearManagedUser } = useManagedUserStore();
   const { profiles, currentProfile, fetchProfiles, createProfile, updateProfile, deleteProfile, setCurrentProfile } = useProfilesStore();
   const [activeTab, setActiveTab] = useState(0);
   const [newProfileName, setNewProfileName] = useState('');
@@ -41,22 +49,36 @@ const ProfilesPage: React.FC = () => {
   const [editName, setEditName] = useState('');
   const [editMode, setEditMode] = useState<'whitelist' | 'blacklist'>('whitelist');
   const [rules, setRules] = useState<Rule[]>([]);
+  const [lockedSettings, setLockedSettings] = useState<string[]>([]);
+  const [coreMode, setCoreMode] = useState<string | null>(null);
 
   const selectedProfile = profiles[activeTab];
+
+  const loadCoreMode = () => {
+    resolverApi.getCoreMode().then((r) => setCoreMode(r.core_mode ?? null)).catch(() => setCoreMode(null));
+  };
 
   const loadRules = async () => {
     if (!selectedProfile) return;
     try {
-      const rulesData = await rulesApi.list(selectedProfile.id);
+      const rulesData = await rulesApi.list(selectedProfile.id, managedUserId ?? undefined);
       setRules(rulesData);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error loading rules:', error);
     }
   };
 
   useEffect(() => {
-    fetchProfiles();
-  }, [fetchProfiles]);
+    fetchProfiles(managedUserId ?? undefined);
+  }, [fetchProfiles, managedUserId]);
+
+  useEffect(() => {
+    if (managedUserId != null && user?.is_admin) {
+      adminApi.getLockedSettings(managedUserId).then(setLockedSettings).catch(() => setLockedSettings([]));
+    } else {
+      setLockedSettings([]);
+    }
+  }, [managedUserId, user?.is_admin]);
 
   useEffect(() => {
     if (selectedProfile) {
@@ -64,6 +86,10 @@ const ProfilesPage: React.FC = () => {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProfile]);
+
+  useEffect(() => {
+    loadCoreMode();
+  }, []);
 
   useEffect(() => {
     if (profiles.length > 0) {
@@ -80,11 +106,11 @@ const ProfilesPage: React.FC = () => {
   const handleCreateProfile = async () => {
     if (!newProfileName.trim()) return;
     try {
-      const newProfile = await createProfile(newProfileName, newProfileMode);
+      const newProfile = await createProfile(newProfileName, newProfileMode, managedUserId ?? undefined);
       setNewProfileName('');
       setShowNewProfile(false);
       // Refresh profiles to get the updated list
-      await fetchProfiles();
+      await fetchProfiles(managedUserId ?? undefined);
       // Set the new profile as active and switch to its tab
       if (newProfile) {
         setCurrentProfile(newProfile);
@@ -92,8 +118,8 @@ const ProfilesPage: React.FC = () => {
         // Use useEffect to handle tab switching after profiles update
         // This will be handled by the existing useEffect that watches profiles
       }
-    } catch (error: any) {
-      alert(`שגיאה: ${error.message}`);
+    } catch (error: unknown) {
+      alert(`שגיאה: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -106,26 +132,44 @@ const ProfilesPage: React.FC = () => {
   const handleSaveEdit = async () => {
     if (!editingProfile || !editName.trim()) return;
     try {
-      await updateProfile(editingProfile, editName, editMode);
+      await updateProfile(editingProfile, editName, editMode, managedUserId ?? undefined);
       setEditingProfile(null);
-    } catch (error: any) {
-      alert(`שגיאה: ${error.message}`);
+    } catch (error: unknown) {
+      alert(`שגיאה: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
   const handleDeleteProfile = async (id: number) => {
     if (!confirm('האם אתה בטוח שברצונך למחוק את הפרופיל הזה?')) return;
     try {
-      await deleteProfile(id);
-    } catch (error: any) {
-      alert(`שגיאה: ${error.message}`);
+      await deleteProfile(id, managedUserId ?? undefined);
+    } catch (error: unknown) {
+      alert(`שגיאה: ${error instanceof Error ? error.message : String(error)}`);
     }
+  };
+
+  const handleExitManage = () => {
+    clearManagedUser();
+    navigate('/admin/users');
   };
 
   return (
     <Container maxWidth="lg" sx={{ mt: 4 }}>
+      {managedUserId != null && managedUserPhone && (
+        <Alert
+          severity="info"
+          action={
+            <Button color="inherit" size="small" startIcon={<ExitIcon />} onClick={handleExitManage}>
+              יציאה
+            </Button>
+          }
+          sx={{ mb: 2 }}
+        >
+          מנהל כללים של {managedUserPhone}
+        </Alert>
+      )}
       <Typography variant="h4" gutterBottom>
-        פרופילי סינון
+        {managedUserId != null && managedUserPhone ? `מנהל כללים של ${managedUserPhone}` : 'פרופילי סינון'}
       </Typography>
 
       {/* Tabs */}
@@ -172,31 +216,54 @@ const ProfilesPage: React.FC = () => {
         {selectedProfile && (
           <Box sx={{ p: 3 }}>
             <Box sx={{ mb: 2 }}>
-              <TextField
-                label="שם פרופיל"
-                value={editingProfile === selectedProfile.id ? editName : selectedProfile.name}
-                onChange={(e) => {
-                  if (editingProfile === selectedProfile.id) {
-                    setEditName(e.target.value);
-                  } else {
-                    handleEditProfile(selectedProfile);
-                    setEditName(e.target.value);
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
+                <TextField
+                  label="שם פרופיל"
+                  value={editingProfile === selectedProfile.id ? editName : selectedProfile.name}
+                  onChange={(e) => {
+                    if (selectedProfile.is_default || lockedSettings.includes('profile_name')) return;
+                    if (editingProfile === selectedProfile.id) {
+                      setEditName(e.target.value);
+                    } else {
+                      handleEditProfile(selectedProfile);
+                      setEditName(e.target.value);
+                    }
+                  }}
+                  fullWidth
+                  sx={{ mb: 2 }}
+                  disabled={!!selectedProfile.is_default || lockedSettings.includes('profile_name')}
+                  helperText={
+                    selectedProfile.is_default
+                      ? 'לא ניתן לשנות את שם פרופיל ברירת המחדל'
+                      : lockedSettings.includes('profile_name')
+                        ? 'נחסם על ידי ההנהלה'
+                        : undefined
                   }
-                }}
-                fullWidth
-                sx={{ mb: 2 }}
-              />
+                  InputProps={{
+                    endAdornment: lockedSettings.includes('profile_name') ? (
+                      <Tooltip title="נחסם על ידי ההנהלה"><LockIcon fontSize="small" color="disabled" /></Tooltip>
+                    ) : undefined,
+                  }}
+                />
+              </Box>
               <Box sx={{ mb: 2 }}>
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
                   מצב עבודה
+                  {lockedSettings.includes('profile_mode') && (
+                    <Tooltip title="נחסם על ידי ההנהלה">
+                      <LockIcon fontSize="small" color="disabled" sx={{ ml: 0.5, verticalAlign: 'middle' }} />
+                    </Tooltip>
+                  )}
                 </Typography>
                 <Box
                   onClick={async () => {
+                    if (lockedSettings.includes('profile_mode')) return;
                     const newMode = selectedProfile.mode === 'whitelist' ? 'blacklist' : 'whitelist';
                     try {
-                      await updateProfile(selectedProfile.id, undefined, newMode);
-                    } catch (error: any) {
-                      alert(`שגיאה: ${error.message}`);
+                      await updateProfile(selectedProfile.id, undefined, newMode, managedUserId ?? undefined);
+                      loadCoreMode();
+                    } catch (error: unknown) {
+                      alert(`שגיאה: ${error instanceof Error ? error.message : String(error)}`);
                     }
                   }}
                   sx={{
@@ -207,8 +274,9 @@ const ProfilesPage: React.FC = () => {
                     border: '1px solid',
                     borderColor: 'divider',
                     borderRadius: 1,
-                    cursor: 'pointer',
-                    '&:hover': { bgcolor: 'action.hover' },
+                    cursor: lockedSettings.includes('profile_mode') ? 'not-allowed' : 'pointer',
+                    opacity: lockedSettings.includes('profile_mode') ? 0.7 : 1,
+                    '&:hover': lockedSettings.includes('profile_mode') ? {} : { bgcolor: 'action.hover' },
                   }}
                 >
                   <Chip
@@ -216,8 +284,13 @@ const ProfilesPage: React.FC = () => {
                     color={selectedProfile.mode === 'whitelist' ? 'success' : 'default'}
                     size="small"
                   />
+                  {coreMode != null && (
+                    <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                      (מצב בפרוקסי: {coreMode})
+                    </Typography>
+                  )}
                   <Typography variant="caption" color="text.secondary">
-                    (לחץ לשינוי)
+                    {lockedSettings.includes('profile_mode') ? 'נחסם על ידי ההנהלה' : '(לחץ לשינוי)'}
                   </Typography>
                 </Box>
               </Box>
@@ -257,6 +330,8 @@ const ProfilesPage: React.FC = () => {
                 profileId={selectedProfile.id}
                 rules={rules}
                 onRefresh={loadRules}
+                managedUserId={managedUserId ?? undefined}
+                rulesLocked={lockedSettings.includes('rules')}
               />
             </Box>
             

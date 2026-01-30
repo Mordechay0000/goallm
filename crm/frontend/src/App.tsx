@@ -19,6 +19,10 @@ import ProfilesPage from './pages/ProfilesPage';
 import RulesPage from './pages/RulesPage';
 import SchedulesPage from './pages/SchedulesPage';
 import ProfileEditPage from './pages/ProfileEditPage';
+import AdminUsersPage from './pages/AdminUsersPage';
+import AdminRequestsPage from './pages/AdminRequestsPage';
+import RequestOpenPage from './pages/RequestOpenPage';
+import RequestChangePage from './pages/RequestChangePage';
 import AdminLayout from './components/AdminLayout';
 
 // Create RTL cache
@@ -114,6 +118,46 @@ function App() {
               <ProtectedRoute>
                 <AdminLayout>
                   <SchedulesPage />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/users"
+            element={
+              <ProtectedRoute>
+                <AdminLayout>
+                  <AdminUsersPage />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/requests"
+            element={
+              <ProtectedRoute>
+                <AdminLayout>
+                  <AdminRequestsPage />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/request-open"
+            element={
+              <ProtectedRoute>
+                <AdminLayout>
+                  <RequestOpenPage />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/request-change"
+            element={
+              <ProtectedRoute>
+                <AdminLayout>
+                  <RequestChangePage />
                 </AdminLayout>
               </ProtectedRoute>
             }

@@ -70,7 +70,7 @@ const ProfileEditPage: React.FC = () => {
   }, []);
 
   const validatePhoneLive = useCallback((value: string): string | undefined => {
-    if (value && !/^[0-9\-\+\s\(\)]+$/.test(value)) return 'מספר טלפון לא תקין';
+    if (value && !/^[0-9+\s()-]+$/.test(value)) return 'מספר טלפון לא תקין';
     return undefined;
   }, []);
 
@@ -92,6 +92,7 @@ const ProfileEditPage: React.FC = () => {
 
   useEffect(() => {
     loadProfile();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
   }, []);
 
   const loadProfile = async () => {
@@ -104,8 +105,9 @@ const ProfileEditPage: React.FC = () => {
         last_name: profile.last_name || '',
         phone: profile.phone || '',
       });
-    } catch (error: any) {
-      setFormErrors([error.response?.data?.detail || error.message || 'שגיאה בטעינת פרופיל']);
+    } catch (error: unknown) {
+      const ax = error as { response?: { data?: { detail?: string } }; message?: string };
+      setFormErrors([ax?.response?.data?.detail || ax?.message || 'שגיאה בטעינת פרופיל']);
     }
   };
 
@@ -128,8 +130,9 @@ const ProfileEditPage: React.FC = () => {
       await loadProfile();
       setSuccessMessage('תמונת פרופיל עודכנה');
       setTimeout(() => setSuccessMessage(''), 5000);
-    } catch (err: any) {
-      setAvatarError(err.response?.data?.detail || err.message || 'שגיאה בהעלאת תמונה');
+    } catch (err: unknown) {
+      const ax = err as { response?: { data?: { detail?: string } }; message?: string };
+      setAvatarError(ax?.response?.data?.detail || ax?.message || 'שגיאה בהעלאת תמונה');
     } finally {
       setAvatarLoading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -151,7 +154,7 @@ const ProfileEditPage: React.FC = () => {
       newErrors.last_name = 'שם משפחה לא יכול להכיל יותר מ-100 תווים';
     }
 
-    if (formData.phone && !/^[0-9\-\+\s\(\)]+$/.test(formData.phone)) {
+    if (formData.phone && !/^[0-9+\s()-]+$/.test(formData.phone)) {
       newErrors.phone = 'מספר טלפון לא תקין';
     }
 
@@ -202,12 +205,13 @@ const ProfileEditPage: React.FC = () => {
       await refreshProfile();
       setSuccessMessage('פרופיל עודכן בהצלחה');
       setTimeout(() => setSuccessMessage(''), 5000);
-    } catch (error: any) {
+    } catch (error: unknown) {
       let msg = 'שגיאה בעדכון פרופיל';
-      const detail = error.response?.data?.detail;
+      const ax = error as { response?: { data?: { detail?: string | { msg?: string; message?: string }[] } }; message?: string };
+      const detail = ax?.response?.data?.detail;
       if (Array.isArray(detail) && detail[0]) msg = detail[0].msg || detail[0].message || msg;
       else if (typeof detail === 'string') msg = detail;
-      else if (error.message) msg = error.message;
+      else if (ax?.message) msg = ax.message;
       setFormErrors([msg]);
     } finally {
       setLoading(false);
@@ -237,11 +241,12 @@ const ProfileEditPage: React.FC = () => {
         confirm_password: '',
       });
       setTimeout(() => setSuccessMessage(''), 5000);
-    } catch (error: any) {
+    } catch (error: unknown) {
       let msg = 'שגיאה בשינוי סיסמה';
-      const detail = error.response?.data?.detail;
+      const ax = error as { response?: { data?: { detail?: string } }; message?: string };
+      const detail = ax?.response?.data?.detail;
       if (typeof detail === 'string') msg = detail;
-      else if (error.message) msg = error.message;
+      else if (ax?.message) msg = ax.message;
       setPasswordFormErrors([msg]);
     } finally {
       setPasswordLoading(false);
@@ -292,8 +297,9 @@ const ProfileEditPage: React.FC = () => {
                       await loadProfile();
                       setSuccessMessage('תמונת פרופיל נמחקה');
                       setTimeout(() => setSuccessMessage(''), 5000);
-                    } catch (err: any) {
-                      setAvatarError(err.response?.data?.detail || err.message || 'שגיאה במחיקת תמונה');
+                    } catch (err: unknown) {
+                      const a = err as { response?: { data?: { detail?: string } }; message?: string };
+                      setAvatarError(a?.response?.data?.detail || a?.message || 'שגיאה במחיקת תמונה');
                     }
                   }}
                   sx={{

@@ -24,27 +24,32 @@ export interface ProfileUpdate {
 }
 
 export const profilesApi = {
-  list: async (): Promise<Profile[]> => {
-    const response = await apiClient.get<Profile[]>('/api/profiles');
+  list: async (managedUserId?: number): Promise<Profile[]> => {
+    const params = managedUserId != null ? { managed_user_id: managedUserId } : {};
+    const response = await apiClient.get<Profile[]>('/api/profiles', { params });
     return response.data;
   },
 
-  get: async (id: number): Promise<Profile> => {
-    const response = await apiClient.get<Profile>(`/api/profiles/${id}`);
+  get: async (id: number, managedUserId?: number): Promise<Profile> => {
+    const params = managedUserId != null ? { managed_user_id: managedUserId } : {};
+    const response = await apiClient.get<Profile>(`/api/profiles/${id}`, { params });
     return response.data;
   },
 
-  create: async (data: ProfileCreate): Promise<Profile> => {
-    const response = await apiClient.post<Profile>('/api/profiles', data);
+  create: async (data: ProfileCreate, managedUserId?: number): Promise<Profile> => {
+    const params = managedUserId != null ? { managed_user_id: managedUserId } : {};
+    const response = await apiClient.post<Profile>('/api/profiles', data, { params });
     return response.data;
   },
 
-  update: async (id: number, data: ProfileUpdate): Promise<Profile> => {
-    const response = await apiClient.put<Profile>(`/api/profiles/${id}`, data);
+  update: async (id: number, data: ProfileUpdate, managedUserId?: number): Promise<Profile> => {
+    const params = managedUserId != null ? { managed_user_id: managedUserId } : {};
+    const response = await apiClient.put<Profile>(`/api/profiles/${id}`, data, { params });
     return response.data;
   },
 
-  delete: async (id: number): Promise<void> => {
-    await apiClient.delete(`/api/profiles/${id}`);
+  delete: async (id: number, managedUserId?: number): Promise<void> => {
+    const params = managedUserId != null ? { managed_user_id: managedUserId } : {};
+    await apiClient.delete(`/api/profiles/${id}`, { params });
   },
 };

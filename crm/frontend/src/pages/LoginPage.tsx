@@ -109,10 +109,12 @@ const LoginPage: React.FC = () => {
       await authApi.requestPhoneCode(phone);
       setStep('verify');
       setErrors((prev) => { const n = { ...prev }; delete n.phone; return n; });
-    } catch (err: any) {
-      const msg = err.response?.data?.detail ?? err.message ?? 'שליחת הקוד נכשלה';
-      setFormErrors(Array.isArray(msg) ? (msg as any[]).map((x: any) => x.msg || x.message || '') : [msg]);
-      setErrors((prev) => (typeof msg === 'string' ? { ...prev, phone: msg } : (() => { const n = { ...prev }; delete n.phone; return n; })()));
+    } catch (err: unknown) {
+      const ax = err as { response?: { data?: { detail?: string | { msg?: string; message?: string }[] } }; message?: string };
+      const raw = ax?.response?.data?.detail ?? (err instanceof Error ? err.message : undefined) ?? 'שליחת הקוד נכשלה';
+      const formErr = Array.isArray(raw) ? (raw as { msg?: string; message?: string }[]).map((x) => x?.msg || x?.message || '') : [typeof raw === 'string' ? raw : String(raw)];
+      setFormErrors(formErr);
+      setErrors((prev) => (typeof raw === 'string' ? { ...prev, phone: raw } : (() => { const n = { ...prev }; delete n.phone; return n; })()));
     } finally {
       setLoading(false);
     }
@@ -125,10 +127,12 @@ const LoginPage: React.FC = () => {
     try {
       await loginWithPhoneCode(phone, code);
       navigate('/');
-    } catch (err: any) {
-      const msg = err.response?.data?.detail ?? err.message ?? 'אימות הקוד נכשל';
-      setFormErrors(Array.isArray(msg) ? (msg as any[]).map((x: any) => x.msg || x.message || '') : [msg]);
-      setErrors((prev) => (typeof msg === 'string' ? { ...prev, code: msg } : (() => { const n = { ...prev }; delete n.code; return n; })()));
+    } catch (err: unknown) {
+      const ax = err as { response?: { data?: { detail?: string | { msg?: string; message?: string }[] } }; message?: string };
+      const raw = ax?.response?.data?.detail ?? (err instanceof Error ? err.message : undefined) ?? 'אימות הקוד נכשל';
+      const formErr = Array.isArray(raw) ? (raw as { msg?: string; message?: string }[]).map((x) => x?.msg || x?.message || '') : [typeof raw === 'string' ? raw : String(raw)];
+      setFormErrors(formErr);
+      setErrors((prev) => (typeof raw === 'string' ? { ...prev, code: raw } : (() => { const n = { ...prev }; delete n.code; return n; })()));
     } finally {
       setLoading(false);
     }
@@ -142,10 +146,12 @@ const LoginPage: React.FC = () => {
     try {
       await login(phone, password);
       navigate('/');
-    } catch (err: any) {
-      const msg = err.response?.data?.detail ?? err.message ?? 'התחברות נכשלה';
-      setFormErrors(Array.isArray(msg) ? (msg as any[]).map((x: any) => x.msg || x.message || '') : [msg]);
-      setErrors((prev) => (typeof msg === 'string' ? { ...prev, password: msg } : (() => { const n = { ...prev }; delete n.password; return n; })()));
+    } catch (err: unknown) {
+      const ax = err as { response?: { data?: { detail?: string | { msg?: string; message?: string }[] } }; message?: string };
+      const raw = ax?.response?.data?.detail ?? (err instanceof Error ? err.message : undefined) ?? 'התחברות נכשלה';
+      const formErr = Array.isArray(raw) ? (raw as { msg?: string; message?: string }[]).map((x) => x?.msg || x?.message || '') : [typeof raw === 'string' ? raw : String(raw)];
+      setFormErrors(formErr);
+      setErrors((prev) => (typeof raw === 'string' ? { ...prev, password: raw } : (() => { const n = { ...prev }; delete n.password; return n; })()));
     } finally {
       setLoading(false);
     }

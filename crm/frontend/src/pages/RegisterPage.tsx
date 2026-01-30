@@ -79,7 +79,7 @@ const RegisterPage: React.FC = () => {
     const ph = (value || '').replace(/\D/g, '');
     if (ph.length === 0) return 'מספר טלפון חובה (לפחות 9 ספרות). ההתחברות מתבצעת באמצעות טלפון וסיסמה';
     if (ph.length < 9) return 'מספר טלפון חובה (לפחות 9 ספרות). ההתחברות מתבצעת באמצעות טלפון וסיסמה';
-    if (!/^[0-9\-\+\s\(\)]+$/.test(value)) return 'מספר טלפון לא תקין';
+    if (!/^[0-9+\s()-]+$/.test(value)) return 'מספר טלפון לא תקין';
     return undefined;
   }, []);
 
@@ -123,7 +123,7 @@ const RegisterPage: React.FC = () => {
     const ph = (formData.phone || '').replace(/\D/g, '');
     if (ph.length < 9) {
       newErrors.phone = 'מספר טלפון חובה (לפחות 9 ספרות). ההתחברות מתבצעת באמצעות טלפון וסיסמה';
-    } else if (!/^[0-9\-\+\s\(\)]+$/.test(formData.phone)) {
+    } else if (!/^[0-9+\s()-]+$/.test(formData.phone)) {
       newErrors.phone = 'מספר טלפון לא תקין';
     }
 
@@ -169,12 +169,13 @@ const RegisterPage: React.FC = () => {
       navigate('/login', {
         state: { message: 'הרשמה הושלמה! התחבר עם הטלפון והסיסמה שלך.' },
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       let msg = 'שגיאה בהרשמה';
-      const detail = error.response?.data?.detail;
+      const ax = error as { response?: { data?: { detail?: string | { msg?: string; message?: string }[] } }; message?: string };
+      const detail = ax?.response?.data?.detail;
       if (Array.isArray(detail) && detail[0]) msg = detail[0].msg || detail[0].message || msg;
       else if (typeof detail === 'string') msg = detail;
-      else if (error.message) msg = error.message;
+      else if (ax?.message) msg = ax.message;
       setFormErrors([msg]);
     } finally {
       setLoading(false);
