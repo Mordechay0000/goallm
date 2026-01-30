@@ -3,7 +3,7 @@ Authentication utilities for FastAPI.
 Uses python-jose for JWT and security.py for password verification.
 Phone is the unique identifier (not email).
 """
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status  # noqa: F401 - status used in get_current_admin
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional
 from datetime import timedelta
@@ -80,5 +80,18 @@ async def get_current_user(
     return {
         "id": user["id"],
         "email": user.get("email"),
-        "phone": user.get("phone")
+        "phone": user.get("phone"),
+        "is_admin": user.get("is_admin", False),
     }
+
+
+async def get_current_admin(
+    current_user: dict = Depends(get_current_user),
+):
+    """Require current user to be admin. Use for admin-only endpoints."""
+    if not current_user.get("is_admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="גישה נדחתה - נדרשת הרשאת מנהל",
+        )
+    return current_user

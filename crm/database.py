@@ -278,6 +278,28 @@ def init_db_schema():
         CREATE INDEX IF NOT EXISTS idx_rules_profile_id 
         ON rules(profile_id)
     """)
+
+    # Add tags column to rules if missing (migration)
+    cursor = db_connection.execute("PRAGMA table_info(rules)")
+    rule_columns = [row[1] for row in cursor.fetchall()]
+    if "tags" not in rule_columns:
+        db_connection.execute("ALTER TABLE rules ADD COLUMN tags TEXT")
+        logger.info("Added tags column to rules")
+
+    # Tag rules: rule per tag (e.g. tag=ממכר -> state=block)
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS tag_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tag TEXT NOT NULL UNIQUE,
+            state TEXT NOT NULL DEFAULT 'block',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )
+    """)
+    db_connection.execute("""
+        CREATE INDEX IF NOT EXISTS idx_tag_rules_tag ON tag_rules(tag)
+    """)
     
     db_connection.execute("""
         CREATE INDEX IF NOT EXISTS idx_schedules_profile_id 
@@ -299,7 +321,63 @@ def init_db_schema():
         CREATE INDEX IF NOT EXISTS idx_verification_target_type 
         ON verification_codes(target, type)
     """)
-    
+
+    # is_admin on users (migration)
+    cursor = db_connection.execute("PRAGMA table_info(users)")
+    user_cols = [row[1] for row in cursor.fetchall()]
+    if "is_admin" not in user_cols:
+        db_connection.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
+        logger.info("Added is_admin column to users")
+
+    # user_locked_settings: which settings are locked by admin for a user
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS user_locked_settings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            setting_key TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            UNIQUE(user_id, setting_key),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+    db_connection.execute("CREATE INDEX IF NOT EXISTS idx_locked_settings_user ON user_locked_settings(user_id)")
+
+    # rule_requests: user requests (open site / change rule) for admin to approve
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS rule_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            request_type TEXT NOT NULL,
+            url TEXT,
+            domain_pattern TEXT,
+            path_pattern TEXT,
+            action TEXT,
+            type TEXT,
+            include_subdomains INTEGER DEFAULT 0,
+            tags TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+    db_connection.execute("CREATE INDEX IF NOT EXISTS idx_rule_requests_user ON rule_requests(user_id)")
+    db_connection.execute("CREATE INDEX IF NOT EXISTS idx_rule_requests_status ON rule_requests(status)")
+    db_connection.execute("CREATE INDEX IF NOT EXISTS idx_rule_requests_created ON rule_requests(created_at)")
+
+    # Add approved_rule_id and approved_profile_id if missing (migration)
+    cursor = db_connection.execute("PRAGMA table_info(rule_requests)")
+    rr_cols = [row[1] for row in cursor.fetchall()]
+    if "approved_rule_id" not in rr_cols:
+        db_connection.execute("ALTER TABLE rule_requests ADD COLUMN approved_rule_id INTEGER")
+        logger.info("Added approved_rule_id to rule_requests")
+    if "approved_profile_id" not in rr_cols:
+        db_connection.execute("ALTER TABLE rule_requests ADD COLUMN approved_profile_id INTEGER")
+        logger.info("Added approved_profile_id to rule_requests")
+    if "request_url" not in rr_cols:
+        db_connection.execute("ALTER TABLE rule_requests ADD COLUMN request_url TEXT")
+        logger.info("Added request_url to rule_requests")
+
     db_connection.commit()
     logger.info("CRM database schema initialized successfully")
 

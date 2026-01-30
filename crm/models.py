@@ -38,7 +38,8 @@ class UserResponse(BaseModel):
     avatar_url: Optional[str]
     created_at: int
     updated_at: int
-    
+    is_admin: bool = False
+
     class Config:
         from_attributes = True
 
@@ -91,6 +92,7 @@ class RuleCreate(BaseModel):
     action: str = Field(default="block", pattern="^(allow|block)$")
     type: str = Field(default="*", pattern="^(\\*|image|video)$")
     include_subdomains: bool = Field(default=False)
+    tags: Optional[List[str]] = Field(default=None, description="תגיות לאתר (למשל ממכר, בידור)")
     
     @validator('url')
     def validate_url(cls, v):
@@ -127,6 +129,7 @@ class RuleUpdate(BaseModel):
     action: Optional[str] = Field(None, pattern="^(allow|block)$")
     type: Optional[str] = Field(None, pattern="^(\\*|image|video)$")
     include_subdomains: Optional[bool] = None
+    tags: Optional[List[str]] = None
 
 
 class RuleResponse(BaseModel):
@@ -137,6 +140,7 @@ class RuleResponse(BaseModel):
     action: str
     type: str
     include_subdomains: bool
+    tags: Optional[List[str]] = None
     created_at: int
     updated_at: int
     
@@ -150,6 +154,31 @@ class RuleResponse(BaseModel):
             url += self.path_pattern
         return url
     
+    class Config:
+        from_attributes = True
+
+
+# Tag rule models (כללי תגיות)
+class TagRuleCreate(BaseModel):
+    tag: str = Field(..., min_length=1)
+    state: str = Field(default="block", pattern="^(allow|block)$")
+    enabled: bool = Field(default=True)
+
+
+class TagRuleUpdate(BaseModel):
+    tag: Optional[str] = Field(None, min_length=1)
+    state: Optional[str] = Field(None, pattern="^(allow|block)$")
+    enabled: Optional[bool] = None
+
+
+class TagRuleResponse(BaseModel):
+    id: int
+    tag: str
+    state: str
+    enabled: bool
+    created_at: int
+    updated_at: int
+
     class Config:
         from_attributes = True
 
@@ -201,3 +230,51 @@ class ScheduleResponse(BaseModel):
 class LoginRequest(BaseModel):
     phone: str = Field(..., min_length=8, max_length=20)
     password: str
+
+
+# Rule request models (user requests for admin to approve)
+class RuleRequestCreate(BaseModel):
+    request_type: str = Field(..., pattern="^(open|change)$")
+    url: Optional[str] = None
+    domain_pattern: Optional[str] = None
+    path_pattern: Optional[str] = None
+    action: Optional[str] = Field(None, pattern="^(allow|block)$")
+    type: Optional[str] = Field(None, pattern="^(\\*|image|video)$")
+    include_subdomains: bool = False
+    tags: Optional[List[str]] = None
+
+
+class RuleRequestApprove(BaseModel):
+    profile_id: int
+
+
+class RuleRequestResponse(BaseModel):
+    id: int
+    user_id: int
+    request_type: str
+    url: Optional[str]
+    domain_pattern: Optional[str]
+    path_pattern: Optional[str]
+    action: Optional[str]
+    type: Optional[str]
+    include_subdomains: bool
+    tags: Optional[List[str]]
+    status: str
+    created_at: int
+    updated_at: int
+    user_phone: Optional[str] = None
+    approved_rule_id: Optional[int] = None
+    approved_profile_id: Optional[int] = None
+    is_from_blocked_page: bool = False
+    request_url: Optional[str] = None  # full URL user tried to access (read-only)
+
+    class Config:
+        from_attributes = True
+
+
+class RuleRequestUpdate(BaseModel):
+    url: Optional[str] = None
+    action: Optional[str] = Field(None, pattern="^(allow|block)$")
+    type: Optional[str] = Field(None, pattern="^(\\*|image|video)$")
+    include_subdomains: Optional[bool] = None
+    tags: Optional[List[str]] = None
