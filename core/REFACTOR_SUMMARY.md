@@ -76,9 +76,16 @@
 
 ---
 
+## תיקוני סינון (יושמו)
+
+1. **התיעלות לפי policy**: ב־`http_flow_processor` לפני סינון תמונה בודקים policy עם `get_policy_resolver().resolve(url, "image")`. אם יש כלל עם `state == "allow"` – התגובה עוברת ללא סינון (pass-through).
+2. **`state` ב־resolver**: ב־`policy_loader` מעבירים כעת גם `state` ל־`resolver_policies`, כך ש־`resolve()` מחזיר כלל עם `state` (allow/block).
+3. **Content-Length**: אחרי החלפת גוף תמונה מעדכנים `flow.response.headers["Content-Length"]` לגודל החדש.
+4. **קוד מת**: הוסר השימוש ב־`flow_response` (תמיד `None` מ־`get_image_with_status`); לוגי האדון עודכנו ל־FilterAddon.
+
 ## המלצות לוגיקה (לא יושמו)
 
-1. **`state` ב־URLPolicyResolver**: כרגע ה־resolver מקבל policies בלי `state`. אם צד הלקוח (למשל CRM) צריך allow/block מה־resolver, כדאי להעביר `state` ב־`policy_loader` ל־`resolver_policies` ולוודא שה־resolver מחזיר rules שכוללים `state`.
+1. ~~**`state` ב־URLPolicyResolver**~~ – יושם (ראה למעלה).
 2. **בחירת אנליזר**: ב־`image_status_manager` תמיד משתמשים ב־`SimulatedImageAnalyzer`. אם רוצים LLM ב־production, לשקול בחירה לפי env או config (למשל `USE_LLM_ANALYZER=1`).
 3. **base64 ב־LLM analyzer**: ב־`analyze_image` יש TODO לטיפול במחרוזת base64; כרגע לא ממומש. להשלים אם נדרש קלט base64.
 4. **תור אנליזת תמונות**: לשקול retries או exponential backoff ב־worker כש־`analyze_image` נכשל בשגיאות חולפות (רשת, מודל).

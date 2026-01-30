@@ -112,6 +112,6 @@ class FilterAddon:
         print(f"{'=' * 80}\n")
 
 
-logger.info("Initializing ImageFilterAddon")
+logger.info("Initializing FilterAddon")
 addons = [FilterAddon()]
-logger.info("ImageFilterAddon initialized and registered")
+logger.info("FilterAddon initialized and registered")

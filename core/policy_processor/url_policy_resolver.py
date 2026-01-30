@@ -9,9 +9,25 @@ class URLPolicyResolverError(ValueError):
 
 
 class URLPolicyResolver:
-    def __init__(self, policies: List[Dict]):
+    """Resolves URL to policy (allow/block) from DB-backed policies and tag rules."""
+
+    def __init__(
+        self,
+        policies: List[Dict],
+        tag_rules: Optional[List[Dict]] = None,
+        default_mode: Optional[str] = None,
+    ):
         self.policies = policies
-        self._debug_log: List[str] = []
+        self.tag_rules = list(tag_rules or [])
+        self.default_mode = (default_mode or "").strip().lower()
+        if self.default_mode not in ("whitelist", "blacklist"):
+            self.default_mode = "whitelist"
+        self._tag_block: Dict[str, bool] = {
+            r["tag"].strip(): (r.get("state") == "block")
+            for r in self.tag_rules
+            if r.get("tag") and r.get("state") in ("allow", "block")
+        }
+        self._debug_log = []
 
     # ---------- Debug helpers ----------
 
@@ -149,17 +165,30 @@ class URLPolicyResolver:
 
         # Resolve by type
         for rule in candidates:
-            rule_type = rule["type"]
-            if rule_type == req_type:
-                self._log(f"Rule selected (exact type match): {rule}")
-                return rule
-            if rule_type == "*":
-                self._log(f"Rule selected (wildcard type): {rule}")
-                return rule
-
-            self._log(
-                f"Rule skipped due to type mismatch: rule_type={rule_type}, req_type={req_type}"
-            )
+            rule_type = rule.get("type") or "*"
+            if rule_type != req_type and rule_type != "*":
+                self._log(
+                    f"Rule skipped due to type mismatch: rule_type={rule_type}, req_type={req_type}"
+                )
+                continue
+            self._log(f"Rule selected: {rule}")
+            # Apply tag rules: if policy has tags and any tag has a block rule, override to block
+            tags = rule.get("tags") or []
+            if isinstance(tags, str):
+                tags = [t.strip() for t in tags.split(",") if t.strip()]
+            for tag in tags:
+                if self._tag_block.get(tag):
+                    self._log(f"Tag rule override: tag={tag} -> block")
+                    return {**rule, "state": "block"}
+            return rule
 
         self._log("No matching rule found")
+        # רשימה לבנה: אתר שלא מופיע ברשימה → נשלח לבדיקה (review).
+        # רשימה שחורה: אתר שלא מופיע ברשימה → פתוח (allow).
+        if self.default_mode == "whitelist":
+            self._log("Default mode whitelist -> review (no rule = send for review)")
+            return {"state": "review"}
+        if self.default_mode == "blacklist":
+            self._log("Default mode blacklist -> allow (no rule = open)")
+            return {"state": "allow"}
         return None

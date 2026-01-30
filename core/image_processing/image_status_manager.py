@@ -101,15 +101,16 @@ def get_image_with_status(
     image_url: str,
     referer_url: str | None,
     image_mime_type: str,
-) -> Tuple[bytes, Any]:
+) -> Tuple[bytes, Any, str]:
     """
-    Resolve image status and return (image_bytes, flow_response).
+    Resolve image status and return (image_bytes, flow_response, status).
 
-    - If unknown: enqueue for analysis, return checking placeholder.
-    - If blocked: return blocked placeholder.
-    - If allowed: return original image.
-    - If pending: return checking placeholder.
-    - On error: return error placeholder.
+    status: "checking" | "blocked" | "allowed" | "pending" | "error"
+    - If unknown: enqueue for analysis, return checking placeholder (status "checking").
+    - If blocked: return blocked placeholder (status "blocked").
+    - If allowed: return original image (status "allowed").
+    - If pending: return checking placeholder (status "pending").
+    - On error: return error placeholder (status "error").
     """
     logger.info(
         "Processing image request - URL: %s, MIME: %s, Referer: %s",
@@ -145,7 +146,7 @@ def get_image_with_status(
         size = (w, hi) if (w and hi) else None
         out = get_checking_image(image_mime_type, size)
         logger.info("Returning CHECKING image for new image (hash: %s)", h8)
-        return out, None
+        return out, None, "checking"
 
     status = info["status"]
     mime = info.get("mime_type") or image_mime_type
@@ -163,13 +164,13 @@ def get_image_with_status(
 
     if status == "blocked":
         logger.info("Returning BLOCKED image for hash %s", h8)
-        return get_blocked_image(mime, size), None
+        return get_blocked_image(mime, size), None, "blocked"
     if status == "allowed":
         logger.info("Returning original image for hash %s", h8)
-        return image_data, None
+        return image_data, None, "allowed"
     if status == "pending":
         logger.info("Returning CHECKING image for pending hash %s", h8)
-        return get_checking_image(mime, size), None
+        return get_checking_image(mime, size), None, "pending"
 
     logger.warning("Unknown status %r for hash %s, returning ERROR image", status, h8)
-    return get_error_image(mime, size), None
+    return get_error_image(mime, size), None, "error"
