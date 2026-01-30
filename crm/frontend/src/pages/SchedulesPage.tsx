@@ -28,8 +28,11 @@ import {
   MenuItem,
   FormControlLabel,
   Checkbox,
+  TableSortLabel,
+  TablePagination,
+  InputAdornment,
 } from '@mui/material';
-import { Delete as DeleteIcon, Add as AddIcon } from '@mui/icons-material';
+import { Delete as DeleteIcon, Add as AddIcon, Search as SearchIcon } from '@mui/icons-material';
 import { schedulesApi } from '../api/schedules';
 import { profilesApi } from '../api/profiles';
 import { useProfilesStore } from '../store/profilesStore';
@@ -52,6 +55,12 @@ const SchedulesPage: React.FC = () => {
   const [useHours, setUseHours] = useState(false);
   const [fromTime, setFromTime] = useState('18:00');
   const [toTime, setToTime] = useState('22:00');
+  const [schedOrder, setSchedOrder] = useState<'asc' | 'desc'>('asc');
+  const [schedOrderBy, setSchedOrderBy] = useState<'profile' | 'from' | 'to'>('profile');
+  const [schedPage, setSchedPage] = useState(0);
+  const [schedRowsPerPage, setSchedRowsPerPage] = useState(10);
+  const [schedSearch, setSchedSearch] = useState('');
+  const SCHED_ROWS_OPTIONS = [10, 25, 50];
 
   // Check if we should open dialog from location state
   useEffect(() => {
@@ -104,7 +113,7 @@ const SchedulesPage: React.FC = () => {
       }
       
       setSchedules(allSchedules);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error loading schedules:', error);
       setSchedules([]);
     } finally {
@@ -140,8 +149,8 @@ const SchedulesPage: React.FC = () => {
       setFromTime('18:00');
       setToTime('22:00');
       fetchAllSchedules();
-    } catch (error: any) {
-      alert(`שגיאה: ${error.message}`);
+    } catch (error: unknown) {
+      alert(`שגיאה: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -150,8 +159,8 @@ const SchedulesPage: React.FC = () => {
     try {
       await schedulesApi.delete(id);
       fetchAllSchedules();
-    } catch (error: any) {
-      alert(`שגיאה: ${error.message}`);
+    } catch (error: unknown) {
+      alert(`שגיאה: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -215,77 +224,142 @@ const SchedulesPage: React.FC = () => {
       </Box>
 
       {/* Schedules Table */}
-      <TableContainer component={Paper}>
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableCell sx={{ fontWeight: 600 }}>פרופיל</TableCell>
-              <TableCell sx={{ fontWeight: 600 }}>ימים</TableCell>
-              <TableCell sx={{ fontWeight: 600 }}>מ</TableCell>
-              <TableCell sx={{ fontWeight: 600 }}>עד</TableCell>
-              <TableCell sx={{ fontWeight: 600 }} align="center">פעולות</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {schedules.length === 0 ? (
+      <Paper>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 2, px: 2, pt: 2, pb: 1 }}>
+          <TextField
+            size="small"
+            placeholder="חיפוש לפי פרופיל..."
+            value={schedSearch}
+            onChange={(e) => { setSchedSearch(e.target.value); setSchedPage(0); }}
+            sx={{ minWidth: 220 }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon fontSize="small" color="action" />
+                </InputAdornment>
+              ),
+            }}
+          />
+        </Box>
+        <TableContainer>
+          <Table>
+            <TableHead>
               <TableRow>
-                <TableCell colSpan={5} align="center" sx={{ py: 4 }}>
-                  <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
-                    <Typography variant="body1" color="text.secondary">
-                      אין תזמונים מוגדרים
-                    </Typography>
-                    <Button
-                      variant="outlined"
-                      startIcon={<AddIcon />}
-                      onClick={() => {
-                        setSelectedProfileId('');
-                        setShowAddDialog(true);
-                      }}
-                    >
-                      הוסף תזמון ראשון
-                    </Button>
-                  </Box>
+                <TableCell sortDirection={schedOrderBy === 'profile' ? schedOrder : false} sx={{ fontWeight: 600 }}>
+                  <TableSortLabel active={schedOrderBy === 'profile'} direction={schedOrderBy === 'profile' ? schedOrder : 'asc'} onClick={() => { setSchedOrderBy('profile'); setSchedOrder(schedOrderBy === 'profile' && schedOrder === 'asc' ? 'desc' : 'asc'); setSchedPage(0); }}>
+                    פרופיל
+                  </TableSortLabel>
                 </TableCell>
+                <TableCell sx={{ fontWeight: 600 }}>ימים</TableCell>
+                <TableCell sortDirection={schedOrderBy === 'from' ? schedOrder : false} sx={{ fontWeight: 600 }}>
+                  <TableSortLabel active={schedOrderBy === 'from'} direction={schedOrderBy === 'from' ? schedOrder : 'asc'} onClick={() => { setSchedOrderBy('from'); setSchedOrder(schedOrderBy === 'from' && schedOrder === 'asc' ? 'desc' : 'asc'); setSchedPage(0); }}>
+                    מ
+                  </TableSortLabel>
+                </TableCell>
+                <TableCell sortDirection={schedOrderBy === 'to' ? schedOrder : false} sx={{ fontWeight: 600 }}>
+                  <TableSortLabel active={schedOrderBy === 'to'} direction={schedOrderBy === 'to' ? schedOrder : 'asc'} onClick={() => { setSchedOrderBy('to'); setSchedOrder(schedOrderBy === 'to' && schedOrder === 'asc' ? 'desc' : 'asc'); setSchedPage(0); }}>
+                    עד
+                  </TableSortLabel>
+                </TableCell>
+                <TableCell sx={{ fontWeight: 600 }} align="center">פעולות</TableCell>
               </TableRow>
-            ) : (
-              schedules.map((schedule) => {
-                const days = getDaysList(schedule.days_bitmask);
-                return (
-                  <TableRow key={schedule.id} hover>
-                    <TableCell>
-                      <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                        {schedule.profile_name || `פרופיל ${schedule.profile_id}`}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-                        {days.map((day) => (
-                          <Chip key={day} label={DAYS_HEBREW[day]} size="small" />
-                        ))}
-                      </Box>
-                    </TableCell>
-                    <TableCell>
-                      {schedule.from_time ? schedule.from_time : 'כל היום'}
-                    </TableCell>
-                    <TableCell>
-                      {schedule.to_time ? schedule.to_time : 'כל היום'}
-                    </TableCell>
-                    <TableCell align="center">
-                      <IconButton
-                        size="small"
-                        color="error"
-                        onClick={() => handleDeleteSchedule(schedule.id)}
-                      >
-                        <DeleteIcon />
-                      </IconButton>
-                    </TableCell>
-                  </TableRow>
-                );
-              })
-            )}
-          </TableBody>
-        </Table>
-      </TableContainer>
+            </TableHead>
+            <TableBody>
+              {(() => {
+                const q = schedSearch.trim().toLowerCase();
+                const filtered = !q
+                  ? schedules
+                  : schedules.filter((s) => (s.profile_name || '').toLowerCase().includes(q));
+                if (filtered.length === 0) {
+                  return (
+                    <TableRow>
+                      <TableCell colSpan={5} align="center" sx={{ py: 4 }}>
+                        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                          <Typography variant="body1" color="text.secondary">
+                            {schedules.length === 0 ? 'אין תזמונים מוגדרים' : 'אין תוצאות לחיפוש'}
+                          </Typography>
+                          {schedules.length === 0 && (
+                            <Button
+                              variant="outlined"
+                              startIcon={<AddIcon />}
+                              onClick={() => {
+                                setSelectedProfileId('');
+                                setShowAddDialog(true);
+                              }}
+                            >
+                              הוסף תזמון ראשון
+                            </Button>
+                          )}
+                        </Box>
+                      </TableCell>
+                    </TableRow>
+                  );
+                }
+                const sorted = [...filtered].sort((a, b) => {
+                  let v = 0;
+                  if (schedOrderBy === 'profile') v = (a.profile_name || '').localeCompare(b.profile_name || '');
+                  else if (schedOrderBy === 'from') v = (a.from_time || '').localeCompare(b.from_time || '');
+                  else if (schedOrderBy === 'to') v = (a.to_time || '').localeCompare(b.to_time || '');
+                  return schedOrder === 'asc' ? v : -v;
+                });
+                const paginated = sorted.slice(schedPage * schedRowsPerPage, schedPage * schedRowsPerPage + schedRowsPerPage);
+                return paginated.map((schedule) => {
+                    const days = getDaysList(schedule.days_bitmask);
+                    return (
+                      <TableRow key={schedule.id} hover>
+                        <TableCell>
+                          <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                            {schedule.profile_name || `פרופיל ${schedule.profile_id}`}
+                          </Typography>
+                        </TableCell>
+                        <TableCell>
+                          <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                            {days.map((day) => (
+                              <Chip key={day} label={DAYS_HEBREW[day]} size="small" />
+                            ))}
+                          </Box>
+                        </TableCell>
+                        <TableCell>
+                          {schedule.from_time ? schedule.from_time : 'כל היום'}
+                        </TableCell>
+                        <TableCell>
+                          {schedule.to_time ? schedule.to_time : 'כל היום'}
+                        </TableCell>
+                        <TableCell align="center">
+                          <IconButton
+                            size="small"
+                            color="error"
+                            onClick={() => handleDeleteSchedule(schedule.id)}
+                          >
+                            <DeleteIcon />
+                          </IconButton>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  });
+              })()}
+            </TableBody>
+          </Table>
+          {(() => {
+            const q = schedSearch.trim().toLowerCase();
+            const filtered = !q ? schedules : schedules.filter((s) => (s.profile_name || '').toLowerCase().includes(q));
+            const n = filtered.length;
+            return n > 0 ? (
+              <TablePagination
+                component="div"
+                count={n}
+                page={schedPage}
+                onPageChange={(_, p) => setSchedPage(p)}
+                rowsPerPage={schedRowsPerPage}
+                onRowsPerPageChange={(e) => { setSchedRowsPerPage(parseInt(e.target.value, 10)); setSchedPage(0); }}
+                rowsPerPageOptions={SCHED_ROWS_OPTIONS}
+                labelRowsPerPage="שורות בעמוד:"
+                labelDisplayedRows={({ from, to, count }) => `${from}–${to} מתוך ${count}`}
+              />
+            ) : null;
+          })()}
+        </TableContainer>
+      </Paper>
 
       {/* Add Schedule Dialog */}
       <Dialog open={showAddDialog} onClose={handleDialogClose} maxWidth="sm" fullWidth>

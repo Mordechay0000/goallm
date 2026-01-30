@@ -17,15 +17,24 @@ import {
   Chip,
   Button,
   Divider,
+  TableSortLabel,
+  TablePagination,
+  TextField,
+  InputAdornment,
 } from '@mui/material';
 import {
   FilterList as FilterIcon,
   Schedule as ScheduleIcon,
   Security as SecurityIcon,
+  Search as SearchIcon,
 } from '@mui/icons-material';
 import { useProfilesStore } from '../store/profilesStore';
 import { rulesApi } from '../api/rules';
 import { schedulesApi } from '../api/schedules';
+
+type ProfileOrder = 'asc' | 'desc';
+type ProfileSortBy = 'name' | 'mode';
+const PROFILE_ROWS_OPTIONS = [10, 25, 50];
 
 const HomePage: React.FC = () => {
   const navigate = useNavigate();
@@ -34,13 +43,13 @@ const HomePage: React.FC = () => {
     totalRules: 0,
     totalSchedules: 0,
   });
+  const [profileOrder, setProfileOrder] = React.useState<ProfileOrder>('asc');
+  const [profileOrderBy, setProfileOrderBy] = React.useState<ProfileSortBy>('name');
+  const [profilePage, setProfilePage] = React.useState(0);
+  const [profileRowsPerPage, setProfileRowsPerPage] = React.useState(10);
+  const [profileSearch, setProfileSearch] = React.useState('');
 
-  useEffect(() => {
-    fetchProfiles();
-    loadStats();
-  }, [fetchProfiles]);
-
-  const loadStats = async () => {
+  const loadStats = React.useCallback(async () => {
     try {
       let totalRules = 0;
       let totalSchedules = 0;
@@ -61,13 +70,18 @@ const HomePage: React.FC = () => {
     } catch (error) {
       console.error('Error loading stats:', error);
     }
-  };
+  }, [profiles]);
+
+  useEffect(() => {
+    fetchProfiles();
+  }, [fetchProfiles]);
 
   useEffect(() => {
     if (profiles.length > 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- load stats when profiles change; setState in async callback
       loadStats();
     }
-  }, [profiles]);
+  }, [profiles, loadStats]);
 
   return (
     <Box>
@@ -191,55 +205,117 @@ const HomePage: React.FC = () => {
               פרופילי סינון
             </Typography>
             <Divider sx={{ mb: 3 }} />
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 2, mb: 2 }}>
+              <TextField
+                size="small"
+                placeholder="חיפוש לפי שם פרופיל..."
+                value={profileSearch}
+                onChange={(e) => { setProfileSearch(e.target.value); setProfilePage(0); }}
+                sx={{ minWidth: 240 }}
+                InputProps={{
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <SearchIcon fontSize="small" color="action" />
+                    </InputAdornment>
+                  ),
+                }}
+              />
+            </Box>
             <TableContainer>
               <Table>
                 <TableHead>
                   <TableRow>
-                    <TableCell sx={{ fontWeight: 600 }}>שם פרופיל</TableCell>
-                    <TableCell sx={{ fontWeight: 600 }}>מצב</TableCell>
+                    <TableCell sortDirection={profileOrderBy === 'name' ? profileOrder : false} sx={{ fontWeight: 600 }}>
+                      <TableSortLabel active={profileOrderBy === 'name'} direction={profileOrderBy === 'name' ? profileOrder : 'asc'} onClick={() => { setProfileOrderBy('name'); setProfileOrder(profileOrderBy === 'name' && profileOrder === 'asc' ? 'desc' : 'asc'); setProfilePage(0); }}>
+                        שם פרופיל
+                      </TableSortLabel>
+                    </TableCell>
+                    <TableCell sortDirection={profileOrderBy === 'mode' ? profileOrder : false} sx={{ fontWeight: 600 }}>
+                      <TableSortLabel active={profileOrderBy === 'mode'} direction={profileOrderBy === 'mode' ? profileOrder : 'asc'} onClick={() => { setProfileOrderBy('mode'); setProfileOrder(profileOrderBy === 'mode' && profileOrder === 'asc' ? 'desc' : 'asc'); setProfilePage(0); }}>
+                        מצב
+                      </TableSortLabel>
+                    </TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>סוג</TableCell>
                     <TableCell sx={{ fontWeight: 600 }} align="right">פעולות</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {profiles.map((profile) => (
-                    <TableRow key={profile.id} hover>
-                      <TableCell>{profile.name}</TableCell>
-                      <TableCell>
-                        <Chip
-                          label={profile.is_default ? 'פעיל' : 'לא פעיל'}
-                          color={profile.is_default ? 'primary' : 'default'}
-                          size="small"
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <Chip
-                          label={profile.mode === 'whitelist' ? 'רשימה לבנה' : 'רשימה שחורה'}
-                          variant="outlined"
-                          size="small"
-                        />
-                      </TableCell>
-                      <TableCell align="right">
-                        <Button
-                          size="small"
-                          onClick={() => navigate('/profiles')}
-                        >
-                          ניהול
-                        </Button>
-                        <Button
-                          size="small"
-                          onClick={() => navigate('/schedules', { 
-                            state: { openDialog: true, profileId: profile.id } 
-                          })}
-                        >
-                          תזמונים
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {(() => {
+                    const q = profileSearch.trim().toLowerCase();
+                    const filtered = !q ? profiles : profiles.filter((p) => (p.name || '').toLowerCase().includes(q));
+                    if (filtered.length === 0) {
+                      return (
+                        <TableRow>
+                          <TableCell colSpan={4} align="center">
+                            {profiles.length === 0 ? 'אין פרופילים' : 'אין תוצאות לחיפוש'}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    }
+                    const sorted = [...filtered].sort((a, b) => {
+                      let v = 0;
+                      if (profileOrderBy === 'name') v = (a.name || '').localeCompare(b.name || '');
+                      else v = (a.mode || '').localeCompare(b.mode || '');
+                      return profileOrder === 'asc' ? v : -v;
+                    });
+                    const paginated = sorted.slice(profilePage * profileRowsPerPage, profilePage * profileRowsPerPage + profileRowsPerPage);
+                    return paginated.map((profile) => (
+                      <TableRow key={profile.id} hover>
+                        <TableCell>{profile.name}</TableCell>
+                        <TableCell>
+                          <Chip
+                            label={profile.is_default ? 'פעיל' : 'לא פעיל'}
+                            color={profile.is_default ? 'primary' : 'default'}
+                            size="small"
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Chip
+                            label={profile.mode === 'whitelist' ? 'רשימה לבנה' : 'רשימה שחורה'}
+                            variant="outlined"
+                            size="small"
+                          />
+                        </TableCell>
+                        <TableCell align="right">
+                          <Button
+                            size="small"
+                            onClick={() => navigate('/profiles')}
+                          >
+                            ניהול
+                          </Button>
+                          <Button
+                            size="small"
+                            onClick={() => navigate('/schedules', { 
+                              state: { openDialog: true, profileId: profile.id } 
+                            })}
+                          >
+                            תזמונים
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ));
+                  })()}
                 </TableBody>
               </Table>
             </TableContainer>
+            {(() => {
+              const q = profileSearch.trim().toLowerCase();
+              const filtered = !q ? profiles : profiles.filter((p) => (p.name || '').toLowerCase().includes(q));
+              const n = filtered.length;
+              return n > 0 ? (
+                <TablePagination
+                  component="div"
+                  count={n}
+                  page={profilePage}
+                  onPageChange={(_, p) => setProfilePage(p)}
+                  rowsPerPage={profileRowsPerPage}
+                  onRowsPerPageChange={(e) => { setProfileRowsPerPage(parseInt(e.target.value, 10)); setProfilePage(0); }}
+                  rowsPerPageOptions={PROFILE_ROWS_OPTIONS}
+                  labelRowsPerPage="שורות בעמוד:"
+                  labelDisplayedRows={({ from, to, count }) => `${from}–${to} מתוך ${count}`}
+                />
+              ) : null;
+            })()}
           </Box>
         </Paper>
       )}

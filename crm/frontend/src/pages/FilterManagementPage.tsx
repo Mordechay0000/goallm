@@ -22,25 +22,46 @@ import {
   InputLabel,
   Select,
   MenuItem,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  TableSortLabel,
+  TablePagination,
+  InputAdornment,
 } from '@mui/material';
 import {
   ArrowBack as ArrowBackIcon,
   Add as AddIcon,
+  Delete as DeleteIcon,
+  Search as SearchIcon,
 } from '@mui/icons-material';
 import { useProfilesStore } from '../store/profilesStore';
 import { RulesTable } from '../components/RulesTable';
-import { rulesApi } from '../api/rules';
-import type { Rule } from '../api/rules';
+import { rulesApi, tagRulesApi } from '../api/rules';
+import type { Rule, TagRule } from '../api/rules';
 
 const FilterManagementPage: React.FC = () => {
   const navigate = useNavigate();
   const { profiles, currentProfile, fetchProfiles, setCurrentProfile } = useProfilesStore();
   const [activeTab, setActiveTab] = useState(0);
   const [rules, setRules] = useState<Rule[]>([]);
+  const [tagRules, setTagRules] = useState<TagRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [showNewProfile, setShowNewProfile] = useState(false);
   const [newProfileName, setNewProfileName] = useState('');
   const [newProfileMode, setNewProfileMode] = useState<'whitelist' | 'blacklist'>('whitelist');
+  const [newTagRuleTag, setNewTagRuleTag] = useState('');
+  const [newTagRuleState, setNewTagRuleState] = useState<'allow' | 'block'>('block');
+  const [tagRuleDeleteConfirm, setTagRuleDeleteConfirm] = useState<number | null>(null);
+  const [tagOrder, setTagOrder] = useState<'asc' | 'desc'>('asc');
+  const [tagOrderBy, setTagOrderBy] = useState<'tag' | 'state'>('tag');
+  const [tagPage, setTagPage] = useState(0);
+  const [tagRowsPerPage, setTagRowsPerPage] = useState(10);
+  const [tagSearch, setTagSearch] = useState('');
+  const TAG_ROWS_OPTIONS = [10, 25, 50];
 
   useEffect(() => {
     fetchProfiles();
@@ -52,18 +73,45 @@ const FilterManagementPage: React.FC = () => {
       setActiveTab(currentIndex >= 0 ? currentIndex : 0);
       loadRules();
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- loadRules when profile tab changes
   }, [profiles, currentProfile]);
 
   const loadRules = async () => {
     if (!currentProfile) return;
     setLoading(true);
     try {
-      const rulesData = await rulesApi.list(currentProfile.id);
+      const [rulesData, tagRulesData] = await Promise.all([
+        rulesApi.list(currentProfile.id),
+        tagRulesApi.list(),
+      ]);
       setRules(rulesData);
-    } catch (error: any) {
+      setTagRules(tagRulesData);
+    } catch (error: unknown) {
       console.error('Error loading rules:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleAddTagRule = async () => {
+    if (!newTagRuleTag.trim()) return;
+    try {
+      await tagRulesApi.create({ tag: newTagRuleTag.trim(), state: newTagRuleState });
+      setNewTagRuleTag('');
+      setNewTagRuleState('block');
+      await loadRules();
+    } catch (error: unknown) {
+      alert(`שגיאה: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
+  const handleDeleteTagRule = async (id: number) => {
+    try {
+      await tagRulesApi.delete(id);
+      setTagRuleDeleteConfirm(null);
+      await loadRules();
+    } catch (error: unknown) {
+      alert(`שגיאה: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -81,8 +129,8 @@ const FilterManagementPage: React.FC = () => {
       setNewProfileName('');
       setShowNewProfile(false);
       await fetchProfiles();
-    } catch (error: any) {
-      alert(`שגיאה: ${error.message}`);
+    } catch (error: unknown) {
+      alert(`שגיאה: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -166,6 +214,151 @@ const FilterManagementPage: React.FC = () => {
           onRefresh={loadRules}
         />
       )}
+
+      {/* Tag Rules (כללי תגיות) */}
+      <Paper sx={{ p: 2, mt: 3 }}>
+        <Typography variant="h6" gutterBottom>
+          כללי תגיות
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          כללים לפי תגית – למשל: אתרים עם תגית &quot;ממכר&quot; חסומים. תגיות מוגדרות בכלל האתר (בטבלה למעלה).
+        </Typography>
+        <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap', mb: 2 }}>
+          <TextField
+            size="small"
+            placeholder="חיפוש תגיות..."
+            value={tagSearch}
+            onChange={(e) => { setTagSearch(e.target.value); setTagPage(0); }}
+            sx={{ minWidth: 200 }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon fontSize="small" color="action" />
+                </InputAdornment>
+              ),
+            }}
+          />
+          <TextField
+            size="small"
+            label="תגית"
+            value={newTagRuleTag}
+            onChange={(e) => setNewTagRuleTag(e.target.value)}
+            placeholder="ממכר"
+            sx={{ minWidth: 140 }}
+          />
+          <FormControl size="small" sx={{ minWidth: 120 }}>
+            <InputLabel>פעולה</InputLabel>
+            <Select
+              value={newTagRuleState}
+              onChange={(e) => setNewTagRuleState(e.target.value as 'allow' | 'block')}
+              label="פעולה"
+            >
+              <MenuItem value="block">חסום</MenuItem>
+              <MenuItem value="allow">אפשר</MenuItem>
+            </Select>
+          </FormControl>
+          <Button variant="contained" onClick={handleAddTagRule} disabled={!newTagRuleTag.trim()}>
+            הוסף כלל תגית
+          </Button>
+        </Box>
+        <TableContainer>
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell sortDirection={tagOrderBy === 'tag' ? tagOrder : false}>
+                  <TableSortLabel active={tagOrderBy === 'tag'} direction={tagOrderBy === 'tag' ? tagOrder : 'asc'} onClick={() => { setTagOrderBy('tag'); setTagOrder(tagOrderBy === 'tag' && tagOrder === 'asc' ? 'desc' : 'asc'); setTagPage(0); }}>
+                    תגית
+                  </TableSortLabel>
+                </TableCell>
+                <TableCell sortDirection={tagOrderBy === 'state' ? tagOrder : false}>
+                  <TableSortLabel active={tagOrderBy === 'state'} direction={tagOrderBy === 'state' ? tagOrder : 'asc'} onClick={() => { setTagOrderBy('state'); setTagOrder(tagOrderBy === 'state' && tagOrder === 'asc' ? 'desc' : 'asc'); setTagPage(0); }}>
+                    פעולה
+                  </TableSortLabel>
+                </TableCell>
+                <TableCell align="center">פעולות</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {(() => {
+                const q = tagSearch.trim().toLowerCase();
+                const filtered = !q
+                  ? tagRules
+                  : tagRules.filter((tr) => (tr.tag || '').toLowerCase().includes(q) || (tr.state || '').toLowerCase().includes(q));
+                if (filtered.length === 0) {
+                  return (
+                    <TableRow>
+                      <TableCell colSpan={3} align="center">
+                        {tagRules.length === 0 ? 'אין כללי תגיות' : 'אין תוצאות לחיפוש'}
+                      </TableCell>
+                    </TableRow>
+                  );
+                }
+                const sorted = [...filtered].sort((a, b) => {
+                  let v = 0;
+                  if (tagOrderBy === 'tag') v = (a.tag || '').localeCompare(b.tag || '');
+                  else v = (a.state || '').localeCompare(b.state || '');
+                  return tagOrder === 'asc' ? v : -v;
+                });
+                const paginated = sorted.slice(tagPage * tagRowsPerPage, tagPage * tagRowsPerPage + tagRowsPerPage);
+                return paginated.map((tr) => (
+                    <TableRow key={tr.id}>
+                      <TableCell>{tr.tag}</TableCell>
+                      <TableCell>
+                        <Chip
+                          label={tr.state === 'block' ? 'חסום' : 'אפשר'}
+                          color={tr.state === 'block' ? 'error' : 'success'}
+                          size="small"
+                        />
+                      </TableCell>
+                      <TableCell align="center">
+                        <IconButton
+                          size="small"
+                          color="error"
+                          onClick={() => setTagRuleDeleteConfirm(tr.id)}
+                        >
+                          <DeleteIcon />
+                        </IconButton>
+                      </TableCell>
+                    </TableRow>
+                ));
+              })()}
+            </TableBody>
+          </Table>
+          {(() => {
+            const q = tagSearch.trim().toLowerCase();
+            const filtered = !q ? tagRules : tagRules.filter((tr) => (tr.tag || '').toLowerCase().includes(q) || (tr.state || '').toLowerCase().includes(q));
+            const n = filtered.length;
+            return n > 0 ? (
+              <TablePagination
+                component="div"
+                count={n}
+                page={tagPage}
+                onPageChange={(_, p) => setTagPage(p)}
+                rowsPerPage={tagRowsPerPage}
+                onRowsPerPageChange={(e) => { setTagRowsPerPage(parseInt(e.target.value, 10)); setTagPage(0); }}
+                rowsPerPageOptions={TAG_ROWS_OPTIONS}
+                labelRowsPerPage="שורות בעמוד:"
+                labelDisplayedRows={({ from, to, count }) => `${from}–${to} מתוך ${count}`}
+              />
+            ) : null;
+          })()}
+        </TableContainer>
+      </Paper>
+
+      {/* Tag Rule Delete Confirmation */}
+      <Dialog open={tagRuleDeleteConfirm !== null} onClose={() => setTagRuleDeleteConfirm(null)}>
+        <DialogTitle>מחיקת כלל תגית</DialogTitle>
+        <DialogContent>האם למחוק את כלל התגית?</DialogContent>
+        <DialogActions>
+          <Button onClick={() => setTagRuleDeleteConfirm(null)}>ביטול</Button>
+          <Button
+            color="error"
+            onClick={() => tagRuleDeleteConfirm !== null && handleDeleteTagRule(tagRuleDeleteConfirm)}
+          >
+            מחק
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* New Profile Dialog */}
       <Dialog open={showNewProfile} onClose={() => setShowNewProfile(false)} maxWidth="sm" fullWidth>

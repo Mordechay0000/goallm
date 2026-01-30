@@ -26,8 +26,12 @@ import {
   Checkbox,
   FormControlLabel,
   Collapse,
+  Alert,
+  TableSortLabel,
+  TablePagination,
+  InputAdornment,
 } from '@mui/material';
-import { Delete as DeleteIcon, ExpandMore as ExpandMoreIcon } from '@mui/icons-material';
+import { Delete as DeleteIcon, ExpandMore as ExpandMoreIcon, Download as DownloadIcon, Upload as UploadIcon, Lock as LockIcon, Search as SearchIcon } from '@mui/icons-material';
 import type { Rule } from '../api/rules';
 import { rulesApi } from '../api/rules';
 import { formatRuleDisplay } from '../utils/urlParser';
@@ -36,6 +40,9 @@ interface RulesTableProps {
   profileId: number;
   rules: Rule[];
   onRefresh: () => void;
+  managedUserId?: number;
+  /** When true (admin locked rules for this user), disable add/delete and show lock message */
+  rulesLocked?: boolean;
 }
 
 const TYPE_LABELS: Record<string, string> = {
@@ -49,16 +56,34 @@ const ACTION_LABELS: Record<string, string> = {
   allow: 'אפשר',
 };
 
-export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefresh }) => {
+type RuleOrder = 'asc' | 'desc';
+type RuleSortBy = 'domain' | 'action' | 'type';
+const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
+
+function stableSort<T>(arr: T[], cmp: (a: T, b: T) => number): T[] {
+  return [...arr].sort(cmp);
+}
+
+export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefresh, managedUserId, rulesLocked }) => {
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [order, setOrder] = useState<RuleOrder>('asc');
+  const [orderBy, setOrderBy] = useState<RuleSortBy>('domain');
+  const [page, setPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(25);
+  const [search, setSearch] = useState('');
+  const [importing, setImporting] = useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
   
   // Add rule form
   const [newUrl, setNewUrl] = useState('');
   const [newAction, setNewAction] = useState<'block' | 'allow'>('block');
   const [newType, setNewType] = useState<'*' | 'image' | 'video'>('*');
   const [includeSubdomains, setIncludeSubdomains] = useState(false);
+  const [newTagsList, setNewTagsList] = useState<string[]>([]);
+  const [newTagInput, setNewTagInput] = useState('');
   const [urlError, setUrlError] = useState<string>('');
+  const tagInputRef = React.useRef<HTMLInputElement>(null);
 
   const validateUrl = (url: string): string => {
     if (!url.trim()) return '';
@@ -81,9 +106,11 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
       return 'כתובת לא תקינה - יותר מדי לוכסנים';
     }
     
-    // Check for invalid characters
-    if (/[<>"|\\\x00-\x1F]/.test(cleanUrl)) {
-      return 'כתובת לא תקינה - תווים לא חוקיים';
+    // Check for invalid characters; control chars via charCode (no-control-regex)
+    if (/[<>"|\\]/.test(cleanUrl)) return 'כתובת לא תקינה - תווים לא חוקיים';
+    for (let i = 0; i < cleanUrl.length; i++) {
+      const c = cleanUrl.charCodeAt(i);
+      if (c <= 0x1f) return 'כתובת לא תקינה - תווים לא חוקיים';
     }
     
     // Check if starts with *.
@@ -131,25 +158,28 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
         action: newAction,
         type: newType,
         include_subdomains: includeSubdomains,
-      });
+        tags: newTagsList.length > 0 ? newTagsList : undefined,
+      }, managedUserId);
       setNewUrl('');
       setIncludeSubdomains(false);
+      setNewTagsList([]);
+      setNewTagInput('');
       setNewType('*');
       setNewAction('block');
       setUrlError('');
       onRefresh();
-    } catch (error: any) {
-      alert(`שגיאה: ${error.message}`);
+    } catch (err: unknown) {
+      alert(`שגיאה: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
   const handleDeleteRule = async (id: number) => {
     try {
-      await rulesApi.delete(id);
+      await rulesApi.delete(id, managedUserId);
       setDeleteConfirm(null);
       onRefresh();
-    } catch (error: any) {
-      alert(`שגיאה: ${error.message}`);
+    } catch (err: unknown) {
+      alert(`שגיאה: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -183,10 +213,55 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
     handleAddRule();
   };
 
+  const handleExportCsv = async () => {
+    try {
+      await rulesApi.exportCsv(profileId, managedUserId);
+    } catch (e: unknown) {
+      const ax = e as { response?: { data?: { detail?: string } } };
+      alert(ax?.response?.data?.detail || 'שגיאה בייצוא');
+    }
+  };
+
+  const handleImportCsv = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImporting(true);
+    try {
+      const result = await rulesApi.importCsv(profileId, file, managedUserId);
+      onRefresh();
+      alert(`יובאו ${result.imported} כללים`);
+    } catch (err: unknown) {
+      const ax = err as { response?: { data?: { detail?: string | { errors?: unknown; message?: string } } } };
+      const detail = ax?.response?.data?.detail;
+      const fallback = err instanceof Error ? err.message : 'שגיאה בייבוא';
+      const msg = typeof detail === 'object' && detail && 'errors' in detail
+        ? ((detail as { message?: string }).message ?? 'שגיאה') + ': ' + JSON.stringify((detail as { errors?: unknown }).errors)
+        : (typeof detail === 'string' ? detail : fallback);
+      alert(msg);
+    } finally {
+      setImporting(false);
+      e.target.value = '';
+    }
+  };
+
   return (
     <Box>
+      {rulesLocked && (
+        <Alert severity="info" sx={{ mb: 2 }} icon={<LockIcon />}>
+          ניהול כללים נחסם על ידי ההנהלה
+        </Alert>
+      )}
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mb: 2 }}>
+        <Button variant="outlined" size="small" startIcon={<DownloadIcon />} onClick={handleExportCsv} disabled={rulesLocked}>
+          ייצא CSV
+        </Button>
+        <Button variant="outlined" size="small" startIcon={<UploadIcon />} onClick={() => fileInputRef.current?.click()} disabled={importing || rulesLocked}>
+          {importing ? 'מייבא...' : 'ייבא CSV'}
+        </Button>
+        <input type="file" ref={fileInputRef} accept=".csv" style={{ display: 'none' }} onChange={handleImportCsv} />
+      </Box>
       {/* Add Rule Form */}
-      <Paper sx={{ p: 2, mb: 2 }}>
+      <Paper sx={{ p: 2, mb: 2 }} style={rulesLocked ? { opacity: 0.7, pointerEvents: 'none' } : undefined}>
         <form onSubmit={handleFormSubmit}>
           <Box sx={{ mb: 2 }}>
             <TextField
@@ -217,6 +292,77 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
             }
             label="כולל סאב-דומיינים"
           />
+          <Box sx={{ mt: 1 }}>
+            <Box
+              component="label"
+              sx={{
+                display: 'block',
+                fontSize: '0.75rem',
+                color: 'text.secondary',
+                mb: 0.5,
+              }}
+            >
+              תגיות
+            </Box>
+            <Box
+              sx={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                gap: 0.5,
+                minHeight: 40,
+                p: 1,
+                border: 1,
+                borderColor: 'divider',
+                borderRadius: 1,
+                bgcolor: 'background.paper',
+                '&:focus-within': {
+                  borderColor: 'primary.main',
+                  borderWidth: 2,
+                  p: '7px',
+                },
+              }}
+            >
+              {newTagsList.map((tag, index) => (
+                <Chip
+                  key={`${tag}-${index}`}
+                  label={tag}
+                  size="small"
+                  onDelete={() => setNewTagsList((prev) => prev.filter((_, i) => i !== index))}
+                  sx={{ mr: 0.25 }}
+                />
+              ))}
+              <TextField
+                inputRef={tagInputRef}
+                size="small"
+                placeholder={newTagsList.length === 0 ? 'הקלד תגית והקש פסיק או Enter' : 'תגית...'}
+                value={newTagInput}
+                onChange={(e) => setNewTagInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === ',' || e.key === 'Enter') {
+                    e.preventDefault();
+                    const v = newTagInput.trim();
+                    if (v && !newTagsList.includes(v)) {
+                      setNewTagsList((prev) => [...prev, v]);
+                      setNewTagInput('');
+                    }
+                  } else if (e.key === 'Backspace' && !newTagInput && newTagsList.length > 0) {
+                    setNewTagsList((prev) => prev.slice(0, -1));
+                  }
+                }}
+                sx={{
+                  flex: 1,
+                  minWidth: 120,
+                  '& .MuiInputBase-root': { bgcolor: 'transparent' },
+                  '& .MuiOutlinedInput-notchedOutline': { border: 'none' },
+                }}
+                inputProps={{ sx: { py: 0.5, px: 0.5 } }}
+              />
+            </Box>
+            <Box component="span" sx={{ fontSize: '0.75rem', color: 'text.secondary', mt: 0.5, display: 'block' }}>
+              תגיות לאתר – משמשות לכללי תגיות. הקלד תגית והקש פסיק או Enter; מחיקה מסירה תגית.
+            </Box>
+          </Box>
         </Box>
 
         <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
@@ -279,25 +425,71 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
       </Paper>
 
       {/* Rules Table */}
-      <TableContainer component={Paper}>
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableCell>כתובת</TableCell>
-              <TableCell>פעולה</TableCell>
-              <TableCell>סוג</TableCell>
-              <TableCell align="center">פעולות</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {rules.length === 0 ? (
+      <Paper>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, px: 2, pt: 2, pb: 1 }}>
+          <TextField
+            size="small"
+            placeholder="חיפוש כללים (כתובת, דומיין)..."
+            value={search}
+            onChange={(e) => { setSearch(e.target.value); setPage(0); }}
+            sx={{ minWidth: 240 }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon fontSize="small" color="action" />
+                </InputAdornment>
+              ),
+            }}
+          />
+        </Box>
+        <TableContainer>
+          <Table>
+            <TableHead>
               <TableRow>
-                <TableCell colSpan={4} align="center">
-                  אין כללים
+                <TableCell sortDirection={orderBy === 'domain' ? order : false}>
+                  <TableSortLabel active={orderBy === 'domain'} direction={orderBy === 'domain' ? order : 'asc'} onClick={() => { setOrderBy('domain'); setOrder(orderBy === 'domain' && order === 'asc' ? 'desc' : 'asc'); setPage(0); }}>
+                    כתובת
+                  </TableSortLabel>
                 </TableCell>
+                <TableCell sortDirection={orderBy === 'action' ? order : false}>
+                  <TableSortLabel active={orderBy === 'action'} direction={orderBy === 'action' ? order : 'asc'} onClick={() => { setOrderBy('action'); setOrder(orderBy === 'action' && order === 'asc' ? 'desc' : 'asc'); setPage(0); }}>
+                    פעולה
+                  </TableSortLabel>
+                </TableCell>
+                <TableCell sortDirection={orderBy === 'type' ? order : false}>
+                  <TableSortLabel active={orderBy === 'type'} direction={orderBy === 'type' ? order : 'asc'} onClick={() => { setOrderBy('type'); setOrder(orderBy === 'type' && order === 'asc' ? 'desc' : 'asc'); setPage(0); }}>
+                    סוג
+                  </TableSortLabel>
+                </TableCell>
+                <TableCell>תגיות</TableCell>
+                <TableCell align="center">פעולות</TableCell>
               </TableRow>
-            ) : (
-              rules.map((rule) => (
+            </TableHead>
+            <TableBody>
+              {(() => {
+                const q = search.trim().toLowerCase();
+                const filtered = !q
+                  ? rules
+                  : rules.filter((r) => ((r.domain_pattern || '') + (r.path_pattern || '')).toLowerCase().includes(q));
+                if (filtered.length === 0) {
+                  return (
+                    <TableRow>
+                      <TableCell colSpan={5} align="center">
+                        {rules.length === 0 ? 'אין כללים' : 'אין תוצאות לחיפוש'}
+                      </TableCell>
+                    </TableRow>
+                  );
+                }
+                const cmp = (a: Rule, b: Rule) => {
+                  let v = 0;
+                  if (orderBy === 'domain') v = ((a.domain_pattern || '') + (a.path_pattern || '')).localeCompare((b.domain_pattern || '') + (b.path_pattern || ''));
+                  else if (orderBy === 'action') v = (a.action || '').localeCompare(b.action || '');
+                  else if (orderBy === 'type') v = (a.type || '').localeCompare(b.type || '');
+                  return order === 'asc' ? v : -v;
+                };
+                const sorted = stableSort(filtered, cmp);
+                const paginated = sorted.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
+                return paginated.map((rule) => (
                 <TableRow key={rule.id}>
                   <TableCell>
                     <code>{formatRuleDisplay(rule)}</code>
@@ -314,21 +506,49 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
                       <Chip label={TYPE_LABELS[rule.type]} size="small" variant="outlined" />
                     )}
                   </TableCell>
+                  <TableCell>
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                      {(rule.tags || []).map((tag) => (
+                        <Chip key={tag} label={tag} size="small" variant="outlined" />
+                      ))}
+                    </Box>
+                  </TableCell>
                   <TableCell align="center">
                     <IconButton
                       size="small"
                       color="error"
                       onClick={() => setDeleteConfirm(rule.id)}
+                      disabled={!!rulesLocked}
+                      title={rulesLocked ? 'נעול על ידי ההנהלה' : 'מחק'}
                     >
                       <DeleteIcon />
                     </IconButton>
                   </TableCell>
                 </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </TableContainer>
+                ));
+              })()}
+            </TableBody>
+          </Table>
+          {(() => {
+            const q = search.trim().toLowerCase();
+            const filtered = !q ? rules : rules.filter((r) => ((r.domain_pattern || '') + (r.path_pattern || '')).toLowerCase().includes(q));
+            const n = filtered.length;
+            return n > 0 ? (
+              <TablePagination
+                component="div"
+                count={n}
+                page={page}
+                onPageChange={(_, p) => setPage(p)}
+                rowsPerPage={rowsPerPage}
+                onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
+                rowsPerPageOptions={ROWS_PER_PAGE_OPTIONS}
+                labelRowsPerPage="שורות בעמוד:"
+                labelDisplayedRows={({ from, to, count }) => `${from}–${to} מתוך ${count}`}
+              />
+            ) : null;
+          })()}
+        </TableContainer>
+      </Paper>
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={deleteConfirm !== null} onClose={() => setDeleteConfirm(null)}>
