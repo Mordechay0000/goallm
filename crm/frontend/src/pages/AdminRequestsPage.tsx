@@ -38,10 +38,9 @@ import {
 } from '@mui/material';
 import { Check as CheckIcon, Close as CloseIcon, Delete as DeleteIcon, Edit as EditIcon, MoreVert as MoreVertIcon, Search as SearchIcon } from '@mui/icons-material';
 import { ruleRequestsApi } from '../api/ruleRequests';
-import { profilesApi } from '../api/profiles';
-import { adminApi } from '../api/admin';
 import type { RuleRequest, RuleRequestUpdate } from '../api/ruleRequests';
-import type { Profile } from '../api/profiles';
+import { TagInput } from '../components/TagInput';
+import { validateDomainOrUrl, processUrlInput } from '../utils/validation';
 
 const STATUS_LABELS: Record<string, string> = {
   pending: 'ממתין',
@@ -53,10 +52,6 @@ const TYPE_LABELS: Record<string, string> = {
   open: 'בקשה לפתיחה',
   change: 'בקשה לשינוי',
 };
-
-interface ProfileOption extends Profile {
-  user_phone?: string;
-}
 
 type RequestOrder = 'asc' | 'desc';
 type RequestSortBy = 'created_at' | 'request_type' | 'status' | 'user_id';
@@ -75,15 +70,12 @@ const AdminRequestsPage: React.FC = () => {
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(25);
   const [approveDialog, setApproveDialog] = useState<RuleRequest | null>(null);
-  const [profiles, setProfiles] = useState<ProfileOption[]>([]);
-  const [selectedProfileId, setSelectedProfileId] = useState<number | ''>('');
   const [editDialog, setEditDialog] = useState<RuleRequest | null>(null);
   const [editUrl, setEditUrl] = useState('');
+  const [editUrlError, setEditUrlError] = useState('');
   const [editAction, setEditAction] = useState<'allow' | 'block'>('block');
-  const [editType, setEditType] = useState<string>('*');
   const [editIncludeSubdomains, setEditIncludeSubdomains] = useState(false);
   const [editTags, setEditTags] = useState<string[]>([]);
-  const [editTagInput, setEditTagInput] = useState('');
   const [saving, setSaving] = useState(false);
   const [editMoreAnchor, setEditMoreAnchor] = useState<null | HTMLElement>(null);
 
@@ -136,34 +128,14 @@ const AdminRequestsPage: React.FC = () => {
     setPage(0);
   };
 
-  const loadProfilesForApprove = (req: RuleRequest) => {
-    if (req.is_from_blocked_page) {
-      adminApi.listAllProfiles().then((list) => {
-        setProfiles(list as ProfileOption[]);
-        setSelectedProfileId('');
-      }).catch(() => setProfiles([]));
-    } else {
-      profilesApi.list(req.user_id).then((list) => {
-        setProfiles(list as ProfileOption[]);
-        if (list.length === 1) setSelectedProfileId(list[0].id);
-        else setSelectedProfileId('');
-      }).catch(() => setProfiles([]));
-    }
-  };
-
   const handleApproveClick = (req: RuleRequest) => {
     setApproveDialog(req);
-    setSelectedProfileId('');
-    loadProfilesForApprove(req);
   };
 
   const handleApproveConfirm = async () => {
-    if (!approveDialog || selectedProfileId === '') {
-      alert('נא לבחור פרופיל');
-      return;
-    }
+    if (!approveDialog) return;
     try {
-      await ruleRequestsApi.approve(approveDialog.id, selectedProfileId as number);
+      await ruleRequestsApi.approve(approveDialog.id);
       setApproveDialog(null);
       await loadRequests();
     } catch (e: unknown) {
@@ -199,12 +171,12 @@ const AdminRequestsPage: React.FC = () => {
 
   const openEditDialog = (req: RuleRequest) => {
     setEditDialog(req);
-    setEditUrl(req.url || (req.domain_pattern || '') + (req.path_pattern || '') || '');
+    const u = req.url || (req.domain_pattern || '') + (req.path_pattern || '') || '';
+    setEditUrl(u);
+    setEditUrlError(validateDomainOrUrl(u));
     setEditAction((req.action as 'allow' | 'block') || 'block');
-    setEditType(req.type || '*');
     setEditIncludeSubdomains(!!req.include_subdomains);
     setEditTags(normalizeTags(req.tags));
-    setEditTagInput('');
   };
 
   const normalizeTags = (tags: unknown): string[] => {
@@ -221,8 +193,9 @@ const AdminRequestsPage: React.FC = () => {
   };
 
   const handleRowClick = (req: RuleRequest) => {
-    if (req.status === 'approved' && req.approved_profile_id) {
-      navigate(`/profiles/${req.approved_profile_id}/rules`);
+    if (req.status === 'approved') {
+      if (req.approved_profile_id) navigate(`/profiles/${req.approved_profile_id}/rules`);
+      else navigate('/admin/global-rules');
       return;
     }
     if (req.status === 'pending' || req.status === 'rejected') {
@@ -230,31 +203,11 @@ const AdminRequestsPage: React.FC = () => {
     }
   };
 
-  const addEditTag = () => {
-    const v = editTagInput.trim();
-    if (v && !editTags.includes(v)) {
-      setEditTags((prev) => [...prev, v]);
-      setEditTagInput('');
-    }
-  };
-
-  const removeEditTag = (index: number) => {
-    setEditTags((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  const handleEditTagKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' || e.key === ',') {
-      e.preventDefault();
-      addEditTag();
-    } else if (e.key === 'Backspace' && !editTagInput && editTags.length > 0) {
-      setEditTags((prev) => prev.slice(0, -1));
-    }
-  };
-
   const saveEditThenOpenApprove = async () => {
     if (!editDialog) return;
-    if (!editUrl.trim()) {
-      alert('נא להזין כתובת');
+    const err = validateDomainOrUrl(editUrl);
+    if (err) {
+      setEditUrlError(err);
       return;
     }
     setSaving(true);
@@ -262,7 +215,7 @@ const AdminRequestsPage: React.FC = () => {
       const data: RuleRequestUpdate = {
         url: editUrl.trim(),
         action: editAction,
-        type: editType as '*' | 'image' | 'video',
+        type: '*',
         include_subdomains: editIncludeSubdomains,
         tags: editTags.length > 0 ? editTags : undefined,
       };
@@ -271,7 +224,6 @@ const AdminRequestsPage: React.FC = () => {
       setEditDialog(null);
       await loadRequests();
       setApproveDialog(reqToApprove);
-      loadProfilesForApprove(reqToApprove);
     } catch (e: unknown) {
       const ax = e as { response?: { data?: { detail?: string } } };
       alert(ax?.response?.data?.detail || 'שגיאה בשמירה');
@@ -282,8 +234,9 @@ const AdminRequestsPage: React.FC = () => {
 
   const handleSaveEdit = async () => {
     if (!editDialog) return;
-    if (!editUrl.trim()) {
-      alert('נא להזין כתובת');
+    const err = validateDomainOrUrl(editUrl);
+    if (err) {
+      setEditUrlError(err);
       return;
     }
     setSaving(true);
@@ -291,7 +244,7 @@ const AdminRequestsPage: React.FC = () => {
       const data: RuleRequestUpdate = {
         url: editUrl.trim(),
         action: editAction,
-        type: editType as '*' | 'image' | 'video',
+        type: '*',
         include_subdomains: editIncludeSubdomains,
         tags: editTags.length > 0 ? editTags : undefined,
       };
@@ -391,7 +344,7 @@ const AdminRequestsPage: React.FC = () => {
                 <TableRow
                   key={r.id}
                   hover
-                  sx={{ cursor: r.status === 'approved' && r.approved_profile_id ? 'pointer' : (r.status === 'pending' || r.status === 'rejected') ? 'pointer' : 'default' }}
+                  sx={{ cursor: r.status === 'approved' || r.status === 'pending' || r.status === 'rejected' ? 'pointer' : 'default' }}
                   onClick={() => handleRowClick(r)}
                 >
                   <TableCell>{formatDate(r.created_at)}</TableCell>
@@ -405,7 +358,7 @@ const AdminRequestsPage: React.FC = () => {
                   </TableCell>
                   <TableCell>{r.user_phone ?? (r.user_id ? '—' : 'מעמוד חסום')}</TableCell>
                   <TableCell>{r.url || (r.domain_pattern || '') + (r.path_pattern || '') || '—'}</TableCell>
-                  <TableCell>{r.action || '—'} / {r.type || '*'}</TableCell>
+                  <TableCell>{r.action || '—'}</TableCell>
                   <TableCell align="left" onClick={(e) => e.stopPropagation()}>
                     {r.status === 'pending' && (
                       <>
@@ -424,7 +377,7 @@ const AdminRequestsPage: React.FC = () => {
                     )}
                     {r.status === 'approved' && (
                       <>
-                        <Button size="small" startIcon={<EditIcon />} onClick={() => navigate(`/profiles/${r.approved_profile_id}/rules`)}>לכלל</Button>
+                        <Button size="small" startIcon={<EditIcon />} onClick={() => r.approved_profile_id ? navigate(`/profiles/${r.approved_profile_id}/rules`) : navigate('/admin/global-rules')}>לכלל</Button>
                         <IconButton size="small" onClick={(e) => handleDelete(r, e)} title="מחק"><DeleteIcon /></IconButton>
                       </>
                     )}
@@ -466,29 +419,17 @@ const AdminRequestsPage: React.FC = () => {
         </Paper>
       )}
 
-      {/* Approve: select profile */}
+      {/* Approve: adds rule to global list only */}
       <Dialog open={!!approveDialog} onClose={() => setApproveDialog(null)}>
-        <DialogTitle>אישור בקשה – בחר פרופיל</DialogTitle>
+        <DialogTitle>אישור בקשה – הכלל יווסף לרשימה הגלובלית</DialogTitle>
         <DialogContent>
-          <FormControl fullWidth sx={{ mt: 1 }}>
-            <InputLabel>פרופיל</InputLabel>
-            <Select
-              value={selectedProfileId}
-              label="פרופיל"
-              onChange={(e) => setSelectedProfileId(e.target.value as number)}
-            >
-              <MenuItem value="">בחר פרופיל</MenuItem>
-              {profiles.map((p) => (
-                <MenuItem key={p.id} value={p.id}>
-                  {p.name}{(p as ProfileOption).user_phone ? ` (${(p as ProfileOption).user_phone})` : ''}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+            אישור הבקשה יוסיף את הכלל לרשימה הגלובלית (רשימה לבנה בסיסית). רק אדמין יכול לערוך את הרשימה הגלובלית.
+          </Typography>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setApproveDialog(null)}>ביטול</Button>
-          <Button variant="contained" onClick={handleApproveConfirm} disabled={selectedProfileId === ''}>אישור</Button>
+          <Button variant="contained" onClick={handleApproveConfirm}>אישור</Button>
         </DialogActions>
       </Dialog>
 
@@ -506,7 +447,20 @@ const AdminRequestsPage: React.FC = () => {
                 sx={{ '& .MuiInputBase-input': { color: 'text.secondary', bgcolor: 'action.hover' } }}
                 size="small"
               />
-              <TextField fullWidth label="כתובת אתר" value={editUrl} onChange={(e) => setEditUrl(e.target.value)} placeholder="example.com" />
+              <TextField
+                fullWidth
+                label="כתובת אתר"
+                value={editUrl}
+                onChange={(e) => {
+                  const { cleaned, setSubdomains } = processUrlInput(e.target.value);
+                  setEditUrl(cleaned);
+                  setEditUrlError(validateDomainOrUrl(cleaned));
+                  if (setSubdomains) setEditIncludeSubdomains(true);
+                }}
+                placeholder="example.com או *.example.com/path"
+                error={!!editUrlError}
+                helperText={editUrlError || "פרוטוקול ו־*. יוסרו אוטומטית"}
+              />
               <FormControl fullWidth>
                 <InputLabel>פעולה</InputLabel>
                 <Select value={editAction} label="פעולה" onChange={(e) => setEditAction(e.target.value as 'allow' | 'block')}>
@@ -514,58 +468,17 @@ const AdminRequestsPage: React.FC = () => {
                   <MenuItem value="block">חסום</MenuItem>
                 </Select>
               </FormControl>
-              <FormControl fullWidth>
-                <InputLabel>סוג</InputLabel>
-                <Select value={editType} label="סוג" onChange={(e) => setEditType(e.target.value)}>
-                  <MenuItem value="*">הכל</MenuItem>
-                  <MenuItem value="image">תמונה</MenuItem>
-                  <MenuItem value="video">וידאו</MenuItem>
-                </Select>
-              </FormControl>
               <FormControlLabel control={<Checkbox checked={editIncludeSubdomains} onChange={(e) => setEditIncludeSubdomains(e.target.checked)} />} label="כולל סאב-דומיינים" />
-              <Box>
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>תגיות</Typography>
-                <Box
-                  sx={{
-                    display: 'flex',
-                    flexWrap: 'wrap',
-                    gap: 0.75,
-                    alignItems: 'center',
-                    minHeight: 42,
-                    px: 1.25,
-                    py: 0.75,
-                    borderRadius: 1,
-                    border: '1px solid',
-                    borderColor: 'divider',
-                    bgcolor: 'action.hover',
-                    '&:focus-within': { borderColor: 'primary.main', bgcolor: 'background.paper' },
-                  }}
-                >
-                  {editTags.map((t, i) => (
-                    <Chip key={`${i}-${t}`} label={t} size="small" onDelete={() => removeEditTag(i)} />
-                  ))}
-                  <TextField
-                    size="small"
-                    placeholder="הקלד תגית והקש פסיק או Enter"
-                    value={editTagInput}
-                    onChange={(e) => setEditTagInput(e.target.value)}
-                    onKeyDown={handleEditTagKeyDown}
-                    variant="standard"
-                    InputProps={{ disableUnderline: true }}
-                    sx={{ minWidth: 180, flex: 1, '& .MuiInput-root': { fontSize: '0.875rem' } }}
-                  />
-                  <Button size="small" variant="outlined" onClick={addEditTag} sx={{ flexShrink: 0 }}>הוסף</Button>
-                </Box>
-              </Box>
+              <TagInput value={editTags} onChange={setEditTags} label="תגיות" helperText="" />
             </Box>
           )}
         </DialogContent>
         <DialogActions sx={{ justifyContent: 'space-between', px: 2, pb: 1.5 }}>
           <Button onClick={() => setEditDialog(null)}>ביטול</Button>
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-            <Button variant="outlined" onClick={handleSaveEdit} disabled={saving}>{saving ? 'שומר...' : 'שמור'}</Button>
+            <Button variant="outlined" onClick={handleSaveEdit} disabled={saving || !!editUrlError}>{saving ? 'שומר...' : 'שמור'}</Button>
             {(editDialog?.status === 'pending' || editDialog?.status === 'rejected') && (
-              <Button variant="contained" color="primary" onClick={saveEditThenOpenApprove} disabled={saving}>
+              <Button variant="contained" color="primary" onClick={saveEditThenOpenApprove} disabled={saving || !!editUrlError}>
                 {editDialog?.status === 'pending' ? 'שמור ואשר' : 'שמור ואשר בקשה'}
               </Button>
             )}

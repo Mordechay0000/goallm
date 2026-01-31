@@ -25,16 +25,19 @@ import {
   MenuItem,
   Checkbox,
   FormControlLabel,
-  Collapse,
   Alert,
   TableSortLabel,
   TablePagination,
   InputAdornment,
+  Typography,
 } from '@mui/material';
-import { Delete as DeleteIcon, ExpandMore as ExpandMoreIcon, Download as DownloadIcon, Upload as UploadIcon, Lock as LockIcon, Search as SearchIcon } from '@mui/icons-material';
+import { Delete as DeleteIcon, Download as DownloadIcon, Upload as UploadIcon, Lock as LockIcon, Search as SearchIcon } from '@mui/icons-material';
+import { TagInput } from './TagInput';
 import type { Rule } from '../api/rules';
-import { rulesApi } from '../api/rules';
+import { rulesApi, resolverApi } from '../api/rules';
+import type { ResolverTestUrlResponse } from '../api/rules';
 import { formatRuleDisplay } from '../utils/urlParser';
+import { validateDomainOrUrl, processUrlInput } from '../utils/validation';
 
 interface RulesTableProps {
   profileId: number;
@@ -45,19 +48,13 @@ interface RulesTableProps {
   rulesLocked?: boolean;
 }
 
-const TYPE_LABELS: Record<string, string> = {
-  '*': 'הכל',
-  image: 'תמונה',
-  video: 'וידאו',
-};
-
 const ACTION_LABELS: Record<string, string> = {
   block: 'חסום',
   allow: 'אפשר',
 };
 
 type RuleOrder = 'asc' | 'desc';
-type RuleSortBy = 'domain' | 'action' | 'type';
+type RuleSortBy = 'domain' | 'action';
 const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
 
 function stableSort<T>(arr: T[], cmp: (a: T, b: T) => number): T[] {
@@ -66,89 +63,29 @@ function stableSort<T>(arr: T[], cmp: (a: T, b: T) => number): T[] {
 
 export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefresh, managedUserId, rulesLocked }) => {
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
-  const [showAdvanced, setShowAdvanced] = useState(false);
   const [order, setOrder] = useState<RuleOrder>('asc');
   const [orderBy, setOrderBy] = useState<RuleSortBy>('domain');
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(25);
   const [search, setSearch] = useState('');
+  const [checkUrl, setCheckUrl] = useState('');
+  const [checkResult, setCheckResult] = useState<ResolverTestUrlResponse | null | 'loading' | 'invalid'>(null);
+  const [checkError, setCheckError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   
   // Add rule form
   const [newUrl, setNewUrl] = useState('');
   const [newAction, setNewAction] = useState<'block' | 'allow'>('block');
-  const [newType, setNewType] = useState<'*' | 'image' | 'video'>('*');
   const [includeSubdomains, setIncludeSubdomains] = useState(false);
   const [newTagsList, setNewTagsList] = useState<string[]>([]);
-  const [newTagInput, setNewTagInput] = useState('');
   const [urlError, setUrlError] = useState<string>('');
-  const tagInputRef = React.useRef<HTMLInputElement>(null);
-
-  const validateUrl = (url: string): string => {
-    if (!url.trim()) return '';
-    
-    // Remove protocol if present
-    let cleanUrl = url.trim();
-    if (cleanUrl.startsWith('http://')) {
-      cleanUrl = cleanUrl.substring(7);
-    } else if (cleanUrl.startsWith('https://')) {
-      cleanUrl = cleanUrl.substring(8);
-    }
-    
-    // Check for invalid patterns
-    if (cleanUrl.includes('://')) {
-      return 'כתובת לא תקינה - הסר את הפרוטוקול';
-    }
-    
-    // Check for multiple slashes in a row (more than 2)
-    if (/\/{3,}/.test(cleanUrl)) {
-      return 'כתובת לא תקינה - יותר מדי לוכסנים';
-    }
-    
-    // Check for invalid characters; control chars via charCode (no-control-regex)
-    if (/[<>"|\\]/.test(cleanUrl)) return 'כתובת לא תקינה - תווים לא חוקיים';
-    for (let i = 0; i < cleanUrl.length; i++) {
-      const c = cleanUrl.charCodeAt(i);
-      if (c <= 0x1f) return 'כתובת לא תקינה - תווים לא חוקיים';
-    }
-    
-    // Check if starts with *.
-    if (cleanUrl.startsWith('*.')) {
-      cleanUrl = cleanUrl.substring(2);
-    }
-    
-    // Basic domain validation
-    if (cleanUrl.length === 0) {
-      return 'כתובת לא תקינה - שדה ריק';
-    }
-    
-    // Check for valid domain pattern
-    const parts = cleanUrl.split('/');
-    const domain = parts[0];
-    
-    if (domain.length === 0) {
-      return 'כתובת לא תקינה - אין דומיין';
-    }
-    
-    // Domain should contain at least one dot or be localhost
-    if (!domain.includes('.') && domain !== 'localhost' && !domain.startsWith('*')) {
-      // Allow IP addresses
-      const ipPattern = /^(\d{1,3}\.){3}\d{1,3}$/;
-      if (!ipPattern.test(domain)) {
-        return 'כתובת לא תקינה - דומיין לא תקין';
-      }
-    }
-    
-    return '';
-  };
 
   const handleAddRule = async () => {
     if (!newUrl.trim()) return;
-    
-    const error = validateUrl(newUrl);
-    if (error) {
-      setUrlError(error);
+    const err = validateDomainOrUrl(newUrl);
+    if (err) {
+      setUrlError(err);
       return;
     }
     
@@ -156,15 +93,13 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
       await rulesApi.create(profileId, {
         url: newUrl,
         action: newAction,
-        type: newType,
+        type: '*',
         include_subdomains: includeSubdomains,
         tags: newTagsList.length > 0 ? newTagsList : undefined,
       }, managedUserId);
       setNewUrl('');
       setIncludeSubdomains(false);
       setNewTagsList([]);
-      setNewTagInput('');
-      setNewType('*');
       setNewAction('block');
       setUrlError('');
       onRefresh();
@@ -183,34 +118,44 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
     }
   };
 
-  // Handle URL input - check for *. prefix
   const handleUrlChange = (value: string) => {
-    setNewUrl(value);
-    setUrlError(validateUrl(value));
-    if (value.startsWith('*.')) {
-      setIncludeSubdomains(true);
-    } else if (value.startsWith('*')) {
-      setIncludeSubdomains(true);
-      setNewUrl(value.substring(1));
-    }
+    const { cleaned, setSubdomains } = processUrlInput(value);
+    setNewUrl(cleaned);
+    setUrlError(validateDomainOrUrl(cleaned));
+    if (setSubdomains) setIncludeSubdomains(true);
   };
 
-  // Handle subdomain checkbox
   const handleSubdomainChange = (checked: boolean) => {
     setIncludeSubdomains(checked);
-    if (checked && !newUrl.startsWith('*.')) {
-      const parts = newUrl.split('/', 1);
-      if (parts[0]) {
-        setNewUrl(`*.${parts[0]}${newUrl.includes('/') ? '/' + newUrl.split('/', 2)[1] : ''}`);
-      }
-    } else if (!checked && newUrl.startsWith('*.')) {
-      setNewUrl(newUrl.substring(2));
-    }
   };
 
   const handleFormSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     handleAddRule();
+  };
+
+  const handleCheckUrl = async () => {
+    const u = checkUrl.trim();
+    setCheckError(null);
+    if (!u) {
+      setCheckResult(null);
+      return;
+    }
+    const err = validateDomainOrUrl(u);
+    if (err) {
+      setCheckResult('invalid');
+      setCheckError(err);
+      return;
+    }
+    setCheckResult('loading');
+    try {
+      const res = await resolverApi.testUrl(u, 'html');
+      setCheckResult(res);
+    } catch (e: unknown) {
+      const ax = e as { response?: { data?: { detail?: string } } };
+      setCheckError(ax?.response?.data?.detail ?? 'שגיאה בבדיקה');
+      setCheckResult('invalid');
+    }
   };
 
   const handleExportCsv = async () => {
@@ -270,7 +215,7 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
               value={newUrl}
               onChange={(e) => handleUrlChange(e.target.value)}
               placeholder="example.com/path או *.example.com"
-              helperText={urlError || "הזן כתובת מלאה. הפרוטוקול (http/https) יוסר אוטומטית"}
+              helperText={urlError || "הזן כתובת מלאה. פרוטוקול ו־*. יוסרו אוטומטית"}
               error={!!urlError}
               sx={{ mb: 1 }}
               onKeyDown={(e) => {
@@ -287,81 +232,17 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
               <Checkbox
                 checked={includeSubdomains}
                 onChange={(e) => handleSubdomainChange(e.target.checked)}
-                disabled={newUrl.startsWith('*.')}
               />
             }
             label="כולל סאב-דומיינים"
           />
           <Box sx={{ mt: 1 }}>
-            <Box
-              component="label"
-              sx={{
-                display: 'block',
-                fontSize: '0.75rem',
-                color: 'text.secondary',
-                mb: 0.5,
-              }}
-            >
-              תגיות
-            </Box>
-            <Box
-              sx={{
-                display: 'flex',
-                flexWrap: 'wrap',
-                alignItems: 'center',
-                gap: 0.5,
-                minHeight: 40,
-                p: 1,
-                border: 1,
-                borderColor: 'divider',
-                borderRadius: 1,
-                bgcolor: 'background.paper',
-                '&:focus-within': {
-                  borderColor: 'primary.main',
-                  borderWidth: 2,
-                  p: '7px',
-                },
-              }}
-            >
-              {newTagsList.map((tag, index) => (
-                <Chip
-                  key={`${tag}-${index}`}
-                  label={tag}
-                  size="small"
-                  onDelete={() => setNewTagsList((prev) => prev.filter((_, i) => i !== index))}
-                  sx={{ mr: 0.25 }}
-                />
-              ))}
-              <TextField
-                inputRef={tagInputRef}
-                size="small"
-                placeholder={newTagsList.length === 0 ? 'הקלד תגית והקש פסיק או Enter' : 'תגית...'}
-                value={newTagInput}
-                onChange={(e) => setNewTagInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === ',' || e.key === 'Enter') {
-                    e.preventDefault();
-                    const v = newTagInput.trim();
-                    if (v && !newTagsList.includes(v)) {
-                      setNewTagsList((prev) => [...prev, v]);
-                      setNewTagInput('');
-                    }
-                  } else if (e.key === 'Backspace' && !newTagInput && newTagsList.length > 0) {
-                    setNewTagsList((prev) => prev.slice(0, -1));
-                  }
-                }}
-                sx={{
-                  flex: 1,
-                  minWidth: 120,
-                  '& .MuiInputBase-root': { bgcolor: 'transparent' },
-                  '& .MuiOutlinedInput-notchedOutline': { border: 'none' },
-                }}
-                inputProps={{ sx: { py: 0.5, px: 0.5 } }}
-              />
-            </Box>
-            <Box component="span" sx={{ fontSize: '0.75rem', color: 'text.secondary', mt: 0.5, display: 'block' }}>
-              תגיות לאתר – משמשות לכללי תגיות. הקלד תגית והקש פסיק או Enter; מחיקה מסירה תגית.
-            </Box>
+            <TagInput
+              value={newTagsList}
+              onChange={setNewTagsList}
+              helperText="תגיות לאתר – משמשות לכללי תגיות. הקלד תגית והקש פסיק או Enter"
+              disabled={!!rulesLocked}
+            />
           </Box>
         </Box>
 
@@ -397,36 +278,45 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
         </Box>
         </form>
 
-        {/* Advanced Settings */}
-        <Collapse in={showAdvanced}>
-          <Box sx={{ mt: 2 }}>
-            <FormControl sx={{ minWidth: 120 }}>
-              <InputLabel>סוג</InputLabel>
-              <Select
-                value={newType}
-                onChange={(e) => setNewType(e.target.value as '*' | 'image' | 'video')}
-                label="סוג"
-              >
-                <MenuItem value="*">הכל</MenuItem>
-                <MenuItem value="image">תמונה</MenuItem>
-                <MenuItem value="video">וידאו</MenuItem>
-              </Select>
-            </FormControl>
-          </Box>
-        </Collapse>
-
-        <Button
-          size="small"
-          onClick={() => setShowAdvanced(!showAdvanced)}
-          endIcon={<ExpandMoreIcon sx={{ transform: showAdvanced ? 'rotate(180deg)' : 'none' }} />}
-        >
-          הגדרות מתקדמות
-        </Button>
       </Paper>
 
       {/* Rules Table */}
       <Paper>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, px: 2, pt: 2, pb: 1 }}>
+          <TextField
+            size="small"
+            placeholder="בדוק URL – איזה כלל חל? (משתמש באותה לוגיקה כמו הסינון)"
+            value={checkUrl}
+            onChange={(e) => { setCheckUrl(e.target.value); setCheckResult(null); setCheckError(null); }}
+            onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleCheckUrl())}
+            sx={{ minWidth: 320 }}
+          />
+          <Button variant="outlined" size="small" onClick={() => handleCheckUrl()} disabled={!checkUrl.trim() || checkResult === 'loading'}>
+            {checkResult === 'loading' ? 'בודק...' : 'בדוק'}
+          </Button>
+          {checkResult === 'invalid' && checkError && (
+            <Typography variant="body2" color="error">{checkError}</Typography>
+          )}
+          {checkResult && checkResult !== 'invalid' && checkResult !== 'loading' && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+              {checkResult.rule ? (
+                <>
+                  <Typography variant="body2" color="text.secondary">הכלל החל:</Typography>
+                  <Chip size="small" label={(checkResult.rule.domain || '') + (checkResult.rule.path || '')} sx={{ fontFamily: 'monospace' }} />
+                  <Chip size="small" label={ACTION_LABELS[checkResult.rule.state as 'allow' | 'block'] ?? checkResult.rule.state} color={checkResult.rule.state === 'block' ? 'error' : 'success'} />
+                </>
+              ) : (
+                <>
+                  <Typography variant="body2" color="text.secondary">אין כלל מתאים</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    ({checkResult.default_mode === 'whitelist' ? 'רשימה לבנה' : 'רשימה שחורה'} → {checkResult.state === 'review' ? 'נשלח לבדיקה' : 'פתוח'})
+                  </Typography>
+                </>
+              )}
+            </Box>
+          )}
+        </Box>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, px: 2, pb: 2 }}>
           <TextField
             size="small"
             placeholder="חיפוש כללים (כתובת, דומיין)..."
@@ -456,11 +346,6 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
                     פעולה
                   </TableSortLabel>
                 </TableCell>
-                <TableCell sortDirection={orderBy === 'type' ? order : false}>
-                  <TableSortLabel active={orderBy === 'type'} direction={orderBy === 'type' ? order : 'asc'} onClick={() => { setOrderBy('type'); setOrder(orderBy === 'type' && order === 'asc' ? 'desc' : 'asc'); setPage(0); }}>
-                    סוג
-                  </TableSortLabel>
-                </TableCell>
                 <TableCell>תגיות</TableCell>
                 <TableCell align="center">פעולות</TableCell>
               </TableRow>
@@ -474,7 +359,7 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
                 if (filtered.length === 0) {
                   return (
                     <TableRow>
-                      <TableCell colSpan={5} align="center">
+                      <TableCell colSpan={4} align="center">
                         {rules.length === 0 ? 'אין כללים' : 'אין תוצאות לחיפוש'}
                       </TableCell>
                     </TableRow>
@@ -483,8 +368,7 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
                 const cmp = (a: Rule, b: Rule) => {
                   let v = 0;
                   if (orderBy === 'domain') v = ((a.domain_pattern || '') + (a.path_pattern || '')).localeCompare((b.domain_pattern || '') + (b.path_pattern || ''));
-                  else if (orderBy === 'action') v = (a.action || '').localeCompare(b.action || '');
-                  else if (orderBy === 'type') v = (a.type || '').localeCompare(b.type || '');
+                  else v = (a.action || '').localeCompare(b.action || '');
                   return order === 'asc' ? v : -v;
                 };
                 const sorted = stableSort(filtered, cmp);
@@ -500,11 +384,6 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
                       color={rule.action === 'block' ? 'error' : 'success'}
                       size="small"
                     />
-                  </TableCell>
-                  <TableCell>
-                    {rule.type !== '*' && (
-                      <Chip label={TYPE_LABELS[rule.type]} size="small" variant="outlined" />
-                    )}
                   </TableCell>
                   <TableCell>
                     <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>

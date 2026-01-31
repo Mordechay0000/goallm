@@ -21,6 +21,7 @@ import {
 } from '@mui/material';
 import { ArrowBack as ArrowBackIcon } from '@mui/icons-material';
 import { ruleRequestsApi } from '../api/ruleRequests';
+import { TagInput } from '../components/TagInput';
 
 const RequestChangePage: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -38,7 +39,6 @@ const RequestChangePage: React.FC = () => {
   const [type, setType] = useState<string>('*');
   const [includeSubdomains, setIncludeSubdomains] = useState(false);
   const [tags, setTags] = useState<string[]>([]);
-  const [tagInput, setTagInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState<string>('');
@@ -83,14 +83,6 @@ const RequestChangePage: React.FC = () => {
       setError(ax?.response?.data?.detail || ax?.message || 'שגיאה בשליחת הבקשה');
     } finally {
       setLoading(false);
-    }
-  };
-
-  const addTag = () => {
-    const v = tagInput.trim();
-    if (v && !tags.includes(v)) {
-      setTags((prev) => [...prev, v]);
-      setTagInput('');
     }
   };
 
@@ -151,23 +143,12 @@ const RequestChangePage: React.FC = () => {
             sx={{ mb: 2 }}
           />
           <Box sx={{ mb: 2 }}>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>תגיות (אופציונלי)</Typography>
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center' }}>
-              {tags.map((t) => (
-                <Typography component="span" key={t} sx={{ mr: 0.5 }}>
-                  [{t}]
-                </Typography>
-              ))}
-              <TextField
-                size="small"
-                placeholder="תגית..."
-                value={tagInput}
-                onChange={(e) => setTagInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addTag())}
-                sx={{ width: 120 }}
-              />
-              <Button size="small" onClick={addTag}>הוסף</Button>
-            </Box>
+            <TagInput
+              value={tags}
+              onChange={setTags}
+              label="תגיות (אופציונלי)"
+              helperText=""
+            />
           </Box>
           <Button type="submit" variant="contained" fullWidth disabled={loading}>
             {loading ? 'שולח...' : 'שלח בקשה לשינוי'}

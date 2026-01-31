@@ -255,43 +255,31 @@ const ProfilesPage: React.FC = () => {
                     </Tooltip>
                   )}
                 </Typography>
-                <Box
-                  onClick={async () => {
-                    if (lockedSettings.includes('profile_mode')) return;
-                    const newMode = selectedProfile.mode === 'whitelist' ? 'blacklist' : 'whitelist';
-                    try {
-                      await updateProfile(selectedProfile.id, undefined, newMode, managedUserId ?? undefined);
-                      loadCoreMode();
-                    } catch (error: unknown) {
-                      alert(`שגיאה: ${error instanceof Error ? error.message : String(error)}`);
-                    }
-                  }}
-                  sx={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 1,
-                    p: 1.5,
-                    border: '1px solid',
-                    borderColor: 'divider',
-                    borderRadius: 1,
-                    cursor: lockedSettings.includes('profile_mode') ? 'not-allowed' : 'pointer',
-                    opacity: lockedSettings.includes('profile_mode') ? 0.7 : 1,
-                    '&:hover': lockedSettings.includes('profile_mode') ? {} : { bgcolor: 'action.hover' },
-                  }}
-                >
+                <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 0.5 }}>
                   <Chip
                     label={selectedProfile.mode === 'whitelist' ? 'רשימה לבנה + חריגים' : 'רשימה שחורה + חריגים'}
                     color={selectedProfile.mode === 'whitelist' ? 'success' : 'default'}
                     size="small"
+                    onClick={lockedSettings.includes('profile_mode') ? undefined : async () => {
+                      const newMode = selectedProfile.mode === 'whitelist' ? 'blacklist' : 'whitelist';
+                      try {
+                        await updateProfile(selectedProfile.id, undefined, newMode, managedUserId ?? undefined);
+                        loadCoreMode();
+                      } catch (error: unknown) {
+                        alert(`שגיאה: ${error instanceof Error ? error.message : String(error)}`);
+                      }
+                    }}
+                    sx={{
+                      cursor: lockedSettings.includes('profile_mode') ? 'not-allowed' : 'pointer',
+                      opacity: lockedSettings.includes('profile_mode') ? 0.7 : 1,
+                    }}
                   />
-                  {coreMode != null && (
-                    <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
-                      (מצב בפרוקסי: {coreMode})
-                    </Typography>
-                  )}
                   <Typography variant="caption" color="text.secondary">
-                    {lockedSettings.includes('profile_mode') ? 'נחסם על ידי ההנהלה' : '(לחץ לשינוי)'}
+                    {lockedSettings.includes('profile_mode') ? 'נחסם על ידי ההנהלה' : 'לחץ לשינוי מצב'}
                   </Typography>
+                  {coreMode != null && (
+                    <Typography variant="caption" color="text.secondary">(מצב בפרוקסי: {coreMode})</Typography>
+                  )}
                 </Box>
               </Box>
               {editingProfile === selectedProfile.id && (
