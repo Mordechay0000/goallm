@@ -158,6 +158,63 @@ class RuleResponse(BaseModel):
         from_attributes = True
 
 
+# Global rule models (רשימה גלובלית – רק אדמין)
+class GlobalRuleCreate(BaseModel):
+    url: str = Field(..., min_length=1)
+    action: str = Field(default="allow", pattern="^(allow|block)$")
+    type: str = Field(default="*", pattern="^(\\*|image|video)$")
+    include_subdomains: bool = Field(default=False)
+    tags: Optional[List[str]] = Field(default=None)
+
+    @validator('url')
+    def validate_url(cls, v):
+        v = v.strip()
+        if v.startswith('http://'):
+            v = v[7:]
+        elif v.startswith('https://'):
+            v = v[8:]
+        if '/' in v:
+            parts = v.split('/', 1)
+            domain = parts[0]
+        else:
+            domain = v
+        if not domain:
+            raise ValueError("URL חייב לכלול דומיין")
+        return v
+
+
+class GlobalRuleUpdate(BaseModel):
+    url: Optional[str] = None
+    action: Optional[str] = Field(None, pattern="^(allow|block)$")
+    type: Optional[str] = Field(None, pattern="^(\\*|image|video)$")
+    include_subdomains: Optional[bool] = None
+    tags: Optional[List[str]] = None
+
+
+class GlobalRuleResponse(BaseModel):
+    id: int
+    domain_pattern: str
+    path_pattern: Optional[str]
+    action: str
+    type: str
+    include_subdomains: bool
+    tags: Optional[List[str]] = None
+    created_at: int
+    updated_at: int
+
+    @property
+    def display_url(self) -> str:
+        url = self.domain_pattern
+        if self.include_subdomains and not url.startswith('*.'):
+            url = f"*.{url}"
+        if self.path_pattern:
+            url += self.path_pattern
+        return url
+
+    class Config:
+        from_attributes = True
+
+
 # Tag rule models (כללי תגיות)
 class TagRuleCreate(BaseModel):
     tag: str = Field(..., min_length=1)
@@ -245,7 +302,8 @@ class RuleRequestCreate(BaseModel):
 
 
 class RuleRequestApprove(BaseModel):
-    profile_id: int
+    """Optional; approval adds rule to global list only. profile_id kept for API compatibility, ignored."""
+    profile_id: Optional[int] = None
 
 
 class RuleRequestResponse(BaseModel):
@@ -278,3 +336,9 @@ class RuleRequestUpdate(BaseModel):
     type: Optional[str] = Field(None, pattern="^(\\*|image|video)$")
     include_subdomains: Optional[bool] = None
     tags: Optional[List[str]] = None
+
+
+class ResolverTestUrlBody(BaseModel):
+    """Request body for POST /api/resolver/test-url."""
+    url: str = Field(..., min_length=1)
+    type: str = Field(default="html", pattern="^(html|image)$")

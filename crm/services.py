@@ -517,6 +517,117 @@ def delete_rule(rule_id: int) -> bool:
     return cursor.rowcount > 0
 
 
+# Global rules (רשימה גלובלית – רק אדמין, רשימה לבנה בסיסית)
+def get_global_rules() -> List[Dict]:
+    """Get all global rules (base whitelist)."""
+    cursor = db_connection.execute("""
+        SELECT id, domain_pattern, path_pattern, action, type,
+               include_subdomains, tags, created_at, updated_at
+        FROM global_rules
+        ORDER BY created_at DESC
+    """)
+    rows = cursor.fetchall()
+    out = []
+    for row in rows:
+        d = dict(row)
+        d["tags"] = _parse_tags(d.get("tags"))
+        out.append(d)
+    return out
+
+
+def get_global_rule(rule_id: int) -> Optional[Dict]:
+    """Get a single global rule by ID."""
+    cursor = db_connection.execute("""
+        SELECT id, domain_pattern, path_pattern, action, type,
+               include_subdomains, tags, created_at, updated_at
+        FROM global_rules WHERE id = ?
+    """, (rule_id,))
+    row = cursor.fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["tags"] = _parse_tags(d.get("tags"))
+    return d
+
+
+def create_global_rule(
+    url: str,
+    action: str = "allow",
+    rule_type: str = "*",
+    include_subdomains: bool = False,
+    tags: Optional[List[str]] = None,
+) -> Dict:
+    """Create a global rule (admin only). Base whitelist: typically action=allow."""
+    url = _normalize_url(url)
+    domain, path, inferred_subdomains = parse_url(url)
+    if inferred_subdomains:
+        include_subdomains = True
+    domain_pattern = domain
+    if include_subdomains:
+        domain_pattern = f"*.{domain}" if not domain.startswith("*.") else domain
+    now = int(datetime.now().timestamp())
+    tags_str = _tags_to_str(tags)
+    try:
+        cursor = db_connection.execute("""
+            INSERT INTO global_rules
+            (domain_pattern, path_pattern, action, type, include_subdomains, tags, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (domain_pattern, path, action, rule_type, 1 if include_subdomains else 0, tags_str, now, now))
+        rule_id = cursor.lastrowid
+        db_connection.commit()
+        return get_global_rule(rule_id)
+    except Exception as e:
+        db_connection.rollback()
+        raise ValueError(f"שגיאה ביצירת כלל גלובלי: {str(e)}")
+
+
+def update_global_rule(
+    rule_id: int,
+    url: Optional[str] = None,
+    action: Optional[str] = None,
+    rule_type: Optional[str] = None,
+    include_subdomains: Optional[bool] = None,
+    tags: Optional[List[str]] = None,
+) -> Dict:
+    """Update a global rule."""
+    rule = get_global_rule(rule_id)
+    if not rule:
+        raise ValueError("כלל גלובלי לא נמצא")
+    if url is not None:
+        url = _normalize_url(url)
+        domain, path, inferred_subdomains = parse_url(url)
+        domain_pattern = domain
+        if inferred_subdomains or (include_subdomains is True):
+            domain_pattern = f"*.{domain}" if not domain.startswith("*.") else domain
+            include_subdomains = True
+        else:
+            include_subdomains = include_subdomains if include_subdomains is not None else rule["include_subdomains"]
+        path = (path if path is not None else "/")
+    else:
+        domain_pattern = rule["domain_pattern"]
+        path = rule["path_pattern"]
+        include_subdomains = include_subdomains if include_subdomains is not None else rule["include_subdomains"]
+    new_action = action if action is not None else rule["action"]
+    new_type = rule_type if rule_type is not None else rule["type"]
+    new_tags_str = _tags_to_str(tags) if tags is not None else _tags_to_str(rule.get("tags"))
+    now = int(datetime.now().timestamp())
+    db_connection.execute("""
+        UPDATE global_rules
+        SET domain_pattern = ?, path_pattern = ?, action = ?, type = ?,
+            include_subdomains = ?, tags = ?, updated_at = ?
+        WHERE id = ?
+    """, (domain_pattern, path, new_action, new_type, 1 if include_subdomains else 0, new_tags_str, now, rule_id))
+    db_connection.commit()
+    return get_global_rule(rule_id)
+
+
+def delete_global_rule(rule_id: int) -> bool:
+    """Delete a global rule."""
+    cursor = db_connection.execute("DELETE FROM global_rules WHERE id = ?", (rule_id,))
+    db_connection.commit()
+    return cursor.rowcount > 0
+
+
 # Tag rules (כללי תגיות)
 def get_tag_rules(enabled_only: bool = False) -> List[Dict]:
     """Get all tag rules."""
@@ -579,10 +690,9 @@ def delete_tag_rule(rule_id: int) -> bool:
 
 def sync_crm_rules_to_core(user_id: Optional[int] = None) -> None:
     """
-    Sync CRM active profile (with schedule) rules and tag_rules to core policy_database (for proxy).
-    When user_id is given (e.g. from API with current user), sync that user's active profile.
-    When user_id is None, sync the first user's active profile (e.g. cron/CLI).
-    Also writes profile mode (whitelist/blacklist) to core for default allow/block when no rule matches.
+    Sync CRM global rules (base whitelist) + active user profile rules and tag_rules to core policy_database.
+    Global rules go to core with source='global'; user's active profile rules with source='user'.
+    When user_id is None, sync first user's active profile for user layer.
     """
     try:
         import sys
@@ -602,26 +712,50 @@ def sync_crm_rules_to_core(user_id: Optional[int] = None) -> None:
             delete_tag_rule as core_delete_tag_rule,
             set_profile_mode as core_set_profile_mode,
         )
+        # Global rules (base whitelist) – from CRM global_rules
+        crm_global = get_global_rules()
+        crm_global_keys = {(r["domain_pattern"], r.get("path_pattern") or None, r.get("type") or "*") for r in crm_global}
+        # User's active profile rules
         mode, crm_rules, crm_tag_rules = get_system_active_profile_and_rules(user_id=user_id)
         core_set_profile_mode(mode)
-        crm_keys = {(r["domain"], r.get("path") or None, r.get("type") or "*") for r in crm_rules}
-        core_policies = get_all_policies(enabled_only=False)
-        for p in core_policies:
+        crm_user_keys = {(r["domain"], r.get("path") or None, r.get("type") or "*") for r in crm_rules}
+
+        core_global = get_all_policies(enabled_only=False, source_filter="global")
+        core_user = get_all_policies(enabled_only=False, source_filter="user")
+        for p in core_global:
             key = (p["domain"], p.get("path") or None, p.get("type") or "*")
-            if key not in crm_keys:
+            if key not in crm_global_keys:
                 core_delete_policy(p["id"])
-        core_policies = get_all_policies(enabled_only=False)
+        for p in core_user:
+            key = (p["domain"], p.get("path") or None, p.get("type") or "*")
+            if key not in crm_user_keys:
+                core_delete_policy(p["id"])
+
+        core_global = get_all_policies(enabled_only=False, source_filter="global")
+        core_user = get_all_policies(enabled_only=False, source_filter="user")
+        for r in crm_global:
+            domain = r["domain_pattern"]
+            path = r.get("path_pattern")
+            typ = r.get("type") or "*"
+            state = r.get("action") or "allow"
+            tags = r.get("tags") or []
+            existing = next((p for p in core_global if p["domain"] == domain and (p.get("path") or None) == (path or None) and (p.get("type") or "*") == typ), None)
+            if existing:
+                core_update_policy(existing["id"], state=state, tags=tags, source="global")
+            else:
+                core_add_policy(domain, path, policy_type=typ, state=state, tags=tags, source="global")
         for r in crm_rules:
             domain = r["domain"]
             path = r.get("path")
             typ = r.get("type") or "*"
             state = r.get("state") or "block"
             tags = r.get("tags") or []
-            existing = next((p for p in core_policies if p["domain"] == domain and (p.get("path") or None) == (path or None) and (p.get("type") or "*") == typ), None)
+            existing = next((p for p in core_user if p["domain"] == domain and (p.get("path") or None) == (path or None) and (p.get("type") or "*") == typ), None)
             if existing:
-                core_update_policy(existing["id"], state=state, tags=tags)
+                core_update_policy(existing["id"], state=state, tags=tags, source="user")
             else:
-                core_add_policy(domain, path, policy_type=typ, state=state, tags=tags)
+                core_add_policy(domain, path, policy_type=typ, state=state, tags=tags, source="user")
+
         core_tag_rules = core_get_tag_rules(enabled_only=False)
         crm_tag_set = {tr["tag"] for tr in crm_tag_rules}
         for tr in core_tag_rules:
@@ -983,20 +1117,14 @@ def list_rule_requests(
     return out, total
 
 
-def approve_rule_request(request_id: int, profile_id: int) -> Dict:
-    """Admin approves a request: create the rule on the given profile. Works for pending or rejected (re-approve)."""
+def approve_rule_request(request_id: int, profile_id: Optional[int] = None) -> Dict:
+    """Admin approves a request: add rule to the global list only. Works for pending or rejected (re-approve). profile_id is ignored (kept for API compatibility)."""
     req = get_rule_request(request_id)
     if not req:
         raise ValueError("בקשה לא נמצאה")
     if req["status"] == "approved":
         raise ValueError("הבקשה כבר אושרה")
-    profile = get_profile(profile_id)
-    if not profile:
-        raise ValueError("פרופיל לא נמצא")
-    # Allow any profile when request is from blocked/send-for-review page
-    if req["user_id"] != get_or_create_blocked_page_user_id() and profile["user_id"] != req["user_id"]:
-        raise ValueError("הפרופיל לא שייך למשתמש של הבקשה")
-    # Build URL for create_rule: prefer req["url"] (updated by admin) so "save and approve" uses edited URL
+    # Build URL for global rule: prefer req["url"] (updated by admin)
     url_raw = (req.get("url") or "").strip()
     if url_raw:
         url_for_rule = _normalize_url(url_raw)
@@ -1008,8 +1136,7 @@ def approve_rule_request(request_id: int, profile_id: int) -> Dict:
         url_for_rule = _normalize_url(dom + path) if dom else ""
     if not url_for_rule:
         raise ValueError("חסר כתובת בבקשה")
-    created = create_rule(
-        profile_id=profile_id,
+    created = create_global_rule(
         url=url_for_rule,
         action=req.get("action") or "allow",
         rule_type=req.get("type") or "*",
@@ -1020,11 +1147,11 @@ def approve_rule_request(request_id: int, profile_id: int) -> Dict:
     now = int(datetime.now().timestamp())
     db_connection.execute(
         "UPDATE rule_requests SET status = 'approved', updated_at = ?, approved_rule_id = ?, approved_profile_id = ? WHERE id = ?",
-        (now, rule_id, profile_id, request_id),
+        (now, rule_id, None, request_id),
     )
     db_connection.commit()
-    # Refresh core policy so proxy sees the new rule immediately
-    sync_crm_rules_to_core(profile["user_id"])
+    # Refresh core policy so proxy sees the new global rule
+    sync_crm_rules_to_core(None)
     return get_rule_request(request_id)
 
 

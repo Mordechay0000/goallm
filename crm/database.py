@@ -378,6 +378,22 @@ def init_db_schema():
         db_connection.execute("ALTER TABLE rule_requests ADD COLUMN request_url TEXT")
         logger.info("Added request_url to rule_requests")
 
+    # global_rules: base whitelist managed only by admins (same shape as rules, no profile_id)
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS global_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            domain_pattern TEXT NOT NULL,
+            path_pattern TEXT,
+            action TEXT NOT NULL DEFAULT 'allow',
+            type TEXT NOT NULL DEFAULT '*',
+            include_subdomains INTEGER NOT NULL DEFAULT 0,
+            tags TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )
+    """)
+    db_connection.execute("CREATE INDEX IF NOT EXISTS idx_global_rules_domain ON global_rules(domain_pattern)")
+
     db_connection.commit()
     logger.info("CRM database schema initialized successfully")
 
