@@ -9,15 +9,29 @@ class URLPolicyResolverError(ValueError):
 
 
 class URLPolicyResolver:
-    """Resolves URL to policy (allow/block) from DB-backed policies and tag rules."""
+    """Resolves URL to policy (allow/block) from DB-backed policies and tag rules.
+    Two-phase mode: when global_policies and user_policies are provided,
+    first check global whitelist (no match → review), then user rules (block match → block with block_reason user_settings).
+    """
 
     def __init__(
         self,
-        policies: List[Dict],
+        policies: Optional[List[Dict]] = None,
         tag_rules: Optional[List[Dict]] = None,
         default_mode: Optional[str] = None,
+        global_policies: Optional[List[Dict]] = None,
+        user_policies: Optional[List[Dict]] = None,
     ):
-        self.policies = policies
+        # Two-phase: global (base whitelist) + user (overrides)
+        self._two_phase = global_policies is not None and user_policies is not None
+        if self._two_phase:
+            self.global_policies = list(global_policies or [])
+            self.user_policies = list(user_policies or [])
+            self.policies = []
+        else:
+            self.global_policies = []
+            self.user_policies = []
+            self.policies = list(policies or [])
         self.tag_rules = list(tag_rules or [])
         self.default_mode = (default_mode or "").strip().lower()
         if self.default_mode not in ("whitelist", "blacklist"):
@@ -129,30 +143,20 @@ class URLPolicyResolver:
         if not path.startswith("/"):
             raise URLPolicyResolverError("נתיב ה-URL חייב להתחיל ב-/")
 
-    def resolve(self, url: str, req_type: str) -> Optional[Dict]:
-        self.clear_debug()
-        self._log(f"Resolving policy for url={url}, type={req_type}")
-
-        domain, path = self._normalize_url(url)
-        self._validate_normalized(domain, path)
+    def _match_candidates(self, policies: List[Dict], domain: str, path: str, req_type: str) -> Optional[Dict]:
+        """Find best matching rule in policies for domain, path, req_type. Returns rule or None."""
         candidates = []
-
-        # Collect matching candidates
-        for rule in self.policies:
-            self._log(f"Evaluating rule: {rule}")
-
+        for rule in policies:
             if not self._domain_matches(rule["domain"], domain):
-                self._log("Rule rejected: domain mismatch")
                 continue
-
             if not self._path_matches(rule.get("path"), path):
-                self._log("Rule rejected: path mismatch")
                 continue
-
+            rule_type = rule.get("type") or "*"
+            if rule_type != req_type and rule_type != "*":
+                continue
             candidates.append(rule)
-            self._log("Rule accepted as candidate")
-
-        # Sort by specificity
+        if not candidates:
+            return None
         candidates.sort(
             key=lambda r: (
                 self._domain_specificity(r["domain"]),
@@ -160,19 +164,66 @@ class URLPolicyResolver:
             ),
             reverse=True,
         )
+        rule = candidates[0]
+        # Tag rules: if policy has tags and any tag has block rule, override to block
+        tags = rule.get("tags") or []
+        if isinstance(tags, str):
+            tags = [t.strip() for t in tags.split(",") if t.strip()]
+        for tag in tags:
+            if self._tag_block.get(tag):
+                return {**rule, "state": "block"}
+        return rule
 
+    def resolve(self, url: str, req_type: str) -> Optional[Dict]:
+        self.clear_debug()
+        self._log(f"Resolving policy for url={url}, type={req_type}")
+
+        domain, path = self._normalize_url(url)
+        self._validate_normalized(domain, path)
+
+        if self._two_phase:
+            # Phase 1: global whitelist. Not in global → always review (not dependent on user).
+            global_rule = self._match_candidates(self.global_policies, domain, path, req_type)
+            if global_rule is None:
+                self._log("Not in global whitelist -> review")
+                return {"state": "review"}
+            # Global allows this URL (or block with tag). If global says block (e.g. tag), return block.
+            if global_rule.get("state") == "block":
+                self._log("Global rule says block (e.g. tag)")
+                return global_rule
+            # Phase 2: user overrides. In global (allow) but user has block → block with block_reason user_settings.
+            user_rule = self._match_candidates(self.user_policies, domain, path, req_type)
+            if user_rule is not None and user_rule.get("state") == "block":
+                self._log("User rule blocks (in global whitelist) -> block_reason user_settings")
+                return {**user_rule, "state": "block", "block_reason": "user_settings"}
+            self._log("In global whitelist, no user block -> allow")
+            return {**global_rule, "state": "allow"}
+
+        # Legacy single-phase: one policies list
+        candidates = []
+        for rule in self.policies:
+            self._log(f"Evaluating rule: {rule}")
+            if not self._domain_matches(rule["domain"], domain):
+                self._log("Rule rejected: domain mismatch")
+                continue
+            if not self._path_matches(rule.get("path"), path):
+                self._log("Rule rejected: path mismatch")
+                continue
+            candidates.append(rule)
+            self._log("Rule accepted as candidate")
+        candidates.sort(
+            key=lambda r: (
+                self._domain_specificity(r["domain"]),
+                self._path_specificity(r.get("path")),
+            ),
+            reverse=True,
+        )
         self._log(f"Candidates after sorting: {len(candidates)}")
-
-        # Resolve by type
         for rule in candidates:
             rule_type = rule.get("type") or "*"
             if rule_type != req_type and rule_type != "*":
-                self._log(
-                    f"Rule skipped due to type mismatch: rule_type={rule_type}, req_type={req_type}"
-                )
                 continue
             self._log(f"Rule selected: {rule}")
-            # Apply tag rules: if policy has tags and any tag has a block rule, override to block
             tags = rule.get("tags") or []
             if isinstance(tags, str):
                 tags = [t.strip() for t in tags.split(",") if t.strip()]
@@ -181,10 +232,7 @@ class URLPolicyResolver:
                     self._log(f"Tag rule override: tag={tag} -> block")
                     return {**rule, "state": "block"}
             return rule
-
         self._log("No matching rule found")
-        # רשימה לבנה: אתר שלא מופיע ברשימה → נשלח לבדיקה (review).
-        # רשימה שחורה: אתר שלא מופיע ברשימה → פתוח (allow).
         if self.default_mode == "whitelist":
             self._log("Default mode whitelist -> review (no rule = send for review)")
             return {"state": "review"}

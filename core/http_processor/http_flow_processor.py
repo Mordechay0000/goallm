@@ -37,6 +37,7 @@ def _apply_site_policy_for_html(flow: http.HTTPFlow) -> bool:
                     request_url=url,
                     rule=rule,
                     tags=rule.get("tags") or [],
+                    block_reason=rule.get("block_reason") or "",
                 )
                 flow.response = http.Response.make(
                     200,

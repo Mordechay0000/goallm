@@ -53,6 +53,38 @@ def init_db_schema():
         db_connection.execute(f"ALTER TABLE {POLICIES_TABLE_NAME} ADD COLUMN tags TEXT")
         logger.info("Added tags column to url_policies")
 
+    # Add source column: 'global' (base whitelist) or 'user' (per-user rules). Allow same URL in both.
+    cursor = db_connection.execute(f"PRAGMA table_info({POLICIES_TABLE_NAME})")
+    columns = [row[1] for row in cursor.fetchall()]
+    if "source" not in columns:
+        # Recreate table with (domain, path, type, source) unique so global and user can have same URL
+        db_connection.execute(f"""
+            CREATE TABLE url_policies_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                domain TEXT NOT NULL,
+                path TEXT,
+                type TEXT NOT NULL DEFAULT '*',
+                state TEXT NOT NULL DEFAULT 'block',
+                description TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                tags TEXT,
+                source TEXT NOT NULL DEFAULT 'user',
+                UNIQUE(domain, path, type, source)
+            )
+        """)
+        db_connection.execute(f"""
+            INSERT INTO url_policies_new
+            (id, domain, path, type, state, description, enabled, created_at, updated_at, tags, source)
+            SELECT id, domain, path, type, state, description, enabled, created_at, updated_at, tags, 'user'
+            FROM {POLICIES_TABLE_NAME}
+        """)
+        db_connection.execute(f"DROP TABLE {POLICIES_TABLE_NAME}")
+        db_connection.execute("ALTER TABLE url_policies_new RENAME TO " + POLICIES_TABLE_NAME)
+        db_connection.commit()
+        logger.info("Added source column to url_policies (global/user)")
+
     db_connection.execute(f"""
         CREATE INDEX IF NOT EXISTS idx_domain_path 
         ON {POLICIES_TABLE_NAME}(domain, path)
@@ -164,8 +196,10 @@ def validate_policy(domain: str, path: Optional[str] = None,
 def add_policy(domain: str, path: Optional[str] = None,
                policy_type: str = "*", state: str = "block",
                description: Optional[str] = None, enabled: bool = True,
-               tags: Optional[List[str]] = None) -> Dict:
-    """Add a new policy. Returns the created policy dict."""
+               tags: Optional[List[str]] = None, source: str = "user") -> Dict:
+    """Add a new policy. source: 'global' (base whitelist) or 'user'. Returns the created policy dict."""
+    if source not in ("global", "user"):
+        source = "user"
     error = validate_policy(domain, path, policy_type, state, tags)
     if error:
         raise ValueError(error)
@@ -177,16 +211,16 @@ def add_policy(domain: str, path: Optional[str] = None,
     try:
         db_connection.execute(f"""
             INSERT INTO {POLICIES_TABLE_NAME} 
-            (domain, path, type, state, description, enabled, created_at, updated_at, tags)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (domain, path, policy_type, state, description, 1 if enabled else 0, now, now, tags_str))
+            (domain, path, type, state, description, enabled, created_at, updated_at, tags, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (domain, path, policy_type, state, description, 1 if enabled else 0, now, now, tags_str, source))
         db_connection.commit()
         
         # Get the inserted row
         cursor = db_connection.execute(f"""
             SELECT * FROM {POLICIES_TABLE_NAME} 
-            WHERE domain = ? AND (path = ? OR (path IS NULL AND ? IS NULL)) AND type = ?
-        """, (domain, path, path, policy_type))
+            WHERE domain = ? AND (path = ? OR (path IS NULL AND ? IS NULL)) AND type = ? AND source = ?
+        """, (domain, path, path, policy_type, source))
         
         row = cursor.fetchone()
         if row:
@@ -194,13 +228,14 @@ def add_policy(domain: str, path: Optional[str] = None,
         raise Exception("Failed to retrieve created policy")
         
     except sqlite3.IntegrityError:
-        raise ValueError("כלל עם דומיין, נתיב וסוג זה כבר קיים")
+        raise ValueError("כלל עם דומיין, נתיב וסוג זה כבר קיים (למקור זה)")
 
 
 def update_policy(policy_id: int, domain: Optional[str] = None,
                   path: Optional[str] = None, policy_type: Optional[str] = None,
                   state: Optional[str] = None, description: Optional[str] = None,
-                  enabled: Optional[bool] = None, tags: Optional[List[str]] = None) -> Dict:
+                  enabled: Optional[bool] = None, tags: Optional[List[str]] = None,
+                  source: Optional[str] = None) -> Dict:
     """Update an existing policy. Returns the updated policy dict."""
     cursor = db_connection.execute(f"""
         SELECT * FROM {POLICIES_TABLE_NAME} WHERE id = ?
@@ -218,6 +253,9 @@ def update_policy(policy_id: int, domain: Optional[str] = None,
     new_state = state if state is not None else current["state"]
     new_description = description if description is not None else current["description"]
     new_enabled = enabled if enabled is not None else current["enabled"]
+    new_source = source if source is not None else current.get("source", "user")
+    if new_source not in ("global", "user"):
+        new_source = "user"
 
     # Validate
     error = validate_policy(new_domain, new_path, new_type, new_state, new_tags if isinstance(new_tags, list) else None)
@@ -232,10 +270,10 @@ def update_policy(policy_id: int, domain: Optional[str] = None,
         db_connection.execute(f"""
             UPDATE {POLICIES_TABLE_NAME}
             SET domain = ?, path = ?, type = ?, state = ?,
-                description = ?, enabled = ?, updated_at = ?, tags = ?
+                description = ?, enabled = ?, updated_at = ?, tags = ?, source = ?
             WHERE id = ?
         """, (new_domain, new_path, new_type, new_state,
-              new_description, 1 if new_enabled else 0, now, new_tags_str, policy_id))
+              new_description, 1 if new_enabled else 0, now, new_tags_str, new_source, policy_id))
         db_connection.commit()
         
         # Return updated policy
@@ -267,19 +305,25 @@ def get_policy(policy_id: int) -> Optional[Dict]:
     return row_to_dict(row) if row else None
 
 
-def get_all_policies(enabled_only: bool = False) -> List[Dict]:
-    """Get all policies, optionally filtered by enabled status."""
+def get_all_policies(enabled_only: bool = False, source_filter: Optional[str] = None) -> List[Dict]:
+    """Get all policies, optionally filtered by enabled status and source ('global' or 'user')."""
     query = f"SELECT * FROM {POLICIES_TABLE_NAME}"
+    params = []
+    where = []
     if enabled_only:
-        query += " WHERE enabled = 1"
+        where.append("enabled = 1")
+    if source_filter in ("global", "user"):
+        where.append("source = ?")
+        params.append(source_filter)
+    if where:
+        query += " WHERE " + " AND ".join(where)
     query += " ORDER BY created_at DESC"
-    
-    cursor = db_connection.execute(query)
+    cursor = db_connection.execute(query, params) if params else db_connection.execute(query)
     return [row_to_dict(row) for row in cursor.fetchall()]
 
 
 def get_policies_for_resolver() -> List[Dict]:
-    """Get all enabled policies in the format expected by URLPolicyResolver (with tags)."""
+    """Get all enabled policies in the format expected by URLPolicyResolver (with tags). Backward compat: returns both global and user."""
     policies = get_all_policies(enabled_only=True)
     return [
         {
@@ -288,7 +332,26 @@ def get_policies_for_resolver() -> List[Dict]:
             "type": p["type"],
             "state": p["state"],
             "tags": p.get("tags", []),
+            "source": p.get("source", "user"),
         }
+        for p in policies
+    ]
+
+
+def get_global_policies_for_resolver() -> List[Dict]:
+    """Get enabled global (base whitelist) policies for resolver."""
+    policies = get_all_policies(enabled_only=True, source_filter="global")
+    return [
+        {"domain": p["domain"], "path": p["path"], "type": p["type"], "state": p["state"], "tags": p.get("tags", [])}
+        for p in policies
+    ]
+
+
+def get_user_policies_for_resolver() -> List[Dict]:
+    """Get enabled user policies for resolver (per-user overrides)."""
+    policies = get_all_policies(enabled_only=True, source_filter="user")
+    return [
+        {"domain": p["domain"], "path": p["path"], "type": p["type"], "state": p["state"], "tags": p.get("tags", [])}
         for p in policies
     ]
 
@@ -379,7 +442,7 @@ def tag_rule_row_to_dict(row: tuple) -> Dict:
 
 
 def row_to_dict(row: tuple) -> Dict:
-    """Convert database row to dictionary (policies table; includes tags)."""
+    """Convert database row to dictionary (policies table; includes tags and source)."""
     d = {
         "id": row[0],
         "domain": row[1],
@@ -395,6 +458,10 @@ def row_to_dict(row: tuple) -> Dict:
         d["tags"] = _parse_tags(row[9]) if row[9] else []
     else:
         d["tags"] = []
+    if len(row) > 10:
+        d["source"] = (row[10] or "user")
+    else:
+        d["source"] = "user"
     return d
 
 
