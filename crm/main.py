@@ -21,9 +21,11 @@ from .models import (
     RequestPhoneCode, VerifyPhoneCode, RequestEmailCode, VerifyEmailCode,
     ProfileCreate, ProfileUpdate, ProfileResponse,
     RuleCreate, RuleUpdate, RuleResponse,
+    GlobalRuleCreate, GlobalRuleUpdate, GlobalRuleResponse,
     TagRuleCreate, TagRuleUpdate, TagRuleResponse,
     ScheduleCreate, ScheduleUpdate, ScheduleResponse,
     RuleRequestCreate, RuleRequestApprove, RuleRequestUpdate, RuleRequestResponse,
+    ResolverTestUrlBody,
 )
 from .services import (
     create_user, authenticate_user, authenticate_user_by_phone, get_user_by_id, update_user, change_password, get_user_profiles,
@@ -34,6 +36,7 @@ from .services import (
     list_users, set_user_admin, delete_user, get_locked_settings, set_locked_setting, remove_locked_setting,
     add_rule_request, list_rule_requests, get_rule_request, approve_rule_request, reject_rule_request, delete_rule_request,
     update_rule_request, get_or_create_blocked_page_user_id, list_all_profiles_for_admin,
+    get_global_rules, get_global_rule, create_global_rule, update_global_rule, delete_global_rule,
 )
 from .auth import create_user_access_token, get_current_user, get_current_admin
 from .database import init_db_schema, db_connection
@@ -884,6 +887,37 @@ async def get_active_resolver_state(current_user: dict = Depends(get_current_use
     }
 
 
+@app.post("/api/resolver/test-url")
+async def resolver_test_url(
+    body: ResolverTestUrlBody,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Run the same URLPolicyResolver used by the proxy on a given URL.
+    Returns state (allow/block/review) and the matching rule if any.
+    """
+    from core.policy_processor.policy_loader import get_policy_resolver
+    from core.policy_processor.policy_database import get_profile_mode
+    from core.policy_processor.url_policy_resolver import URLPolicyResolverError
+
+    url = body.url.strip()
+    if "://" not in url:
+        url = "https://" + url
+
+    try:
+        resolver = get_policy_resolver()
+        result = resolver.resolve(url, body.type)
+    except URLPolicyResolverError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if result is None:
+        return {"state": "review", "rule": None, "default_mode": get_profile_mode()}
+
+    state = result.get("state", "block")
+    rule = result if result.get("domain") else None
+    return {"state": state, "rule": rule, "default_mode": get_profile_mode()}
+
+
 # ========== Rule Requests (user requests for admin to approve) ==========
 
 # Same value must be set when running the proxy (mitmdump). Default "dev-secret" for local dev only.
@@ -1101,7 +1135,7 @@ async def approve_rule_request_endpoint(
 ):
     """Admin approves a request: create the rule on the given profile."""
     try:
-        req = approve_rule_request(request_id, body.profile_id)
+        req = approve_rule_request(request_id, profile_id=body.profile_id)
         return {"status": "approved", "request": RuleRequestResponse(**{**req, "include_subdomains": bool(req.get("include_subdomains"))})}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1137,6 +1171,88 @@ async def delete_rule_request_endpoint(
 
 
 # ========== Admin Endpoints ==========
+
+# ---------- Global rules (רשימה גלובלית – רק אדמין) ----------
+
+@app.get("/api/admin/global-rules", response_model=List[GlobalRuleResponse])
+async def admin_list_global_rules(admin: dict = Depends(get_current_admin)):
+    """List all global rules (base whitelist). Admin only."""
+    rules = get_global_rules()
+    return [GlobalRuleResponse(**r) for r in rules]
+
+
+@app.post("/api/admin/global-rules", response_model=GlobalRuleResponse, status_code=status.HTTP_201_CREATED)
+async def admin_create_global_rule(
+    data: GlobalRuleCreate,
+    admin: dict = Depends(get_current_admin),
+):
+    """Create a global rule. Admin only."""
+    try:
+        rule = create_global_rule(
+            url=data.url,
+            action=data.action,
+            rule_type=data.type,
+            include_subdomains=data.include_subdomains,
+            tags=data.tags,
+        )
+        sync_crm_rules_to_core(None)
+        return GlobalRuleResponse(**rule)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/admin/global-rules/{rule_id}", response_model=GlobalRuleResponse)
+async def admin_get_global_rule(
+    rule_id: int,
+    admin: dict = Depends(get_current_admin),
+):
+    """Get a single global rule. Admin only."""
+    rule = get_global_rule(rule_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail="כלל גלובלי לא נמצא")
+    return GlobalRuleResponse(**rule)
+
+
+@app.put("/api/admin/global-rules/{rule_id}", response_model=GlobalRuleResponse)
+async def admin_update_global_rule(
+    rule_id: int,
+    data: GlobalRuleUpdate,
+    admin: dict = Depends(get_current_admin),
+):
+    """Update a global rule. Admin only."""
+    rule = get_global_rule(rule_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail="כלל גלובלי לא נמצא")
+    try:
+        updated = update_global_rule(
+            rule_id,
+            url=data.url,
+            action=data.action,
+            rule_type=data.type,
+            include_subdomains=data.include_subdomains,
+            tags=data.tags,
+        )
+        sync_crm_rules_to_core(None)
+        return GlobalRuleResponse(**updated)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/admin/global-rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def admin_delete_global_rule(
+    rule_id: int,
+    admin: dict = Depends(get_current_admin),
+):
+    """Delete a global rule. Admin only."""
+    rule = get_global_rule(rule_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail="כלל גלובלי לא נמצא")
+    deleted = delete_global_rule(rule_id)
+    if deleted:
+        sync_crm_rules_to_core(None)
+    else:
+        raise HTTPException(status_code=404, detail="כלל גלובלי לא נמצא")
+
 
 @app.get("/api/admin/users")
 async def admin_list_users(
