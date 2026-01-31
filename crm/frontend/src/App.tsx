@@ -3,7 +3,7 @@
  */
 import React, { useEffect } from 'react';
 import './App.css';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useSearchParams } from 'react-router-dom';
 import { ThemeProvider } from '@mui/material/styles';
 import { CssBaseline } from '@mui/material';
 import rtlPlugin from 'stylis-plugin-rtl';
@@ -21,8 +21,8 @@ import SchedulesPage from './pages/SchedulesPage';
 import ProfileEditPage from './pages/ProfileEditPage';
 import AdminUsersPage from './pages/AdminUsersPage';
 import AdminRequestsPage from './pages/AdminRequestsPage';
-import RequestOpenPage from './pages/RequestOpenPage';
-import RequestChangePage from './pages/RequestChangePage';
+import AdminGlobalRulesPage from './pages/AdminGlobalRulesPage';
+import MyRequestsPage from './pages/MyRequestsPage';
 import AdminLayout from './components/AdminLayout';
 
 // Create RTL cache
@@ -31,10 +31,33 @@ const cacheRtl = createCache({
   stylisPlugins: [rtlPlugin],
 });
 
-// Protected Route component
+// When authenticated user visits /login with redirect param, go to redirect destination
+const LoginRedirect: React.FC = () => {
+  const [searchParams] = useSearchParams();
+  const redirect = searchParams.get('redirect');
+  const to = redirect && redirect.startsWith('/') ? redirect : '/';
+  return <Navigate to={to} replace />;
+};
+
+// Redirect /request-open and /request-change to /requests with params
+const RequestRedirect: React.FC<{ to: string; requestType: 'open' | 'change' }> = ({ to, requestType }) => {
+  const [searchParams] = useSearchParams();
+  const url = searchParams.get('url') || '';
+  const params = new URLSearchParams();
+  if (url) params.set('url', url);
+  params.set('request_type', requestType);
+  return <Navigate to={`${to}?${params.toString()}`} replace />;
+};
+
+// Protected Route component - redirect to login with return URL
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isAuthenticated } = useAuthStore();
-  return isAuthenticated ? <>{children}</> : <Navigate to="/login" />;
+  const location = useLocation();
+  if (!isAuthenticated) {
+    const redirect = encodeURIComponent(location.pathname + location.search);
+    return <Navigate to={`/login?redirect=${redirect}`} replace />;
+  }
+  return <>{children}</>;
 };
 
 function App() {
@@ -50,7 +73,7 @@ function App() {
         <CssBaseline />
         <BrowserRouter>
         <Routes>
-          <Route path="/login" element={isAuthenticated ? <Navigate to="/" /> : <LoginPage />} />
+          <Route path="/login" element={isAuthenticated ? <LoginRedirect /> : <LoginPage />} />
           <Route path="/register" element={isAuthenticated ? <Navigate to="/" /> : <RegisterWizard />} />
           <Route
             path="/"
@@ -143,21 +166,29 @@ function App() {
             }
           />
           <Route
-            path="/request-open"
+            path="/admin/global-rules"
             element={
               <ProtectedRoute>
                 <AdminLayout>
-                  <RequestOpenPage />
+                  <AdminGlobalRulesPage />
                 </AdminLayout>
               </ProtectedRoute>
             }
           />
           <Route
+            path="/request-open"
+            element={<RequestRedirect to="/requests" requestType="open" />}
+          />
+          <Route
             path="/request-change"
+            element={<RequestRedirect to="/requests" requestType="change" />}
+          />
+          <Route
+            path="/requests"
             element={
               <ProtectedRoute>
                 <AdminLayout>
-                  <RequestChangePage />
+                  <MyRequestsPage />
                 </AdminLayout>
               </ProtectedRoute>
             }

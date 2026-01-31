@@ -36,6 +36,7 @@ const LoginPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const registrationMessage = location.state?.message as string | undefined;
+  const redirectTo = new URLSearchParams(location.search).get('redirect') || '/';
 
   const mode: LoginMode = password.length > 0 ? 'password' : 'phone';
 
@@ -126,7 +127,7 @@ const LoginPage: React.FC = () => {
     setFormErrors([]);
     try {
       await loginWithPhoneCode(phone, code);
-      navigate('/');
+      navigate(redirectTo, { replace: true });
     } catch (err: unknown) {
       const ax = err as { response?: { data?: { detail?: string | { msg?: string; message?: string }[] } }; message?: string };
       const raw = ax?.response?.data?.detail ?? (err instanceof Error ? err.message : undefined) ?? 'אימות הקוד נכשל';
@@ -145,7 +146,7 @@ const LoginPage: React.FC = () => {
     setFormErrors([]);
     try {
       await login(phone, password);
-      navigate('/');
+      navigate(redirectTo, { replace: true });
     } catch (err: unknown) {
       const ax = err as { response?: { data?: { detail?: string | { msg?: string; message?: string }[] } }; message?: string };
       const raw = ax?.response?.data?.detail ?? (err instanceof Error ? err.message : undefined) ?? 'התחברות נכשלה';

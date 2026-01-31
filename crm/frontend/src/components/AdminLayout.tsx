@@ -30,6 +30,8 @@ import {
   Person as PersonIcon,
   People as PeopleIcon,
   Logout as LogoutIcon,
+  Public as PublicIcon,
+  Assignment as AssignmentIcon,
 } from '@mui/icons-material';
 import { useAuthStore } from '../store/authStore';
 import { getAvatarUrl } from '../api/auth';
@@ -58,6 +60,11 @@ const navItems: NavItem[] = [
     label: 'תזמונים',
     icon: <ScheduleIcon />,
     path: '/schedules',
+  },
+  {
+    label: 'בקשות שלי',
+    icon: <AssignmentIcon />,
+    path: '/requests',
   },
 ];
 
@@ -187,6 +194,34 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   primaryTypographyProps={{
                     fontSize: '0.95rem',
                     fontWeight: isActive('/admin/requests') ? 600 : 400,
+                  }}
+                />
+              </ListItemButton>
+            </ListItem>
+            <ListItem disablePadding>
+              <ListItemButton
+                selected={isActive('/admin/global-rules')}
+                onClick={() => {
+                  navigate('/admin/global-rules');
+                  setMobileOpen(false);
+                }}
+                sx={{
+                  minHeight: 48,
+                  '&.Mui-selected': {
+                    backgroundColor: 'action.selected',
+                    borderRight: '3px solid',
+                    borderColor: 'primary.main',
+                  },
+                }}
+              >
+                <ListItemIcon sx={{ minWidth: 40 }}>
+                  <PublicIcon />
+                </ListItemIcon>
+                <ListItemText
+                  primary="רשימה גלובלית"
+                  primaryTypographyProps={{
+                    fontSize: '0.95rem',
+                    fontWeight: isActive('/admin/global-rules') ? 600 : 400,
                   }}
                 />
               </ListItemButton>
