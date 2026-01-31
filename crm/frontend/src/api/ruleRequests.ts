@@ -64,8 +64,9 @@ export const ruleRequestsApi = {
     await apiClient.delete(`/api/rule-requests/${id}`);
   },
 
-  approve: async (id: number, profileId: number): Promise<{ status: string; request: RuleRequest }> => {
-    const response = await apiClient.post<{ status: string; request: RuleRequest }>(`/api/admin/rule-requests/${id}/approve`, { profile_id: profileId });
+  /** Approve request: adds rule to global list only. profileId is ignored (kept for API compat). */
+  approve: async (id: number, profileId?: number): Promise<{ status: string; request: RuleRequest }> => {
+    const response = await apiClient.post<{ status: string; request: RuleRequest }>(`/api/admin/rule-requests/${id}/approve`, { profile_id: profileId ?? null });
     return response.data;
   },
 

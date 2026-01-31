@@ -174,4 +174,19 @@ export const resolverApi = {
     const response = await apiClient.get<{ rules: unknown[] }>('/api/resolver/rules');
     return response.data;
   },
+
+  /**
+   * Test which rule applies to a URL using the same URLPolicyResolver as the proxy.
+   * Returns { state, rule?, default_mode }.
+   */
+  testUrl: async (url: string, type: 'html' | 'image' = 'html'): Promise<ResolverTestUrlResponse> => {
+    const response = await apiClient.post<ResolverTestUrlResponse>('/api/resolver/test-url', { url: url.trim(), type });
+    return response.data;
+  },
 };
+
+export interface ResolverTestUrlResponse {
+  state: 'allow' | 'block' | 'review';
+  rule: { domain: string; path?: string; type?: string; state: string; tags?: string[] } | null;
+  default_mode: string;
+}
