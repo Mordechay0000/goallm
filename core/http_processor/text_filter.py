@@ -228,6 +228,41 @@ def _filter_plain_text(
     return "".join(result), block_page, block_reason, debug_info
 
 
+def _filter_json_value(value: Any) -> Any:
+    """
+    Recursively walk JSON structure; filter only string values (replace with filtered text).
+    Keys and structure are unchanged. Returns modified structure.
+    """
+    if isinstance(value, str):
+        filtered, _block, _reason, _debug = _filter_plain_text(value)
+        return filtered
+    if isinstance(value, dict):
+        return {k: _filter_json_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_filter_json_value(item) for item in value]
+    return value
+
+
+def _filter_json(text: str, url: str, content_type: str) -> Tuple[bytes, Dict[str, Any]]:
+    """
+    Parse JSON, filter only string values (preserve structure and keys), re-serialize.
+    Never blocks the whole response – only replaces text content.
+    Returns (filtered_bytes, debug_info).
+    """
+    try:
+        data = json.loads(text)
+    except Exception as e:
+        logger.warning("JSON parse failed for text filter %s: %s", url or content_type, e)
+        return text.encode("utf-8"), {"url": url, "content_type": content_type, "block_reason": "", "matched": [], "counts": {}, "snippet": ""}
+    filtered_data = _filter_json_value(data)
+    try:
+        out = json.dumps(filtered_data, ensure_ascii=False)
+        return out.encode("utf-8"), {"url": url, "content_type": content_type or "", "block_reason": "", "matched": [], "counts": {}, "snippet": ""}
+    except Exception as e:
+        logger.warning("JSON serialize failed after filter %s: %s", url or content_type, e)
+        return text.encode("utf-8"), {"url": url, "content_type": content_type or "", "block_reason": "", "matched": [], "counts": {}, "snippet": ""}
+
+
 def _encode_debug_b64(debug: Dict[str, Any]) -> str:
     """Encode full debug dict to base64 for display on blocked page (decode for full debugging)."""
     try:
@@ -273,16 +308,28 @@ def filter_text_content(
         else:
             text = content.decode("utf-8", errors="replace")
 
-        is_html = "<" in text and ">" in text and ("<html" in text.lower() or "<body" in text.lower() or "<div" in text.lower())
-        logger.debug("text_filter: decoded len=%s is_html=%s", len(text), is_html)
-
-        if is_html:
-            out_bytes, block_page, block_reason, debug_info = _filter_html(text, url, content_type)
-            logger.debug("text_filter: _filter_html done block_page=%s reason=%s", block_page, block_reason)
+        # JSON: filter only string values, preserve structure and keys
+        ct_lower = (content_type or "").lower()
+        is_json = "application/json" in ct_lower or (
+            text.strip().startswith("{") or text.strip().startswith("[")
+        )
+        if is_json:
+            logger.debug("text_filter: treating as JSON (content_type=%s)", content_type)
+            out_bytes, debug_info = _filter_json(text, url, content_type)
+            block_page = False
+            block_reason = ""
+            logger.debug("text_filter: _filter_json done (structure preserved)")
         else:
-            filtered, block_page, block_reason, debug_info = _filter_plain_text(text)
-            out_bytes = filtered.encode("utf-8")
-            logger.debug("text_filter: _filter_plain_text done block_page=%s reason=%s", block_page, block_reason)
+            is_html = "<" in text and ">" in text and ("<html" in text.lower() or "<body" in text.lower() or "<div" in text.lower())
+            logger.debug("text_filter: decoded len=%s is_html=%s", len(text), is_html)
+
+            if is_html:
+                out_bytes, block_page, block_reason, debug_info = _filter_html(text, url, content_type)
+                logger.debug("text_filter: _filter_html done block_page=%s reason=%s", block_page, block_reason)
+            else:
+                filtered, block_page, block_reason, debug_info = _filter_plain_text(text)
+                out_bytes = filtered.encode("utf-8")
+                logger.debug("text_filter: _filter_plain_text done block_page=%s reason=%s", block_page, block_reason)
 
         full_debug: Dict[str, Any] = {
             "url": url,
