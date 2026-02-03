@@ -1,3 +1,4 @@
+import re
 from urllib.parse import urlparse, unquote
 from typing import List, Dict, Optional
 
@@ -56,16 +57,36 @@ class URLPolicyResolver:
 
     # ---------- Normalization ----------
 
+    def _normalize_path(self, path: str) -> str:
+        """Normalize path: collapse //, resolve . and .., unquote, strip trailing /."""
+        if not path or path == "/":
+            return "/"
+        path = unquote(path)
+        path = re.sub(r"/+", "/", path.strip("/"))
+        parts = path.split("/")
+        out = []
+        for p in parts:
+            if p == "." or p == "":
+                continue
+            if p == "..":
+                if out:
+                    out.pop()
+                continue
+            out.append(p)
+        result = "/" + "/".join(out) if out else "/"
+        return result.rstrip("/") if result != "/" else "/"
+
     def _normalize_url(self, url: str) -> tuple[str, str]:
-        parsed = urlparse(url)
+        """Normalize URL before matching: scheme, domain (lowercase, collapse ..), path (//, ., ..)."""
+        u = (url or "").strip()
+        if "://" not in u:
+            u = "https://" + u
+        parsed = urlparse(u)
         domain = (parsed.hostname or "").lower().rstrip(".")
-        path = unquote(parsed.path or "")
-
-        if path != "/" and path.endswith("/"):
-            path = path[:-1]
-
-        if not path:
-            path = "/"
+        while ".." in domain:
+            domain = domain.replace("..", ".")
+        domain = ".".join(p for p in domain.split(".") if p)
+        path = self._normalize_path(parsed.path or "")
 
         self._log(f"Normalized URL -> domain={domain}, path={path}")
         return domain, path

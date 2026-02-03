@@ -85,6 +85,13 @@ def init_db_schema():
         db_connection.commit()
         logger.info("Added source column to url_policies (global/user)")
 
+    # Migration: text_filter_enabled (per global rule; default 1)
+    cursor = db_connection.execute(f"PRAGMA table_info({POLICIES_TABLE_NAME})")
+    columns = [row[1] for row in cursor.fetchall()]
+    if "text_filter_enabled" not in columns:
+        db_connection.execute(f"ALTER TABLE {POLICIES_TABLE_NAME} ADD COLUMN text_filter_enabled INTEGER NOT NULL DEFAULT 1")
+        logger.info("Added text_filter_enabled to url_policies")
+
     db_connection.execute(f"""
         CREATE INDEX IF NOT EXISTS idx_domain_path 
         ON {POLICIES_TABLE_NAME}(domain, path)
@@ -115,6 +122,19 @@ def init_db_schema():
     db_connection.execute(
         "INSERT OR IGNORE INTO resolver_settings (key, value) VALUES ('profile_mode', 'whitelist')"
     )
+
+    # Global filter switches: each filter type can be enabled/disabled independently (1 = on, 0 = off)
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS filter_switches (
+            key TEXT PRIMARY KEY,
+            value INTEGER NOT NULL DEFAULT 1
+        )
+    """)
+    for key in ("url_policy", "text_filter", "image_filter", "embedded_image_filter"):
+        db_connection.execute(
+            "INSERT OR IGNORE INTO filter_switches (key, value) VALUES (?, 1)",
+            (key,),
+        )
 
     db_connection.commit()
     logger.info("Policies database schema initialized successfully")
@@ -149,6 +169,45 @@ def get_profile_mode() -> str:
 def get_core_resolver_db_path() -> str:
     """Return the DB path core uses (for debugging)."""
     return str(_db_path)
+
+
+FILTER_SWITCH_KEYS = ("url_policy", "text_filter", "image_filter", "embedded_image_filter")
+
+
+def get_filter_switches() -> Dict[str, bool]:
+    """Get global filter switches. Each filter works independently when enabled. Default all True."""
+    cursor = db_connection.execute(
+        "SELECT key, value FROM filter_switches WHERE key IN (?, ?, ?, ?)",
+        FILTER_SWITCH_KEYS,
+    )
+    out = {k: True for k in FILTER_SWITCH_KEYS}
+    for row in cursor.fetchall():
+        out[row[0]] = bool(row[1])
+    return out
+
+
+def set_filter_switch(key: str, enabled: bool) -> None:
+    """Set one filter switch. key: url_policy, text_filter, image_filter, embedded_image_filter."""
+    if key not in FILTER_SWITCH_KEYS:
+        raise ValueError(f"Invalid filter key: {key}")
+    db_connection.execute(
+        "INSERT OR REPLACE INTO filter_switches (key, value) VALUES (?, ?)",
+        (key, 1 if enabled else 0),
+    )
+    db_connection.commit()
+    logger.info("Filter switch %s set to %s", key, enabled)
+
+
+def set_filter_switches(switches: Dict[str, bool]) -> None:
+    """Set multiple filter switches. Only provided keys are updated."""
+    for key, enabled in switches.items():
+        if key in FILTER_SWITCH_KEYS:
+            db_connection.execute(
+                "INSERT OR REPLACE INTO filter_switches (key, value) VALUES (?, ?)",
+                (key, 1 if enabled else 0),
+            )
+    db_connection.commit()
+    logger.info("Filter switches updated: %s", switches)
 
 
 def _tags_to_str(tags: Optional[List[str]]) -> Optional[str]:
@@ -196,7 +255,8 @@ def validate_policy(domain: str, path: Optional[str] = None,
 def add_policy(domain: str, path: Optional[str] = None,
                policy_type: str = "*", state: str = "block",
                description: Optional[str] = None, enabled: bool = True,
-               tags: Optional[List[str]] = None, source: str = "user") -> Dict:
+               tags: Optional[List[str]] = None, source: str = "user",
+               text_filter_enabled: bool = True) -> Dict:
     """Add a new policy. source: 'global' (base whitelist) or 'user'. Returns the created policy dict."""
     if source not in ("global", "user"):
         source = "user"
@@ -207,13 +267,14 @@ def add_policy(domain: str, path: Optional[str] = None,
     now = int(datetime.now().timestamp())
     path = path.strip() if path else None
     tags_str = _tags_to_str(tags) if tags else None
+    tf = 1 if text_filter_enabled else 0
 
     try:
         db_connection.execute(f"""
             INSERT INTO {POLICIES_TABLE_NAME} 
-            (domain, path, type, state, description, enabled, created_at, updated_at, tags, source)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (domain, path, policy_type, state, description, 1 if enabled else 0, now, now, tags_str, source))
+            (domain, path, type, state, description, enabled, created_at, updated_at, tags, source, text_filter_enabled)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (domain, path, policy_type, state, description, 1 if enabled else 0, now, now, tags_str, source, tf))
         db_connection.commit()
         
         # Get the inserted row
@@ -235,7 +296,7 @@ def update_policy(policy_id: int, domain: Optional[str] = None,
                   path: Optional[str] = None, policy_type: Optional[str] = None,
                   state: Optional[str] = None, description: Optional[str] = None,
                   enabled: Optional[bool] = None, tags: Optional[List[str]] = None,
-                  source: Optional[str] = None) -> Dict:
+                  source: Optional[str] = None, text_filter_enabled: Optional[bool] = None) -> Dict:
     """Update an existing policy. Returns the updated policy dict."""
     cursor = db_connection.execute(f"""
         SELECT * FROM {POLICIES_TABLE_NAME} WHERE id = ?
@@ -256,6 +317,7 @@ def update_policy(policy_id: int, domain: Optional[str] = None,
     new_source = source if source is not None else current.get("source", "user")
     if new_source not in ("global", "user"):
         new_source = "user"
+    new_text_filter = text_filter_enabled if text_filter_enabled is not None else current.get("text_filter_enabled", True)
 
     # Validate
     error = validate_policy(new_domain, new_path, new_type, new_state, new_tags if isinstance(new_tags, list) else None)
@@ -270,10 +332,10 @@ def update_policy(policy_id: int, domain: Optional[str] = None,
         db_connection.execute(f"""
             UPDATE {POLICIES_TABLE_NAME}
             SET domain = ?, path = ?, type = ?, state = ?,
-                description = ?, enabled = ?, updated_at = ?, tags = ?, source = ?
+                description = ?, enabled = ?, updated_at = ?, tags = ?, source = ?, text_filter_enabled = ?
             WHERE id = ?
         """, (new_domain, new_path, new_type, new_state,
-              new_description, 1 if new_enabled else 0, now, new_tags_str, new_source, policy_id))
+              new_description, 1 if new_enabled else 0, now, new_tags_str, new_source, 1 if new_text_filter else 0, policy_id))
         db_connection.commit()
         
         # Return updated policy
@@ -342,7 +404,7 @@ def get_global_policies_for_resolver() -> List[Dict]:
     """Get enabled global (base whitelist) policies for resolver."""
     policies = get_all_policies(enabled_only=True, source_filter="global")
     return [
-        {"domain": p["domain"], "path": p["path"], "type": p["type"], "state": p["state"], "tags": p.get("tags", [])}
+        {"domain": p["domain"], "path": p["path"], "type": p["type"], "state": p["state"], "tags": p.get("tags", []), "text_filter_enabled": p.get("text_filter_enabled", True)}
         for p in policies
     ]
 
@@ -462,6 +524,10 @@ def row_to_dict(row: tuple) -> Dict:
         d["source"] = (row[10] or "user")
     else:
         d["source"] = "user"
+    if len(row) > 11:
+        d["text_filter_enabled"] = bool(row[11])
+    else:
+        d["text_filter_enabled"] = True
     return d
 
 
