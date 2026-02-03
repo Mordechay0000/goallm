@@ -28,6 +28,12 @@ def _is_html_response(flow: http.HTTPFlow) -> bool:
     return "text/html" in ct or (flow.response.raw_content and ct.startswith("text/") and "html" in ct)
 
 
+def _is_text_or_json_response(flow: http.HTTPFlow) -> bool:
+    """True for text/plain or application/json (and variants)."""
+    ct = (flow.response.headers.get("content-type") or "").lower()
+    return "text/plain" in ct or "application/json" in ct or ct.strip().startswith("application/json")
+
+
 def _apply_site_policy_for_html(flow: http.HTTPFlow) -> Tuple[bool, Optional[dict]]:
     """Apply site policy for HTML responses. Returns (replaced, rule). If allow: (False, rule); else (True, None)."""
     url = flow.request.url
@@ -166,7 +172,7 @@ def process_http_response(flow: http.HTTPFlow) -> None:
                         body = get_blocked_page_bytes(
                             request_url=url,
                             rule=rule,
-                            tags=rule.get("tags") or [],
+                            tags=(rule.get("tags") or []) if rule else [],
                             block_reason="text_filter",
                             block_reason_detail=block_reason,
                             block_debug_b64=block_debug_b64,
@@ -217,6 +223,59 @@ def process_http_response(flow: http.HTTPFlow) -> None:
             flow.response.raw_content = body_to_send
             flow.response.headers["Content-Length"] = str(len(body_to_send))
             logger.debug("HTML response sent - URL: %s", url)
+        return
+
+    # Text/plain or application/json: text filter independent of url_policy switch
+    if _is_text_or_json_response(flow):
+        rule = None
+        url_policy_on = switches.get("url_policy", True)
+        if url_policy_on:
+            try:
+                resolver = get_policy_resolver()
+                rule = resolver.resolve(url, "html")
+                if rule is not None and rule.get("state") in ("block", "review"):
+                    logger.debug("Text/JSON response: policy block/review - URL: %s (pass through)", url)
+                    rule = None
+                    # Don't replace with blocked page (would break API clients); pass through
+            except Exception as e:
+                logger.warning("Policy resolution failed for text/json %s: %s", url, e)
+        # Text filter independent: when url_policy OFF run on all; when ON run only when site allowed
+        text_switch_on = switches.get("text_filter", True)
+        if not url_policy_on:
+            text_filter_on = text_switch_on  # Independent: filter all when switch on
+        else:
+            text_filter_on = (
+                text_switch_on
+                and rule is not None
+                and rule.get("state") == "allow"
+                and rule.get("text_filter_enabled", True)
+            )
+        has_content = bool(flow.response.raw_content)
+        if text_filter_on and has_content:
+            try:
+                try:
+                    body_bytes = flow.response.content
+                except ValueError:
+                    body_bytes = flow.response.raw_content
+                if body_bytes:
+                    content_type = (flow.response.headers.get("content-type") or "").strip()
+                    logger.info("text_filter (text/json): applying to URL: %s (content_len=%s)", url, len(body_bytes))
+                    filtered, block_page, block_reason, debug_info = filter_text_content(
+                        body_bytes,
+                        url=url,
+                        content_type=content_type,
+                        text_filter_enabled=True,
+                        rule_context=rule,
+                    )
+                    logger.debug("text_filter text/json: block_page=%s filtered_len=%s", block_page, len(filtered))
+                    # For text/json we don't replace with blocked HTML page (preserve type)
+                    flow.response.headers.pop("transfer-encoding", None)
+                    flow.response.headers.pop("content-encoding", None)
+                    flow.response.raw_content = filtered
+                    flow.response.headers["Content-Length"] = str(len(filtered))
+                    logger.debug("Text/JSON filter applied - URL: %s", url)
+            except Exception as e:
+                logger.warning("Text filter failed for text/json %s: %s", url, e, exc_info=True)
         return
 
     # Direct image responses
