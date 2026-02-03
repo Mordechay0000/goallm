@@ -14,12 +14,14 @@ from core.image_processing.image_status_db import (
     get_image_status,
     save_analysis_result,
     mark_pending,
+    mark_error,
 )
 from core.image_processing.image_replacement import (
     get_checking_image,
     get_blocked_image,
     get_error_image,
 )
+from core.image_processing.image_hash_normalize import normalize_image_for_hash
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +73,14 @@ def _on_analysis_done(
         logger.info("Saved analysis for hash %s", h8)
     else:
         logger.error("Image analysis failed for hash %s: %s", h8, error)
+        mark_error(
+            image_details["image_hash"],
+            error_message=error,
+            image_url=image_details.get("image_url"),
+            mime_type=image_details.get("mime_type"),
+            width=image_details.get("width"),
+            height=image_details.get("height"),
+        )
 
 
 _image_queue = ImageProcessingQueue(
@@ -120,7 +130,10 @@ def get_image_with_status(
     )
     logger.debug("Image data size: %s bytes", len(image_data))
 
-    h = hashlib.sha256(image_data).hexdigest()
+    to_hash = normalize_image_for_hash(image_data, image_mime_type)
+    if to_hash is None:
+        to_hash = image_data
+    h = hashlib.sha256(to_hash).hexdigest()
     h8 = h[:8] + "..."
     logger.debug("Image hash: %s", h8)
 

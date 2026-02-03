@@ -17,10 +17,23 @@ _db.execute("PRAGMA journal_mode=WAL;")
 _db.execute("PRAGMA synchronous=NORMAL;")
 
 
+# גרסת אלגוריתם ה־hash: 1 = raw bytes, 2 = normalized (strip meta, canonical format)
+HASH_VERSION = 2
+
+
 def init_schema() -> None:
-    """Create or migrate image_status table."""
+    """Create or migrate image_status table. On hash version upgrade, clear table (old hashes invalid)."""
     logger.info("Initializing image status database schema")
     logger.debug("Table name: %s", IMAGE_STATUS_TABLE_NAME)
+
+    _db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+        """
+    )
 
     _db.execute(
         f"""
@@ -50,6 +63,21 @@ def init_schema() -> None:
             logger.debug("Added column %s", col)
         except sqlite3.OperationalError:
             logger.debug("Column %s already exists", col)
+
+    cur = _db.execute("SELECT value FROM meta WHERE key = 'hash_version'")
+    row = cur.fetchone()
+    stored_version = int(row[0]) if row and row[0].strip().isdigit() else 1
+    if stored_version < HASH_VERSION:
+        _db.execute(f"DELETE FROM {IMAGE_STATUS_TABLE_NAME}")
+        _db.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES ('hash_version', ?)",
+            (str(HASH_VERSION),),
+        )
+        logger.info(
+            "Image status table cleared (hash version upgrade %s -> %s); hashes are now normalized",
+            stored_version,
+            HASH_VERSION,
+        )
 
     _db.commit()
     logger.info("Image status schema initialized")
@@ -166,8 +194,51 @@ def mark_pending(
     _db.commit()
 
 
+def mark_error(
+    image_hash: str,
+    error_message: str | None = None,
+    image_url: str | None = None,
+    mime_type: str | None = None,
+    width: int | None = None,
+    height: int | None = None,
+) -> None:
+    """Mark image as error (e.g. analysis failed or timed out)."""
+    logger.info(
+        "Marking error - Hash: %s, URL: %s, error: %s",
+        _h8(image_hash),
+        image_url,
+        (error_message or "")[:200],
+    )
+    _db.execute(
+        f"""
+        INSERT INTO {IMAGE_STATUS_TABLE_NAME} (
+            image_hash, status, image_url, mime_type, width, height, updated_at
+        ) VALUES (?, 'error', ?, ?, ?, ?, ?)
+        ON CONFLICT(image_hash) DO UPDATE SET
+            status = 'error',
+            image_url = COALESCE(excluded.image_url, image_url),
+            mime_type = COALESCE(excluded.mime_type, mime_type),
+            width = COALESCE(excluded.width, width),
+            height = COALESCE(excluded.height, height),
+            updated_at = excluded.updated_at
+        """,
+        (image_hash, image_url, mime_type, width, height, int(time.time())),
+    )
+    _db.commit()
+
+
 def _h8(h: str) -> str:
     return h[:8] + "..." if isinstance(h, str) and len(h) >= 8 else "unknown"
+
+
+def clear_all_image_status() -> int:
+    """Empty the image_status table (e.g. after hash algorithm change). Returns number of rows deleted."""
+    cur = _db.execute(f"SELECT COUNT(*) FROM {IMAGE_STATUS_TABLE_NAME}")
+    count = cur.fetchone()[0] if cur else 0
+    _db.execute(f"DELETE FROM {IMAGE_STATUS_TABLE_NAME}")
+    _db.commit()
+    logger.info("Cleared all image status rows: %s", count)
+    return count
 
 
 init_schema()
