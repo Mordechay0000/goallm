@@ -1,18 +1,22 @@
 """
 SQLite persistence for image status (allowed/blocked/pending) and analysis results.
+Uses project-root .storage so proxy (run from any CWD) and CRM share the same DB.
 """
 import logging
-import os
 import sqlite3
 import time
+from pathlib import Path
 from typing import Any
 
 from data.constants import IMAGE_STATUS_TABLE_NAME
 
 logger = logging.getLogger(__name__)
 
-os.makedirs(".storage", exist_ok=True)
-_db = sqlite3.connect(".storage/image_status.db", check_same_thread=False)
+_project_root = Path(__file__).resolve().parent.parent.parent
+_storage_dir = _project_root / ".storage"
+_storage_dir.mkdir(parents=True, exist_ok=True)
+_db_path = _storage_dir / "image_status.db"
+_db = sqlite3.connect(str(_db_path), check_same_thread=False)
 _db.execute("PRAGMA journal_mode=WAL;")
 _db.execute("PRAGMA synchronous=NORMAL;")
 

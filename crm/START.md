@@ -11,22 +11,18 @@
 
 ## הרצה ידנית
 
+> **התקנה ראשונית:** הרץ `bash setup.sh` משורש הפרויקט (`goallm/`).
+
 ### Backend:
 ```bash
 cd crm
-./run_fastapi.sh
-```
-
-או:
-```bash
-cd crm
-uvicorn crm.main:app --host 127.0.0.1 --port 8000 --reload
+bash run_fastapi.sh
 ```
 
 ### Frontend:
 ```bash
 cd crm/frontend
-npm run dev
+bash run_dev.sh
 ```
 
 ---
@@ -82,8 +78,7 @@ curl -X POST http://127.0.0.1:8000/api/auth/login \
 
 3. **התקן תלויות:** (משורש הפרויקט `goallm/`)
    ```bash
-   pip install -r requirements.txt
-   cd crm/frontend && npm install
+   bash setup.sh
    ```
 
 ---

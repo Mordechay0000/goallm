@@ -1,23 +1,25 @@
 """
 Central logging setup: file + stdout, uncaught-exception handler.
+Uses project-root .storage so logs are consistent regardless of CWD.
 """
 import logging
-import os
 import sys
+from pathlib import Path
 
-STORAGE_DIR = ".storage"
-LOG_FILE = ".storage/app.log"
+_project_root = Path(__file__).resolve().parent.parent.parent
+STORAGE_DIR = _project_root / ".storage"
+LOG_FILE = STORAGE_DIR / "app.log"
 
 
 def setup_logging() -> None:
     """Configure logging to file and stdout. Idempotent modulo basicConfig."""
-    os.makedirs(STORAGE_DIR, exist_ok=True)
+    STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
     logging.basicConfig(
         level=logging.DEBUG,
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
         handlers=[
-            logging.FileHandler(LOG_FILE, encoding="utf-8"),
+            logging.FileHandler(str(LOG_FILE), encoding="utf-8"),
             logging.StreamHandler(sys.stdout),
         ],
     )

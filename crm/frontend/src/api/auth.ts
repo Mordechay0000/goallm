@@ -3,7 +3,7 @@
  */
 import apiClient from './client';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+const API_BASE = import.meta.env.VITE_API_URL || '';
 
 /** Resolve avatar URL (relative paths get API base). */
 export function getAvatarUrl(avatar_url: string | null | undefined): string {

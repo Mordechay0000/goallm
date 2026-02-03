@@ -2,20 +2,51 @@
 Database schema and management for CRM system.
 Supports Users, Profiles, Rules, and Schedules.
 """
-import sqlite3
 import logging
 import os
+import sqlite3
+from pathlib import Path
 from typing import List, Dict, Optional
 from datetime import datetime
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Ensure .storage directory exists
-os.makedirs(".storage", exist_ok=True)
+# Storage dir: GOALLM_STORAGE_DIR env, or project .storage, or fallback $HOME/.goallm
+_project_root = Path(__file__).resolve().parent.parent
 
-db_path = Path(__file__).resolve().parent.parent / ".storage" / "crm.db"
-db_connection = sqlite3.connect(str(db_path), check_same_thread=False)
+
+def _get_storage_dir():
+    if os.environ.get("GOALLM_STORAGE_DIR"):
+        return Path(os.environ["GOALLM_STORAGE_DIR"])
+    return _project_root / ".storage"
+
+
+def _init_db_connection():
+    storage_dir = _get_storage_dir()
+    db_path = storage_dir / "crm.db"
+    os.makedirs(str(storage_dir), mode=0o755, exist_ok=True)
+    try:
+        return sqlite3.connect(str(db_path), check_same_thread=False, timeout=10)
+    except sqlite3.OperationalError:
+        fallback = Path.home() / ".goallm" / "storage"
+        if fallback.resolve() == storage_dir.resolve():
+            raise
+        os.makedirs(str(fallback), mode=0o755, exist_ok=True)
+        fallback_db = fallback / "crm.db"
+        try:
+            conn = sqlite3.connect(str(fallback_db), check_same_thread=False, timeout=10)
+            logger.warning(
+                "Using fallback DB at %s (project .storage not writable)", fallback_db
+            )
+            return conn
+        except sqlite3.OperationalError as e:
+            raise RuntimeError(
+                f"Cannot open database. Tried: {db_path} and {fallback_db}. "
+                "Set GOALLM_STORAGE_DIR to a writable path. Error: " + str(e)
+            ) from e
+
+
+db_connection = _init_db_connection()
 db_connection.execute("PRAGMA journal_mode=WAL;")
 db_connection.execute("PRAGMA synchronous=NORMAL;")
 db_connection.row_factory = sqlite3.Row

@@ -21,17 +21,17 @@
 
 ## התקנה והרצה
 
-התקנת תלויות Python מתבצעת **משורש הפרויקט** (`goallm/`), כי `requirements.txt` נמצא שם.
+**התקנה ראשונית** (משורש הפרויקט):
+```bash
+cd /path/to/goallm
+bash setup.sh
+```
 
 ### Backend
 
 ```bash
-# משורש הפרויקט – התקן תלויות פעם אחת
-pip install -r requirements.txt
-
-# הרץ את השרת
 cd crm
-./run_fastapi.sh
+bash run_fastapi.sh
 ```
 
 השרת יעלה על: http://127.0.0.1:8000
@@ -41,8 +41,7 @@ API docs: http://127.0.0.1:8000/docs
 
 ```bash
 cd crm/frontend
-npm install
-npm run dev
+bash run_dev.sh
 ```
 
 האפליקציה תעלה על: http://localhost:5173

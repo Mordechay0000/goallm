@@ -1,10 +1,11 @@
 # הפעלת הפרוקסי (mitmproxy)
 
-מריצים **מתוך שורש הפרויקט** (`goallm/`), אחרי התקנת התלויות:
+מריצים **מתוך שורש הפרויקט** (`goallm/`), אחרי `bash setup.sh` או התקנה ידנית:
 
 ```bash
 cd /path/to/goallm
-pip install -r requirements.txt
+source venv/bin/activate
+mitmproxy -s core/proxy/mitmproxy_addon.py
 ```
 
 ## אופציות הפעלה

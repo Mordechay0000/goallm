@@ -1,28 +1,19 @@
-# Core dependencies - required for mitmproxy addon
+# Core - mitmproxy addon
 mitmproxy>=12.2.0
+
+# Proxy utils (domain normalization)
+tldextract>=5.0.0
 
 # Image processing
 Pillow>=12.0.0
 python-magic>=0.4.27
 beautifulsoup4>=4.12.0
 
-# SVG to image conversion (used in image_replacement, llm_image_analyzer)
+# SVG to image conversion (image_replacement, llm_image_analyzer)
 CairoSVG>=2.8.0
 cairocffi>=1.7.0
 
-# Optional: LLM image analyzer (comment out if not needed)
-# llama-cpp-python>=0.2.0
-
-# Optional: Testing server dependencies (only needed for test_image_filter)
-# fastapi>=0.100.0
-# requests>=2.31.0
-# uvicorn>=0.23.0
-
-# CRM Web Interface
-flask>=3.0.0
-flask-cors>=4.0.0
-
-# FastAPI CRM
+# CRM - FastAPI backend
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 PyJWT>=2.8.0
@@ -31,6 +22,13 @@ pydantic>=2.0.0
 pydantic[email]>=2.0.0
 websockets>=12.0
 
-# Security libraries (official and industry-standard)
+# CRM - Flask backend (legacy, crm/app.py)
+flask>=3.0.0
+flask-cors>=4.0.0
+
+# Security
 bcrypt>=4.0.1
 slowapi>=0.1.9
+
+# Optional: LLM image analyzer (uncomment for llm_image_analyzer)
+# llama-cpp-python>=0.2.0

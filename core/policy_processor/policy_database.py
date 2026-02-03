@@ -13,13 +13,31 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-# Project root = parent of core/; .storage at project root so all processes share one DB
+# Storage: GOALLM_STORAGE_DIR env, or project .storage
 _project_root = Path(__file__).resolve().parent.parent.parent
-_storage_dir = _project_root / ".storage"
-_storage_dir.mkdir(parents=True, exist_ok=True)
+
+
+def _get_storage_dir():
+    if os.environ.get("GOALLM_STORAGE_DIR"):
+        return Path(os.environ["GOALLM_STORAGE_DIR"])
+    return _project_root / ".storage"
+
+
+_storage_dir = _get_storage_dir()
+os.makedirs(str(_storage_dir), mode=0o755, exist_ok=True)
 _db_path = _storage_dir / "policies.db"
 
-db_connection = sqlite3.connect(str(_db_path), check_same_thread=False)
+try:
+    db_connection = sqlite3.connect(str(_db_path), check_same_thread=False, timeout=10)
+except sqlite3.OperationalError:
+    _fallback = Path.home() / ".goallm" / "storage"
+    if _fallback.resolve() != _storage_dir.resolve():
+        os.makedirs(str(_fallback), mode=0o755, exist_ok=True)
+        _db_path = _fallback / "policies.db"
+        db_connection = sqlite3.connect(str(_db_path), check_same_thread=False, timeout=10)
+        logger.warning("Using fallback policies DB at %s", _db_path)
+    else:
+        raise
 db_connection.execute("PRAGMA journal_mode=WAL;")
 db_connection.execute("PRAGMA synchronous=NORMAL;")
 
