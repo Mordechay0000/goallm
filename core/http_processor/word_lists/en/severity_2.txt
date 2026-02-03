@@ -1,0 +1,27 @@
+# Severity 2 – words that are usually problematic (not innocent like "I love ice cream")
+# If many on page → block page. Otherwise → replace with X's.
+# Removed: love, kiss, hug, romance, dating, flirt, relationship, bed, bedroom – used in innocent contexts.
+
+# Moderate slurs / descriptions
+disgusting
+gross
+vile
+curse
+cursed
+cursing
+# Suggestive / tempting (not innocent affection)
+sexy
+seductive
+tempting
+temptation
+arousing
+intimate
+intimacy
+# Heresy / secular
+heresy
+heretic
+apostate
+secular
+secularism
+blasphemy
+blasphemous
