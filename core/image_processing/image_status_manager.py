@@ -113,7 +113,8 @@ def get_image_with_status(
     image_mime_type: str,
 ) -> Tuple[bytes, Any, str]:
     """
-    Resolve image status and return (image_bytes, flow_response, status).
+    Resolve image status and return (image_bytes, reserved, status).
+    The second value is always None (kept for API compatibility).
 
     status: "checking" | "blocked" | "allowed" | "pending" | "error"
     - If unknown: enqueue for analysis, return checking placeholder (status "checking").

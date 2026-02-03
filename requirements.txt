@@ -6,7 +6,7 @@ Pillow>=12.0.0
 python-magic>=0.4.27
 beautifulsoup4>=4.12.0
 
-# SVG to image conversion (used in image_status_manager)
+# SVG to image conversion (used in image_replacement, llm_image_analyzer)
 CairoSVG>=2.8.0
 cairocffi>=1.7.0
 

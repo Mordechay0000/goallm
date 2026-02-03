@@ -21,10 +21,12 @@
 
 ## התקנה והרצה
 
+התקנת תלויות Python מתבצעת **משורש הפרויקט** (`goallm/`), כי `requirements.txt` נמצא שם.
+
 ### Backend
 
 ```bash
-# התקן תלויות
+# משורש הפרויקט – התקן תלויות פעם אחת
 pip install -r requirements.txt
 
 # הרץ את השרת

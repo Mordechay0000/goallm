@@ -80,7 +80,7 @@ curl -X POST http://127.0.0.1:8000/api/auth/login \
    lsof -ti:5173 | xargs kill -9
    ```
 
-3. **התקן תלויות:**
+3. **התקן תלויות:** (משורש הפרויקט `goallm/`)
    ```bash
    pip install -r requirements.txt
    cd crm/frontend && npm install

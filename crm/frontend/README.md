@@ -1,4 +1,9 @@
-# React + TypeScript + Vite
+# CRM Frontend – React + TypeScript + Vite
+
+פרונט CRM לפרויקט goallm: ניהול פרופילי סינון, חוקים ותזמונים.  
+הרצה: `npm install` ואז `npm run dev`. Backend והנחיות הרצה: [crm/README.md](../README.md).
+
+---
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 

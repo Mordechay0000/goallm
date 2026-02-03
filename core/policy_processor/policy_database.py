@@ -1,6 +1,6 @@
 """
 Database management for URL policies.
-Stores policies in SQLite database similar to image_status_manager.
+Stores policies in SQLite database (pattern similar to image_status_db).
 DB path is fixed relative to project root so CRM and proxy (mitmdump) use the same file
 regardless of CWD (e.g. running uvicorn from crm/ vs mitmdump from project root).
 """
