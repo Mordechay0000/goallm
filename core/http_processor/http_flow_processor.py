@@ -1,9 +1,11 @@
 """
 Process HTTP flows: site-level policy (HTML), then image filtering.
-- HTML/document: policy_url → blocked page / send-for-review page / pass through.
+- HTML/document: policy_url → blocked page / send-for-review page / pass through; then text filter if allowed.
 - Images: policy + image status → placeholder or real image.
 """
+import json
 import logging
+from typing import Tuple, Optional
 
 from mitmproxy import http
 
@@ -12,9 +14,11 @@ from core.http_processor.site_policy_pages import (
     get_blocked_page_bytes,
     get_send_for_review_page_bytes,
 )
+from core.http_processor.embedded_image_filter import filter_embedded_images_in_html
+from core.http_processor.text_filter import filter_text_content, _encode_debug_b64
 from core.image_processing.image_status_manager import get_image_with_status
 from core.policy_processor.policy_loader import get_policy_resolver
-from core.policy_processor.policy_database import get_profile_mode
+from core.policy_processor.policy_database import get_profile_mode, get_filter_switches
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +28,8 @@ def _is_html_response(flow: http.HTTPFlow) -> bool:
     return "text/html" in ct or (flow.response.raw_content and ct.startswith("text/") and "html" in ct)
 
 
-def _apply_site_policy_for_html(flow: http.HTTPFlow) -> bool:
-    """Apply site policy for HTML responses. Returns True if response was replaced (caller should return)."""
+def _apply_site_policy_for_html(flow: http.HTTPFlow) -> Tuple[bool, Optional[dict]]:
+    """Apply site policy for HTML responses. Returns (replaced, rule). If allow: (False, rule); else (True, None)."""
     url = flow.request.url
     try:
         resolver = get_policy_resolver()
@@ -44,14 +48,25 @@ def _apply_site_policy_for_html(flow: http.HTTPFlow) -> bool:
                     body,
                     {"Content-Type": "text/html; charset=utf-8", "Content-Length": str(len(body))},
                 )
-                logger.info("Site blocked by policy - URL: %s", url)
-                return True
+                logger.info(
+                    "Site blocked by policy - URL: %s - rule: %s - reason: %s",
+                    url,
+                    rule.get("domain") or rule.get("path") or "—",
+                    rule.get("block_reason") or "policy",
+                )
+                return (True, None)
             if state == "review":
                 body = get_send_for_review_page_bytes(request_url=url)
                 flow.response = http.Response.make(
                     200,
                     body,
-                    {"Content-Type": "text/html; charset=utf-8", "Content-Length": str(len(body))},
+                    {
+                        "Content-Type": "text/html; charset=utf-8",
+                        "Content-Length": str(len(body)),
+                        "Cache-Control": "no-store, no-cache, must-revalidate",
+                        "Pragma": "no-cache",
+                        "Expires": "0",
+                    },
                 )
                 current_mode = get_profile_mode()
                 logger.info(
@@ -59,37 +74,50 @@ def _apply_site_policy_for_html(flow: http.HTTPFlow) -> bool:
                     url,
                     current_mode,
                 )
-                return True
+                return (True, None)
             if state == "allow":
                 if "domain" not in rule:
                     logger.info("Site open (blacklist mode, not in list) - URL: %s", url)
                 else:
                     logger.debug("Site allowed by policy - URL: %s", url)
-                return False
+                return (False, rule)
         body = get_send_for_review_page_bytes(request_url=url)
         flow.response = http.Response.make(
             200,
             body,
-            {"Content-Type": "text/html; charset=utf-8", "Content-Length": str(len(body))},
+            {
+                "Content-Type": "text/html; charset=utf-8",
+                "Content-Length": str(len(body)),
+                "Cache-Control": "no-store, no-cache, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
         )
         logger.info("No policy for site (treat as review), showing send-for-review - URL: %s", url)
-        return True
+        return (True, None)
     except Exception as e:
         logger.warning("Policy resolution failed for HTML %s: %s; showing send-for-review", url, e)
         body = get_send_for_review_page_bytes(request_url=url)
         flow.response = http.Response.make(
             200,
             body,
-            {"Content-Type": "text/html; charset=utf-8", "Content-Length": str(len(body))},
+            {
+                "Content-Type": "text/html; charset=utf-8",
+                "Content-Length": str(len(body)),
+                "Cache-Control": "no-store, no-cache, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
         )
-        return True
+        return (True, None)
 
 
 def process_http_response(flow: http.HTTPFlow) -> None:
-    """Process HTTP response: site policy for HTML, then image filtering."""
+    """Process HTTP response. Each filter (URL policy, text, image, embedded image) works independently per global switches."""
     url = flow.request.url
     referer_url = flow.request.headers.get("Referer")
     method = flow.request.method
+    switches = get_filter_switches()
 
     logger.info("Processing HTTP response - Method: %s, URL: %s", method, url)
     logger.debug(
@@ -99,29 +127,124 @@ def process_http_response(flow: http.HTTPFlow) -> None:
         len(flow.response.raw_content) if flow.response.raw_content else 0,
     )
 
-    # Site-level policy for HTML/document requests
+    # HTML/document requests
     if _is_html_response(flow):
-        if _apply_site_policy_for_html(flow):
-            return
-        return  # Allowed: pass through, leave response unchanged
+        rule = None
+        if switches.get("url_policy", True):
+            replaced, rule = _apply_site_policy_for_html(flow)
+            logger.debug("HTML response: replaced=%s rule=%s", replaced, (rule.get("domain") if rule else None))
+            if replaced:
+                return
+        else:
+            logger.debug("URL policy filter disabled - passing HTML through policy check")
+        # Text filter (independent: run when switch on; if we have a rule also respect rule's text_filter_enabled)
+        body_to_send = None
+        text_switch_on = switches.get("text_filter", True)
+        rule_text_ok = (rule is None) or rule.get("text_filter_enabled", True)
+        text_filter_on = text_switch_on and rule_text_ok
+        has_content = bool(flow.response.raw_content)
+        logger.debug("text_filter check: switch=%s rule_ok=%s has_content=%s content_len=%s", text_switch_on, rule_text_ok, has_content, len(flow.response.raw_content) if flow.response.raw_content else 0)
+        if text_filter_on and has_content:
+            try:
+                try:
+                    body_bytes = flow.response.content
+                except ValueError:
+                    body_bytes = flow.response.raw_content
+                if body_bytes:
+                    content_type = (flow.response.headers.get("content-type") or "").strip()
+                    logger.info("text_filter: applying to URL: %s (content_len=%s)", url, len(body_bytes))
+                    filtered, block_page, block_reason, debug_info = filter_text_content(
+                        body_bytes,
+                        url=url,
+                        content_type=content_type,
+                        text_filter_enabled=True,
+                        rule_context=rule,
+                    )
+                    logger.debug("text_filter: result block_page=%s filtered_len=%s reason=%s", block_page, len(filtered), block_reason)
+                    if block_page:
+                        block_debug_b64 = _encode_debug_b64(debug_info) if debug_info else ""
+                        body = get_blocked_page_bytes(
+                            request_url=url,
+                            rule=rule,
+                            tags=rule.get("tags") or [],
+                            block_reason="text_filter",
+                            block_reason_detail=block_reason,
+                            block_debug_b64=block_debug_b64,
+                        )
+                        flow.response = http.Response.make(
+                            200,
+                            body,
+                            {"Content-Type": "text/html; charset=utf-8", "Content-Length": str(len(body))},
+                        )
+                        logger.info(
+                            "Page blocked by text filter - URL: %s - cause: %s",
+                            url,
+                            block_reason or "(no reason)",
+                        )
+                        if debug_info:
+                            logger.debug("Text filter block debug_info: %s", json.dumps(debug_info, ensure_ascii=False))
+                        return
+                    body_to_send = filtered
+            except Exception as e:
+                logger.warning("Text filter failed for %s: %s", url, e, exc_info=True)
+        if body_to_send is None and has_content:
+            try:
+                body_to_send = flow.response.content
+            except ValueError:
+                body_to_send = flow.response.raw_content
+        if body_to_send and switches.get("embedded_image_filter", True):
+            # Embedded image filter (independent): data:image URLs in HTML
+            try:
+                content_type = (flow.response.headers.get("content-type") or "").strip()
+                enc = "utf-8"
+                if "charset=" in content_type:
+                    for part in content_type.split(";"):
+                        part = part.strip().lower()
+                        if part.startswith("charset="):
+                            enc = part.split("=", 1)[1].strip().strip('"')
+                            break
+                body_to_send = filter_embedded_images_in_html(
+                    body_to_send,
+                    page_url=url,
+                    referer_url=referer_url,
+                    encoding=enc,
+                )
+            except Exception as e:
+                logger.warning("Embedded image filter failed for %s: %s", url, e)
+        if body_to_send:
+            flow.response.headers.pop("transfer-encoding", None)
+            flow.response.headers.pop("content-encoding", None)
+            flow.response.raw_content = body_to_send
+            flow.response.headers["Content-Length"] = str(len(body_to_send))
+            logger.debug("HTML response sent - URL: %s", url)
+        return
 
+    # Direct image responses
     extracted = extract_image_content(flow)
     if extracted is None:
         logger.debug("Response is not an image, skipping processing for URL: %s", url)
         return
 
-    # Policy routing: if URL matches an "allow" rule for type image, pass through
-    try:
-        resolver = get_policy_resolver()
-        rule = resolver.resolve(url, "image")
-        if rule is not None and rule.get("state") == "allow":
-            if "domain" not in rule:
-                logger.info("Image open (blacklist mode, not in list) - URL: %s", url)
-            else:
-                logger.info("URL allowed by policy, passing through - URL: %s", url)
-            return
-    except Exception as e:
-        logger.warning("Policy resolution failed for %s: %s; applying filter", url, e)
+    # URL policy for images (independent): if on and rule allows, pass through
+    if switches.get("url_policy", True):
+        try:
+            resolver = get_policy_resolver()
+            rule = resolver.resolve(url, "image")
+            if rule is not None and rule.get("state") == "allow":
+                if "domain" not in rule:
+                    logger.info("Image open (blacklist mode, not in list) - URL: %s", url)
+                else:
+                    logger.info("URL allowed by policy, passing through - URL: %s", url)
+                return
+        except Exception as e:
+            logger.warning("Policy resolution failed for %s: %s; applying filter", url, e)
+    else:
+        logger.debug("URL policy filter disabled - continuing to image filter check")
+
+    # Image filter (independent): analyze and replace with placeholder when on
+    if not switches.get("image_filter", True):
+        logger.debug("Image filter disabled - passing image through - URL: %s", url)
+        return
 
     image_content, mime_type = extracted
     logger.info(

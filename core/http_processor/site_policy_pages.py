@@ -8,7 +8,7 @@ import html
 from urllib.parse import quote
 
 _default_crm_api = "http://127.0.0.1:8000"
-_default_crm_frontend = "http://127.0.0.1:5173"
+_default_crm_frontend = "http://localhost:5173"
 CRM_API_URL = (os.environ.get("CRM_API_URL") or _default_crm_api).rstrip("/")
 # Frontend URL for login/requests links (default: 5173 in dev, same as API in production)
 CRM_FRONTEND_URL = (os.environ.get("CRM_FRONTEND_URL") or _default_crm_frontend).rstrip("/")
@@ -76,9 +76,52 @@ def _blocked_page_html(
     rule_type: str = "*",
     tags_list: list = None,
     block_reason: str = "",
+    block_reason_detail: str = "",
+    block_debug_b64: str = "",
 ) -> str:
     tags_list = tags_list or []
-    is_user_settings = (block_reason or "").strip().lower() == "user_settings"
+    reason = (block_reason or "").strip().lower()
+    is_user_settings = reason == "user_settings"
+    is_text_filter = reason == "text_filter"
+    reason_detail = (block_reason_detail or "").strip()
+    debug_b64 = (block_debug_b64 or "").strip()
+
+    if is_text_filter:
+        title_msg = "הדף נחסם – סינון מלל"
+        body_msg = "הדף נחסם כי התוכן הטקסטואלי לא עבר את סינון המלל. זוהי חסימה אוטומטית לפי רשימת מילים וכללי תוכן – לא חסימת האתר ברשימה הגלובלית."
+        full_request_url = request_url.replace("https://", "").replace("http://", "").strip() if request_url else ""
+        full_url_display = html.escape(full_request_url, quote=False) if full_request_url else "—"
+        reason_detail_html = ""
+        if reason_detail:
+            reason_detail_esc = html.escape(reason_detail, quote=False)
+            reason_detail_html = f'<p class="rule" style="margin-top:1rem;"><strong>גורם לחסימה (לדיבוג):</strong> <code style="background:rgba(0,0,0,0.3); padding:0.2rem 0.5rem; border-radius:4px; font-size:0.9rem; word-break:break-all;">{reason_detail_esc}</code></p>'
+        debug_section = ""
+        if debug_b64:
+            debug_b64_esc = html.escape(debug_b64, quote=False)
+            debug_section = f"""
+        <h2 style="margin-top:1.5rem; font-size:1rem;">דיבוג מלא (base64)</h2>
+        <textarea readonly style="width:100%; min-height:80px; font-size:0.75rem; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.2); border-radius:8px; color:#ccc; padding:0.5rem; margin-top:0.5rem; resize:vertical;" id="debug-b64">{debug_b64_esc}</textarea>
+"""
+        return f"""<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{html.escape(title_msg)}</title>
+    <style>{_COMMON_STYLES}</style>
+</head>
+<body>
+    <div class="card">
+        <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">📝</div>
+        <h1>{html.escape(title_msg)}</h1>
+        <p>{html.escape(body_msg)}</p>
+        <p class="rule info-url"><strong>הכתובת שניגש אליה:</strong> {full_url_display}</p>
+        {reason_detail_html}
+        {debug_section}
+    </div>
+</body>
+</html>"""
+
     title_msg = "נחסם בגלל הגדרות משתמש" if is_user_settings else "האתר נחסם"
     body_msg = "הגישה לאתר זה חסומה בהתאם להגדרות הפרופיל שלך (האתר פתוח ברשימה הגלובלית)." if is_user_settings else "הגישה לאתר זה חסומה בהתאם להגדרות המדיניות."
     full_request_url = request_url.replace("https://", "").replace("http://", "").strip() if request_url else ""
@@ -145,6 +188,8 @@ def get_blocked_page_bytes(
     rule: dict = None,
     tags: list = None,
     block_reason: str = "",
+    block_reason_detail: str = "",
+    block_debug_b64: str = "",
 ) -> bytes:
     rule = rule or {}
     tags_list = list(tags) if tags else (rule.get("tags") or [])
@@ -158,6 +203,8 @@ def get_blocked_page_bytes(
         rule_type=rule.get("type", "*"),
         tags_list=tags_list,
         block_reason=block_reason or rule.get("block_reason", ""),
+        block_reason_detail=block_reason_detail or rule.get("block_reason_detail", ""),
+        block_debug_b64=block_debug_b64 or rule.get("block_debug_b64", ""),
     )
     return html_str.encode("utf-8")
 
