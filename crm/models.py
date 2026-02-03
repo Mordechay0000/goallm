@@ -165,6 +165,7 @@ class GlobalRuleCreate(BaseModel):
     type: str = Field(default="*", pattern="^(\\*|image|video)$")
     include_subdomains: bool = Field(default=False)
     tags: Optional[List[str]] = Field(default=None)
+    text_filter_enabled: bool = Field(default=True, description="Whether to apply text filtering for this site")
 
     @validator('url')
     def validate_url(cls, v):
@@ -189,6 +190,7 @@ class GlobalRuleUpdate(BaseModel):
     type: Optional[str] = Field(None, pattern="^(\\*|image|video)$")
     include_subdomains: Optional[bool] = None
     tags: Optional[List[str]] = None
+    text_filter_enabled: Optional[bool] = None
 
 
 class GlobalRuleResponse(BaseModel):
@@ -199,6 +201,7 @@ class GlobalRuleResponse(BaseModel):
     type: str
     include_subdomains: bool
     tags: Optional[List[str]] = None
+    text_filter_enabled: bool = True
     created_at: int
     updated_at: int
 

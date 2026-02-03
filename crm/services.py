@@ -4,7 +4,9 @@ Business logic services for CRM.
 from typing import Optional, List, Dict
 from datetime import datetime
 import logging
+import re
 import sqlite3
+from urllib.parse import unquote
 
 from .database import db_connection
 from .security import get_password_hash, verify_password, validate_password_strength
@@ -351,9 +353,49 @@ def delete_profile(profile_id: int) -> bool:
 
 
 # Rule services
+def _normalize_path_component(path: str) -> str:
+    """Normalize path: unquote, collapse //, resolve . and .., strip trailing slash."""
+    if not path or path == "/":
+        return "/"
+    path = unquote(path)
+    path = re.sub(r"/+", "/", path.strip("/"))
+    parts = path.split("/")
+    out = []
+    for p in parts:
+        if p == "." or p == "":
+            continue
+        if p == "..":
+            if out:
+                out.pop()
+            continue
+        out.append(p)
+    result = "/" + "/".join(out) if out else "/"
+    return result.rstrip("/") if result != "/" else "/"
+
+
 def _normalize_url(url: str) -> str:
-    """Strip trailing slash(es) from URL so example.com/ and example.com/path/ become example.com and example.com/path."""
-    url = url.strip()
+    """Full URL normalization: protocol, *, lowercase, dots, slashes, path."""
+    url = (url or "").strip()
+    if url.startswith("https://"):
+        url = url[8:]
+    elif url.startswith("http://"):
+        url = url[7:]
+    url = url.lower()
+    if "/" in url:
+        idx = url.index("/")
+        domain = url[:idx].rstrip(".")
+        path = url[idx:]
+        while ".." in domain:
+            domain = domain.replace("..", ".")
+        domain = ".".join(p for p in domain.split(".") if p)
+        path = _normalize_path_component(path)
+        url = domain + path
+    else:
+        domain = url.rstrip(".")
+        while ".." in domain:
+            domain = domain.replace("..", ".")
+        domain = ".".join(p for p in domain.split(".") if p)
+        url = domain
     while len(url) > 1 and url.endswith("/"):
         url = url[:-1]
     return url
@@ -365,21 +407,13 @@ def parse_url(url: str) -> tuple[str, Optional[str], bool]:
     Returns: (domain, path, include_subdomains)
     """
     url = _normalize_url(url)
-    # Remove protocol if present
-    if url.startswith('http://'):
-        url = url[7:]
-    elif url.startswith('https://'):
-        url = url[8:]
-    
-    # Check for subdomain wildcard
     include_subdomains = False
-    if url.startswith('*.'):
+    if url.startswith("*."):
         include_subdomains = True
         url = url[2:]
-    elif url.startswith('*'):
+    elif url.startswith("*"):
         include_subdomains = True
         url = url[1:]
-    
     # Split domain and path
     if '/' in url:
         parts = url.split('/', 1)
@@ -406,6 +440,58 @@ def _parse_tags(tags_val: Optional[str]) -> List[str]:
     return [t.strip() for t in str(tags_val).split(",") if t.strip()]
 
 
+def _canonical_path(path: Optional[str]) -> Optional[str]:
+    """Normalize path for duplicate comparison: None, '', '/' all become None."""
+    if not path or not path.strip():
+        return None
+    p = path.strip().rstrip("/")
+    return None if not p or p == "/" else p
+
+
+def _path_for_match(path: Optional[str]) -> str:
+    """Normalize path for DB match: root (None/'/'/'') -> '__ROOT__', else path."""
+    p = _canonical_path(path)
+    return "__ROOT__" if p is None else (p if p.startswith("/") else "/" + p)
+
+
+def _rule_exists_for_profile(profile_id: int, domain_pattern: str, path: Optional[str], include_subdomains: bool) -> Optional[int]:
+    """Check if rule with same (domain, path, subdomains) exists. Returns rule_id or None."""
+    pm = _path_for_match(path)
+    if pm == "__ROOT__":
+        cursor = db_connection.execute("""
+            SELECT id FROM rules
+            WHERE profile_id = ? AND domain_pattern = ? AND include_subdomains = ?
+            AND (path_pattern IS NULL OR path_pattern = '' OR path_pattern = '/')
+        """, (profile_id, domain_pattern, 1 if include_subdomains else 0))
+    else:
+        cursor = db_connection.execute("""
+            SELECT id FROM rules
+            WHERE profile_id = ? AND domain_pattern = ? AND include_subdomains = ?
+            AND path_pattern = ?
+        """, (profile_id, domain_pattern, 1 if include_subdomains else 0, pm))
+    row = cursor.fetchone()
+    return row[0] if row else None
+
+
+def _global_rule_exists(domain_pattern: str, path: Optional[str], include_subdomains: bool) -> Optional[int]:
+    """Check if global rule with same (domain, path, subdomains) exists. Returns rule_id or None."""
+    pm = _path_for_match(path)
+    if pm == "__ROOT__":
+        cursor = db_connection.execute("""
+            SELECT id FROM global_rules
+            WHERE domain_pattern = ? AND include_subdomains = ?
+            AND (path_pattern IS NULL OR path_pattern = '' OR path_pattern = '/')
+        """, (domain_pattern, 1 if include_subdomains else 0))
+    else:
+        cursor = db_connection.execute("""
+            SELECT id FROM global_rules
+            WHERE domain_pattern = ? AND include_subdomains = ?
+            AND path_pattern = ?
+        """, (domain_pattern, 1 if include_subdomains else 0, pm))
+    row = cursor.fetchone()
+    return row[0] if row else None
+
+
 def create_rule(profile_id: int, url: str, action: str = "block",
                rule_type: str = "*", include_subdomains: bool = False,
                tags: Optional[List[str]] = None) -> Dict:
@@ -420,15 +506,20 @@ def create_rule(profile_id: int, url: str, action: str = "block",
     if include_subdomains:
         domain_pattern = f"*.{domain}" if not domain.startswith("*.") else domain
 
+    existing = _rule_exists_for_profile(profile_id, domain_pattern, path, include_subdomains)
+    if existing:
+        raise ValueError("כלל זהה כבר קיים (כפילות)")
+
     now = int(datetime.now().timestamp())
     tags_str = _tags_to_str(tags)
+    path_val = path if path else "/"
 
     try:
         cursor = db_connection.execute("""
             INSERT INTO rules 
             (profile_id, domain_pattern, path_pattern, action, type, include_subdomains, tags, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (profile_id, domain_pattern, path, action, rule_type,
+        """, (profile_id, domain_pattern, path_val, action, rule_type,
               1 if include_subdomains else 0, tags_str, now, now))
         rule_id = cursor.lastrowid
         db_connection.commit()
@@ -474,10 +565,11 @@ def get_profile_rules(profile_id: int) -> List[Dict]:
 def update_rule(rule_id: int, url: Optional[str] = None, action: Optional[str] = None,
                 rule_type: Optional[str] = None, include_subdomains: Optional[bool] = None,
                 tags: Optional[List[str]] = None) -> Dict:
-    """Update rule."""
+    """Update rule. Raises if change would create duplicate."""
     rule = get_rule(rule_id)
     if not rule:
         raise ValueError("כלל לא נמצא")
+    profile_id = rule["profile_id"]
 
     if url is not None:
         url = _normalize_url(url)
@@ -493,9 +585,14 @@ def update_rule(rule_id: int, url: Optional[str] = None, action: Optional[str] =
         path = rule["path_pattern"]
         include_subdomains = include_subdomains if include_subdomains is not None else rule["include_subdomains"]
 
+    existing = _rule_exists_for_profile(profile_id, domain_pattern, path, include_subdomains)
+    if existing and existing != rule_id:
+        raise ValueError("כלל זהה כבר קיים (כפילות)")
+
     new_action = action if action is not None else rule["action"]
     new_type = rule_type if rule_type is not None else rule["type"]
     new_tags_str = _tags_to_str(tags) if tags is not None else _tags_to_str(rule.get("tags"))
+    path_val = path if path else "/"
 
     now = int(datetime.now().timestamp())
     db_connection.execute("""
@@ -503,7 +600,7 @@ def update_rule(rule_id: int, url: Optional[str] = None, action: Optional[str] =
         SET domain_pattern = ?, path_pattern = ?, action = ?, type = ?,
             include_subdomains = ?, tags = ?, updated_at = ?
         WHERE id = ?
-    """, (domain_pattern, path, new_action, new_type,
+    """, (domain_pattern, path_val, new_action, new_type,
           1 if include_subdomains else 0, new_tags_str, now, rule_id))
     db_connection.commit()
 
@@ -522,7 +619,8 @@ def get_global_rules() -> List[Dict]:
     """Get all global rules (base whitelist)."""
     cursor = db_connection.execute("""
         SELECT id, domain_pattern, path_pattern, action, type,
-               include_subdomains, tags, created_at, updated_at
+               include_subdomains, tags, created_at, updated_at,
+               COALESCE(text_filter_enabled, 1) AS text_filter_enabled
         FROM global_rules
         ORDER BY created_at DESC
     """)
@@ -531,6 +629,7 @@ def get_global_rules() -> List[Dict]:
     for row in rows:
         d = dict(row)
         d["tags"] = _parse_tags(d.get("tags"))
+        d["text_filter_enabled"] = bool(d.get("text_filter_enabled", 1))
         out.append(d)
     return out
 
@@ -539,7 +638,8 @@ def get_global_rule(rule_id: int) -> Optional[Dict]:
     """Get a single global rule by ID."""
     cursor = db_connection.execute("""
         SELECT id, domain_pattern, path_pattern, action, type,
-               include_subdomains, tags, created_at, updated_at
+               include_subdomains, tags, created_at, updated_at,
+               COALESCE(text_filter_enabled, 1) AS text_filter_enabled
         FROM global_rules WHERE id = ?
     """, (rule_id,))
     row = cursor.fetchone()
@@ -547,6 +647,7 @@ def get_global_rule(rule_id: int) -> Optional[Dict]:
         return None
     d = dict(row)
     d["tags"] = _parse_tags(d.get("tags"))
+    d["text_filter_enabled"] = bool(d.get("text_filter_enabled", 1))
     return d
 
 
@@ -556,8 +657,9 @@ def create_global_rule(
     rule_type: str = "*",
     include_subdomains: bool = False,
     tags: Optional[List[str]] = None,
+    text_filter_enabled: bool = True,
 ) -> Dict:
-    """Create a global rule (admin only). Base whitelist: typically action=allow."""
+    """Create a global rule (admin only). Raises if exact duplicate exists."""
     url = _normalize_url(url)
     domain, path, inferred_subdomains = parse_url(url)
     if inferred_subdomains:
@@ -565,14 +667,18 @@ def create_global_rule(
     domain_pattern = domain
     if include_subdomains:
         domain_pattern = f"*.{domain}" if not domain.startswith("*.") else domain
+    existing = _global_rule_exists(domain_pattern, path, include_subdomains)
+    if existing:
+        raise ValueError("כלל גלובלי זהה כבר קיים (כפילות)")
     now = int(datetime.now().timestamp())
     tags_str = _tags_to_str(tags)
+    path_val = path if path else "/"
     try:
         cursor = db_connection.execute("""
             INSERT INTO global_rules
-            (domain_pattern, path_pattern, action, type, include_subdomains, tags, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (domain_pattern, path, action, rule_type, 1 if include_subdomains else 0, tags_str, now, now))
+            (domain_pattern, path_pattern, action, type, include_subdomains, tags, text_filter_enabled, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (domain_pattern, path_val, action, rule_type, 1 if include_subdomains else 0, tags_str, 1 if text_filter_enabled else 0, now, now))
         rule_id = cursor.lastrowid
         db_connection.commit()
         return get_global_rule(rule_id)
@@ -588,8 +694,9 @@ def update_global_rule(
     rule_type: Optional[str] = None,
     include_subdomains: Optional[bool] = None,
     tags: Optional[List[str]] = None,
+    text_filter_enabled: Optional[bool] = None,
 ) -> Dict:
-    """Update a global rule."""
+    """Update a global rule. Raises if change would create duplicate."""
     rule = get_global_rule(rule_id)
     if not rule:
         raise ValueError("כלל גלובלי לא נמצא")
@@ -607,16 +714,21 @@ def update_global_rule(
         domain_pattern = rule["domain_pattern"]
         path = rule["path_pattern"]
         include_subdomains = include_subdomains if include_subdomains is not None else rule["include_subdomains"]
+
+    existing = _global_rule_exists(domain_pattern, path, include_subdomains)
+    if existing and existing != rule_id:
+        raise ValueError("כלל גלובלי זהה כבר קיים (כפילות)")
     new_action = action if action is not None else rule["action"]
     new_type = rule_type if rule_type is not None else rule["type"]
     new_tags_str = _tags_to_str(tags) if tags is not None else _tags_to_str(rule.get("tags"))
+    new_text_filter = text_filter_enabled if text_filter_enabled is not None else rule.get("text_filter_enabled", True)
     now = int(datetime.now().timestamp())
     db_connection.execute("""
         UPDATE global_rules
         SET domain_pattern = ?, path_pattern = ?, action = ?, type = ?,
-            include_subdomains = ?, tags = ?, updated_at = ?
+            include_subdomains = ?, tags = ?, text_filter_enabled = ?, updated_at = ?
         WHERE id = ?
-    """, (domain_pattern, path, new_action, new_type, 1 if include_subdomains else 0, new_tags_str, now, rule_id))
+    """, (domain_pattern, path, new_action, new_type, 1 if include_subdomains else 0, new_tags_str, 1 if new_text_filter else 0, now, rule_id))
     db_connection.commit()
     return get_global_rule(rule_id)
 
@@ -739,11 +851,12 @@ def sync_crm_rules_to_core(user_id: Optional[int] = None) -> None:
             typ = r.get("type") or "*"
             state = r.get("action") or "allow"
             tags = r.get("tags") or []
+            text_filter_enabled = r.get("text_filter_enabled", True)
             existing = next((p for p in core_global if p["domain"] == domain and (p.get("path") or None) == (path or None) and (p.get("type") or "*") == typ), None)
             if existing:
-                core_update_policy(existing["id"], state=state, tags=tags, source="global")
+                core_update_policy(existing["id"], state=state, tags=tags, source="global", text_filter_enabled=text_filter_enabled)
             else:
-                core_add_policy(domain, path, policy_type=typ, state=state, tags=tags, source="global")
+                core_add_policy(domain, path, policy_type=typ, state=state, tags=tags, source="global", text_filter_enabled=text_filter_enabled)
         for r in crm_rules:
             domain = r["domain"]
             path = r.get("path")
@@ -1118,13 +1231,12 @@ def list_rule_requests(
 
 
 def approve_rule_request(request_id: int, profile_id: Optional[int] = None) -> Dict:
-    """Admin approves a request: add rule to the global list only. Works for pending or rejected (re-approve). profile_id is ignored (kept for API compatibility)."""
+    """Admin approves a request: add or update rule in global list. If same rule exists, update it."""
     req = get_rule_request(request_id)
     if not req:
         raise ValueError("בקשה לא נמצאה")
     if req["status"] == "approved":
         raise ValueError("הבקשה כבר אושרה")
-    # Build URL for global rule: prefer req["url"] (updated by admin)
     url_raw = (req.get("url") or "").strip()
     if url_raw:
         url_for_rule = _normalize_url(url_raw)
@@ -1136,21 +1248,37 @@ def approve_rule_request(request_id: int, profile_id: Optional[int] = None) -> D
         url_for_rule = _normalize_url(dom + path) if dom else ""
     if not url_for_rule:
         raise ValueError("חסר כתובת בבקשה")
-    created = create_global_rule(
-        url=url_for_rule,
-        action=req.get("action") or "allow",
-        rule_type=req.get("type") or "*",
-        include_subdomains=bool(req.get("include_subdomains")),
-        tags=req.get("tags"),
-    )
-    rule_id = created["id"]
+    domain, path, inc = parse_url(url_for_rule)
+    inc = inc or bool(req.get("include_subdomains"))
+    domain_pattern = f"*.{domain}" if inc else domain
+    action = req.get("action") or "allow"
+    rule_type = req.get("type") or "*"
+    tags = req.get("tags")
+    existing_id = _global_rule_exists(domain_pattern, path, inc)
+    if existing_id:
+        updated = update_global_rule(
+            existing_id,
+            action=action,
+            rule_type=rule_type,
+            include_subdomains=inc,
+            tags=tags,
+        )
+        rule_id = updated["id"]
+    else:
+        created = create_global_rule(
+            url=url_for_rule,
+            action=action,
+            rule_type=rule_type,
+            include_subdomains=inc,
+            tags=tags,
+        )
+        rule_id = created["id"]
     now = int(datetime.now().timestamp())
     db_connection.execute(
         "UPDATE rule_requests SET status = 'approved', updated_at = ?, approved_rule_id = ?, approved_profile_id = ? WHERE id = ?",
         (now, rule_id, None, request_id),
     )
     db_connection.commit()
-    # Refresh core policy so proxy sees the new global rule
     sync_crm_rules_to_core(None)
     return get_rule_request(request_id)
 

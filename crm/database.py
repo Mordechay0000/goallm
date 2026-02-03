@@ -394,6 +394,13 @@ def init_db_schema():
     """)
     db_connection.execute("CREATE INDEX IF NOT EXISTS idx_global_rules_domain ON global_rules(domain_pattern)")
 
+    # Migration: text_filter_enabled per site (default 1 = yes)
+    gr_cursor = db_connection.execute("PRAGMA table_info(global_rules)")
+    gr_cols = [row[1] for row in gr_cursor.fetchall()]
+    if "text_filter_enabled" not in gr_cols:
+        db_connection.execute("ALTER TABLE global_rules ADD COLUMN text_filter_enabled INTEGER NOT NULL DEFAULT 1")
+        logger.info("Added text_filter_enabled to global_rules")
+
     db_connection.commit()
     logger.info("CRM database schema initialized successfully")
 

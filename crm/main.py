@@ -843,6 +843,34 @@ def _get_core_resolver_state():
         return {"core_mode": None, "core_db_path": None, "error": str(e)}
 
 
+# ========== Admin: Filter Switches (הפעלה/כיבוי סינונים גלובלית) ==========
+
+@app.get("/api/admin/filter-switches")
+async def admin_get_filter_switches(admin: dict = Depends(get_current_admin)):
+    """Get global filter switches (url_policy, text_filter, image_filter, embedded_image_filter). Admin only."""
+    from core.policy_processor.policy_database import get_filter_switches
+    return get_filter_switches()
+
+
+@app.put("/api/admin/filter-switches")
+async def admin_update_filter_switches(
+    body: dict,
+    admin: dict = Depends(get_current_admin),
+):
+    """Update global filter switches. Body: { "url_policy": true, "text_filter": false, ... }. Admin only."""
+    from core.policy_processor.policy_database import set_filter_switches, FILTER_SWITCH_KEYS
+    allowed = set(FILTER_SWITCH_KEYS)
+    switches = {}
+    for k, v in (body or {}).items():
+        if k in allowed and isinstance(v, bool):
+            switches[k] = v
+    if not switches:
+        raise HTTPException(status_code=400, detail="נא לשלוח לפחות מתג אחד (url_policy, text_filter, image_filter, embedded_image_filter)")
+    set_filter_switches(switches)
+    from core.policy_processor.policy_database import get_filter_switches
+    return get_filter_switches()
+
+
 @app.post("/api/resolver/sync")
 async def sync_resolver_to_core(
     current_user: dict = Depends(get_current_user),
@@ -1194,6 +1222,7 @@ async def admin_create_global_rule(
             rule_type=data.type,
             include_subdomains=data.include_subdomains,
             tags=data.tags,
+            text_filter_enabled=getattr(data, "text_filter_enabled", True),
         )
         sync_crm_rules_to_core(None)
         return GlobalRuleResponse(**rule)
@@ -1231,6 +1260,7 @@ async def admin_update_global_rule(
             rule_type=data.type,
             include_subdomains=data.include_subdomains,
             tags=data.tags,
+            text_filter_enabled=data.text_filter_enabled,
         )
         sync_crm_rules_to_core(None)
         return GlobalRuleResponse(**updated)
