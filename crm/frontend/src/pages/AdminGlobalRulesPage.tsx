@@ -27,8 +27,11 @@ import {
   Checkbox,
   FormControlLabel,
   Chip,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
 } from '@mui/material';
-import { Add as AddIcon, Delete as DeleteIcon, Edit as EditIcon } from '@mui/icons-material';
+import { Add as AddIcon, Delete as DeleteIcon, Edit as EditIcon, ExpandMore as ExpandMoreIcon } from '@mui/icons-material';
 import { adminApi, type GlobalRule, type GlobalRuleCreate, type GlobalRuleUpdate } from '../api/admin';
 import { TagInput } from '../components/TagInput';
 import { validateDomainOrUrl, processUrlInput } from '../utils/validation';
@@ -46,6 +49,7 @@ const AdminGlobalRulesPage: React.FC = () => {
   const [type, setType] = useState('*');
   const [includeSubdomains, setIncludeSubdomains] = useState(false);
   const [tags, setTags] = useState<string[]>([]);
+  const [textFilterEnabled, setTextFilterEnabled] = useState(true);
   const [urlError, setUrlError] = useState('');
   const [saving, setSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
@@ -74,6 +78,7 @@ const AdminGlobalRulesPage: React.FC = () => {
     setType('*');
     setIncludeSubdomains(false);
     setTags([]);
+    setTextFilterEnabled(true);
     setDialogOpen(true);
   };
 
@@ -86,6 +91,7 @@ const AdminGlobalRulesPage: React.FC = () => {
     setType(r.type || '*');
     setIncludeSubdomains(r.include_subdomains || false);
     setTags(r.tags || []);
+    setTextFilterEnabled(r.text_filter_enabled !== false);
     setDialogOpen(true);
   };
 
@@ -99,10 +105,10 @@ const AdminGlobalRulesPage: React.FC = () => {
     setSaving(true);
     try {
       if (editingId) {
-        const data: GlobalRuleUpdate = { url: u, action, type, include_subdomains: includeSubdomains, tags: tags.length ? tags : undefined };
+        const data: GlobalRuleUpdate = { url: u, action, type, include_subdomains: includeSubdomains, tags: tags.length ? tags : undefined, text_filter_enabled: textFilterEnabled };
         await adminApi.updateGlobalRule(editingId, data);
       } else {
-        const data: GlobalRuleCreate = { url: u, action, type, include_subdomains: includeSubdomains, tags: tags.length ? tags : undefined };
+        const data: GlobalRuleCreate = { url: u, action, type, include_subdomains: includeSubdomains, tags: tags.length ? tags : undefined, text_filter_enabled: textFilterEnabled };
         await adminApi.createGlobalRule(data);
       }
       setDialogOpen(false);
@@ -148,14 +154,15 @@ const AdminGlobalRulesPage: React.FC = () => {
                 <TableCell>פעולה</TableCell>
                 <TableCell>סוג</TableCell>
                 <TableCell>תגיות</TableCell>
+                <TableCell>סינון מלל</TableCell>
                 <TableCell align="left">פעולות</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {loading ? (
-                <TableRow><TableCell colSpan={5}>טוען...</TableCell></TableRow>
+                <TableRow><TableCell colSpan={6}>טוען...</TableCell></TableRow>
               ) : rules.length === 0 ? (
-                <TableRow><TableCell colSpan={5}>אין כללים גלובליים</TableCell></TableRow>
+                <TableRow><TableCell colSpan={6}>אין כללים גלובליים</TableCell></TableRow>
               ) : (
                 rules.map((r) => (
                   <TableRow key={r.id}>
@@ -165,6 +172,7 @@ const AdminGlobalRulesPage: React.FC = () => {
                     <TableCell>
                       {(r.tags || []).length ? (r.tags || []).map((t) => <Chip key={t} label={t} size="small" sx={{ mr: 0.5 }} />) : '—'}
                     </TableCell>
+                    <TableCell>{r.text_filter_enabled !== false ? 'כן' : 'לא'}</TableCell>
                     <TableCell align="left">
                       <IconButton size="small" onClick={() => openEdit(r)}><EditIcon /></IconButton>
                       <IconButton size="small" color="error" onClick={() => setDeleteConfirm(r.id)}><DeleteIcon /></IconButton>
@@ -214,6 +222,15 @@ const AdminGlobalRulesPage: React.FC = () => {
           <Box sx={{ mt: 2 }}>
             <TagInput value={tags} onChange={setTags} label="תגיות" helperText="" />
           </Box>
+          <Accordion sx={{ mt: 2 }} disableGutters elevation={0} square>
+            <AccordionSummary expandIcon={<ExpandMoreIcon />}>אפשרויות נוספות</AccordionSummary>
+            <AccordionDetails>
+              <FormControlLabel
+                control={<Checkbox checked={textFilterEnabled} onChange={(e) => setTextFilterEnabled(e.target.checked)} />}
+                label="סינון מלל לאתר"
+              />
+            </AccordionDetails>
+          </Accordion>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setDialogOpen(false)}>ביטול</Button>

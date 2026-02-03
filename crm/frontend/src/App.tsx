@@ -22,6 +22,7 @@ import ProfileEditPage from './pages/ProfileEditPage';
 import AdminUsersPage from './pages/AdminUsersPage';
 import AdminRequestsPage from './pages/AdminRequestsPage';
 import AdminGlobalRulesPage from './pages/AdminGlobalRulesPage';
+import AdminFilterSwitchesPage from './pages/AdminFilterSwitchesPage';
 import MyRequestsPage from './pages/MyRequestsPage';
 import AdminLayout from './components/AdminLayout';
 
@@ -171,6 +172,16 @@ function App() {
               <ProtectedRoute>
                 <AdminLayout>
                   <AdminGlobalRulesPage />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/filter-switches"
+            element={
+              <ProtectedRoute>
+                <AdminLayout>
+                  <AdminFilterSwitchesPage />
                 </AdminLayout>
               </ProtectedRoute>
             }

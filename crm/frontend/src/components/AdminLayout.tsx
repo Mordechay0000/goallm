@@ -32,6 +32,7 @@ import {
   Logout as LogoutIcon,
   Public as PublicIcon,
   Assignment as AssignmentIcon,
+  Tune as TuneIcon,
 } from '@mui/icons-material';
 import { useAuthStore } from '../store/authStore';
 import { getAvatarUrl } from '../api/auth';
@@ -222,6 +223,34 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   primaryTypographyProps={{
                     fontSize: '0.95rem',
                     fontWeight: isActive('/admin/global-rules') ? 600 : 400,
+                  }}
+                />
+              </ListItemButton>
+            </ListItem>
+            <ListItem disablePadding>
+              <ListItemButton
+                selected={isActive('/admin/filter-switches')}
+                onClick={() => {
+                  navigate('/admin/filter-switches');
+                  setMobileOpen(false);
+                }}
+                sx={{
+                  minHeight: 48,
+                  '&.Mui-selected': {
+                    backgroundColor: 'action.selected',
+                    borderRight: '3px solid',
+                    borderColor: 'primary.main',
+                  },
+                }}
+              >
+                <ListItemIcon sx={{ minWidth: 40 }}>
+                  <TuneIcon />
+                </ListItemIcon>
+                <ListItemText
+                  primary="מתגי סינון"
+                  primaryTypographyProps={{
+                    fontSize: '0.95rem',
+                    fontWeight: isActive('/admin/filter-switches') ? 600 : 400,
                   }}
                 />
               </ListItemButton>

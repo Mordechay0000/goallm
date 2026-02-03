@@ -67,7 +67,24 @@ export const adminApi = {
   deleteGlobalRule: async (ruleId: number): Promise<void> => {
     await apiClient.delete(`/api/admin/global-rules/${ruleId}`);
   },
+
+  // Filter switches (הפעלה/כיבוי סינונים – אדמין)
+  getFilterSwitches: async (): Promise<FilterSwitches> => {
+    const response = await apiClient.get<FilterSwitches>('/api/admin/filter-switches');
+    return response.data;
+  },
+  updateFilterSwitches: async (switches: Partial<FilterSwitches>): Promise<FilterSwitches> => {
+    const response = await apiClient.put<FilterSwitches>('/api/admin/filter-switches', switches);
+    return response.data;
+  },
 };
+
+export interface FilterSwitches {
+  url_policy: boolean;
+  text_filter: boolean;
+  image_filter: boolean;
+  embedded_image_filter: boolean;
+}
 
 export interface GlobalRule {
   id: number;
@@ -77,6 +94,7 @@ export interface GlobalRule {
   type: string;
   include_subdomains: boolean;
   tags?: string[];
+  text_filter_enabled?: boolean;
   created_at: number;
   updated_at: number;
   display_url?: string;
@@ -88,6 +106,7 @@ export interface GlobalRuleCreate {
   type?: string;
   include_subdomains?: boolean;
   tags?: string[];
+  text_filter_enabled?: boolean;
 }
 
 export interface GlobalRuleUpdate {
@@ -96,4 +115,5 @@ export interface GlobalRuleUpdate {
   type?: string;
   include_subdomains?: boolean;
   tags?: string[];
+  text_filter_enabled?: boolean;
 }
