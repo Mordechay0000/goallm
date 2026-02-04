@@ -33,6 +33,7 @@ import {
   Public as PublicIcon,
   Assignment as AssignmentIcon,
   Tune as TuneIcon,
+  Link as LinkIcon,
 } from '@mui/icons-material';
 import { useAuthStore } from '../store/authStore';
 import { getAvatarUrl } from '../api/auth';
@@ -48,24 +49,29 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   {
-    label: 'לוח בקרה',
+    label: 'הבית',
     icon: <DashboardIcon />,
     path: '/',
   },
   {
-    label: 'פרופילי סינון וחוקים',
+    label: 'הגדרות הסינון שלי',
     icon: <SecurityIcon />,
     path: '/profiles',
   },
   {
-    label: 'תזמונים',
+    label: 'שעות פעילות',
     icon: <ScheduleIcon />,
     path: '/schedules',
   },
   {
-    label: 'בקשות שלי',
+    label: 'בקשות ששלחתי',
     icon: <AssignmentIcon />,
     path: '/requests',
+  },
+  {
+    label: 'המכשירים שלי',
+    icon: <LinkIcon />,
+    path: '/connections',
   },
 ];
 
@@ -111,7 +117,7 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         }}
       >
         <Typography variant="h6" noWrap component="div" sx={{ fontWeight: 600, fontSize: '1.1rem' }}>
-          ניהול סינון
+          ההגדרות שלי
         </Typography>
       </Toolbar>
       <Divider />
@@ -163,7 +169,7 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   <PeopleIcon />
                 </ListItemIcon>
                 <ListItemText
-                  primary="ניהול משתמשים"
+                  primary="משתמשים (אדמין)"
                   primaryTypographyProps={{
                     fontSize: '0.95rem',
                     fontWeight: isActive('/admin/users') ? 600 : 400,
@@ -191,7 +197,7 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   <SecurityIcon />
                 </ListItemIcon>
                 <ListItemText
-                  primary="בקשות משתמשים"
+                  primary="בקשות שהתקבלו (אדמין)"
                   primaryTypographyProps={{
                     fontSize: '0.95rem',
                     fontWeight: isActive('/admin/requests') ? 600 : 400,
@@ -219,7 +225,7 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   <PublicIcon />
                 </ListItemIcon>
                 <ListItemText
-                  primary="רשימה גלובלית"
+                  primary="רשימת האתרים הגלובלית (אדמין)"
                   primaryTypographyProps={{
                     fontSize: '0.95rem',
                     fontWeight: isActive('/admin/global-rules') ? 600 : 400,
@@ -247,7 +253,7 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   <TuneIcon />
                 </ListItemIcon>
                 <ListItemText
-                  primary="מתגי סינון"
+                  primary="הפעלת סינונים (אדמין)"
                   primaryTypographyProps={{
                     fontSize: '0.95rem',
                     fontWeight: isActive('/admin/filter-switches') ? 600 : 400,
@@ -318,20 +324,20 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 <ListItemIcon>
                   <PersonIcon fontSize="small" />
                 </ListItemIcon>
-                <ListItemText>עריכת פרופיל</ListItemText>
+                <ListItemText>הפרופיל שלי</ListItemText>
               </MenuItem>
               <MenuItem onClick={() => { navigate('/profile/edit'); handleMenuClose(); }}>
                 <ListItemIcon>
                   <SettingsIcon fontSize="small" />
                 </ListItemIcon>
-                <ListItemText>הגדרות</ListItemText>
+                <ListItemText>הגדרות החשבון</ListItemText>
               </MenuItem>
               <Divider />
               <MenuItem onClick={handleLogout}>
                 <ListItemIcon>
                   <LogoutIcon fontSize="small" />
                 </ListItemIcon>
-                <ListItemText>התנתק</ListItemText>
+                <ListItemText>יציאה מהחשבון</ListItemText>
               </MenuItem>
             </Menu>
           </Box>

@@ -416,7 +416,6 @@ def init_db_schema():
             domain_pattern TEXT NOT NULL,
             path_pattern TEXT,
             action TEXT NOT NULL DEFAULT 'allow',
-            type TEXT NOT NULL DEFAULT '*',
             include_subdomains INTEGER NOT NULL DEFAULT 0,
             tags TEXT,
             created_at INTEGER NOT NULL,
@@ -431,6 +430,41 @@ def init_db_schema():
     if "text_filter_enabled" not in gr_cols:
         db_connection.execute("ALTER TABLE global_rules ADD COLUMN text_filter_enabled INTEGER NOT NULL DEFAULT 1")
         logger.info("Added text_filter_enabled to global_rules")
+        gr_cols = [row[1] for row in db_connection.execute("PRAGMA table_info(global_rules)").fetchall()]
+    if "image_filter_enabled" not in gr_cols:
+        db_connection.execute("ALTER TABLE global_rules ADD COLUMN image_filter_enabled INTEGER NOT NULL DEFAULT 1")
+        logger.info("Added image_filter_enabled to global_rules")
+        gr_cols = [row[1] for row in db_connection.execute("PRAGMA table_info(global_rules)").fetchall()]
+    if "file_filter_enabled" not in gr_cols:
+        db_connection.execute("ALTER TABLE global_rules ADD COLUMN file_filter_enabled INTEGER NOT NULL DEFAULT 1")
+        logger.info("Added file_filter_enabled to global_rules")
+    # Migration: remove type column from global_rules (no longer used)
+    gr_cols = [row[1] for row in db_connection.execute("PRAGMA table_info(global_rules)").fetchall()]
+    if "type" in gr_cols:
+        try:
+            db_connection.execute("ALTER TABLE global_rules DROP COLUMN type")
+            db_connection.commit()
+            logger.info("Dropped type column from global_rules")
+        except Exception as e:
+            logger.warning("Could not drop global_rules.type (e.g. SQLite < 3.35): %s", e)
+
+    # IP bindings: which client IP is associated with which user (for filter per-user)
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS ip_bindings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            ip TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            UNIQUE(ip)
+        )
+    """)
+    db_connection.execute("CREATE INDEX IF NOT EXISTS idx_ip_bindings_user ON ip_bindings(user_id)")
+    db_connection.execute("CREATE INDEX IF NOT EXISTS idx_ip_bindings_ip ON ip_bindings(ip)")
+    gr_cursor = db_connection.execute("PRAGMA table_info(ip_bindings)")
+    ib_cols = [row[1] for row in gr_cursor.fetchall()]
+    if "last_used_at" not in ib_cols:
+        db_connection.execute("ALTER TABLE ip_bindings ADD COLUMN last_used_at INTEGER")
+        logger.info("Added last_used_at to ip_bindings")
 
     db_connection.commit()
     logger.info("CRM database schema initialized successfully")

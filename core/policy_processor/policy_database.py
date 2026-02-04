@@ -109,10 +109,60 @@ def init_db_schema():
     if "text_filter_enabled" not in columns:
         db_connection.execute(f"ALTER TABLE {POLICIES_TABLE_NAME} ADD COLUMN text_filter_enabled INTEGER NOT NULL DEFAULT 1")
         logger.info("Added text_filter_enabled to url_policies")
+        columns = [row[1] for row in db_connection.execute(f"PRAGMA table_info({POLICIES_TABLE_NAME})").fetchall()]
+    if "image_filter_enabled" not in columns:
+        db_connection.execute(f"ALTER TABLE {POLICIES_TABLE_NAME} ADD COLUMN image_filter_enabled INTEGER NOT NULL DEFAULT 1")
+        logger.info("Added image_filter_enabled to url_policies")
+
+    # Migration: user_id for per-user policies (NULL = global, integer = user)
+    cursor = db_connection.execute(f"PRAGMA table_info({POLICIES_TABLE_NAME})")
+    columns = [row[1] for row in cursor.fetchall()]
+    if "user_id" not in columns:
+        db_connection.execute(f"""
+            CREATE TABLE url_policies_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                domain TEXT NOT NULL,
+                path TEXT,
+                type TEXT NOT NULL DEFAULT '*',
+                state TEXT NOT NULL DEFAULT 'block',
+                description TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                tags TEXT,
+                source TEXT NOT NULL DEFAULT 'user',
+                text_filter_enabled INTEGER NOT NULL DEFAULT 1,
+                image_filter_enabled INTEGER NOT NULL DEFAULT 1,
+                user_id INTEGER,
+                UNIQUE(domain, path, type, source, user_id)
+            )
+        """)
+        db_connection.execute(f"""
+            INSERT INTO url_policies_new
+            (id, domain, path, type, state, description, enabled, created_at, updated_at, tags, source, text_filter_enabled, image_filter_enabled, user_id)
+            SELECT id, domain, path, type, state, description, enabled, created_at, updated_at, tags, source,
+                   COALESCE(text_filter_enabled, 1), COALESCE(image_filter_enabled, 1),
+                   CASE WHEN source = 'global' THEN NULL ELSE 0 END
+            FROM {POLICIES_TABLE_NAME}
+        """)
+        db_connection.execute(f"DROP TABLE {POLICIES_TABLE_NAME}")
+        db_connection.execute("ALTER TABLE url_policies_new RENAME TO " + POLICIES_TABLE_NAME)
+        db_connection.commit()
+        logger.info("Added user_id to url_policies")
 
     db_connection.execute(f"""
         CREATE INDEX IF NOT EXISTS idx_domain_path 
         ON {POLICIES_TABLE_NAME}(domain, path)
+    """)
+
+    # Per-user profile mode (for IP-bound users)
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS resolver_settings_user (
+            user_id INTEGER NOT NULL,
+            key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            PRIMARY KEY (user_id, key)
+        )
     """)
 
     # Tag rules: rule per tag (e.g. tag=ממכר -> state=block)
@@ -140,6 +190,9 @@ def init_db_schema():
     db_connection.execute(
         "INSERT OR IGNORE INTO resolver_settings (key, value) VALUES ('profile_mode', 'whitelist')"
     )
+    db_connection.execute(
+        "INSERT OR IGNORE INTO resolver_settings (key, value) VALUES ('default_user_id', '0')"
+    )
 
     # Global filter switches: each filter type can be enabled/disabled independently (1 = on, 0 = off)
     db_connection.execute("""
@@ -154,25 +207,73 @@ def init_db_schema():
             (key,),
         )
 
+    # IP bindings: synced from CRM; proxy resolves client IP → user_id
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS ip_bindings (
+            ip TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL
+        )
+    """)
+
     db_connection.commit()
     logger.info("Policies database schema initialized successfully")
 
 
-def set_profile_mode(mode: str) -> None:
-    """Set profile mode for resolver: whitelist (no rule = review) or blacklist (no rule = allow)."""
+def set_profile_mode(mode: str, user_id: Optional[int] = None) -> None:
+    """Set profile mode. When user_id is set, store per-user; else global default."""
     if mode not in ("whitelist", "blacklist"):
         mode = "whitelist"
+    if user_id is not None:
+        db_connection.execute(
+            "INSERT OR REPLACE INTO resolver_settings_user (user_id, key, value) VALUES (?, 'profile_mode', ?)",
+            (user_id, mode),
+        )
+    else:
+        db_connection.execute(
+            "INSERT OR REPLACE INTO resolver_settings (key, value) VALUES ('profile_mode', ?)",
+            (mode,),
+        )
+    db_connection.commit()
+    logger.info("Profile mode set to %s (core DB: %s)%s", mode, _db_path, f" user_id={user_id}" if user_id is not None else "")
+
+
+def get_default_user_id() -> Optional[int]:
+    """User ID to use when flow has no bound user (e.g. IP binding disabled). Set by CRM sync."""
+    cursor = db_connection.execute(
+        "SELECT value FROM resolver_settings WHERE key = 'default_user_id'"
+    )
+    row = cursor.fetchone()
+    if not row or row[0] is None:
+        return None
+    try:
+        return int(row[0])
+    except (ValueError, TypeError):
+        return None
+
+
+def set_default_user_id(user_id: Optional[int]) -> None:
+    """Set the default user_id for unbound flows (when IP binding is off)."""
+    val = str(user_id) if user_id is not None else ""
     db_connection.execute(
-        "INSERT OR REPLACE INTO resolver_settings (key, value) VALUES ('profile_mode', ?)",
-        (mode,),
+        "INSERT OR REPLACE INTO resolver_settings (key, value) VALUES ('default_user_id', ?)",
+        (val,),
     )
     db_connection.commit()
-    logger.info("Profile mode set to %s (core DB: %s)", mode, _db_path)
 
 
-def get_profile_mode() -> str:
-    """Get profile mode: whitelist or blacklist. Default whitelist.
-    Whitelist = site not in list → send for review. Blacklist = site not in list → allow (open)."""
+def get_profile_mode(user_id: Optional[int] = None) -> str:
+    """Get profile mode. When user_id is set, use per-user setting; else use default_user_id then global."""
+    _uid = user_id if user_id is not None else get_default_user_id()
+    if _uid is not None:
+        cursor = db_connection.execute(
+            "SELECT value FROM resolver_settings_user WHERE user_id = ? AND key = 'profile_mode'",
+            (_uid,),
+        )
+        row = cursor.fetchone()
+        if row:
+            v = (row[0] or "").strip().lower()
+            if v in ("whitelist", "blacklist"):
+                return v
     cursor = db_connection.execute(
         "SELECT value FROM resolver_settings WHERE key = 'profile_mode'"
     )
@@ -182,6 +283,30 @@ def get_profile_mode() -> str:
         if v in ("whitelist", "blacklist"):
             return v
     return "whitelist"
+
+
+def get_user_id_for_ip(ip: str):
+    """Resolve client IP to user_id. Returns int or None if not bound."""
+    if not ip or not str(ip).strip():
+        return None
+    ip = str(ip).strip()
+    cursor = db_connection.execute("SELECT user_id FROM ip_bindings WHERE ip = ?", (ip,))
+    row = cursor.fetchone()
+    return int(row[0]) if row else None
+
+
+def set_ip_bindings(bindings: list) -> None:
+    """Replace all ip_bindings with list of (ip, user_id). Called when syncing from CRM."""
+    db_connection.execute("DELETE FROM ip_bindings")
+    for ip, user_id in bindings:
+        ip = str(ip).strip()
+        if ip:
+            db_connection.execute(
+                "INSERT OR REPLACE INTO ip_bindings (ip, user_id) VALUES (?, ?)",
+                (ip, int(user_id)),
+            )
+    db_connection.commit()
+    logger.info("ip_bindings updated: %s entries", len(bindings))
 
 
 def get_core_resolver_db_path() -> str:
@@ -274,10 +399,15 @@ def add_policy(domain: str, path: Optional[str] = None,
                policy_type: str = "*", state: str = "block",
                description: Optional[str] = None, enabled: bool = True,
                tags: Optional[List[str]] = None, source: str = "user",
-               text_filter_enabled: bool = True) -> Dict:
-    """Add a new policy. source: 'global' (base whitelist) or 'user'. Returns the created policy dict."""
+               text_filter_enabled: bool = True, image_filter_enabled: bool = True,
+               user_id: Optional[int] = None) -> Dict:
+    """Add a new policy. source: 'global' (user_id must be None) or 'user' (user_id optional, for per-user rules)."""
     if source not in ("global", "user"):
         source = "user"
+    if source == "global":
+        user_id = None
+    elif user_id is None:
+        user_id = 0  # legacy
     error = validate_policy(domain, path, policy_type, state, tags)
     if error:
         raise ValueError(error)
@@ -286,21 +416,20 @@ def add_policy(domain: str, path: Optional[str] = None,
     path = path.strip() if path else None
     tags_str = _tags_to_str(tags) if tags else None
     tf = 1 if text_filter_enabled else 0
+    imgf = 1 if image_filter_enabled else 0
 
     try:
         db_connection.execute(f"""
             INSERT INTO {POLICIES_TABLE_NAME} 
-            (domain, path, type, state, description, enabled, created_at, updated_at, tags, source, text_filter_enabled)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (domain, path, policy_type, state, description, 1 if enabled else 0, now, now, tags_str, source, tf))
+            (domain, path, type, state, description, enabled, created_at, updated_at, tags, source, text_filter_enabled, image_filter_enabled, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (domain, path, policy_type, state, description, 1 if enabled else 0, now, now, tags_str, source, tf, imgf, user_id))
         db_connection.commit()
         
-        # Get the inserted row
         cursor = db_connection.execute(f"""
             SELECT * FROM {POLICIES_TABLE_NAME} 
-            WHERE domain = ? AND (path = ? OR (path IS NULL AND ? IS NULL)) AND type = ? AND source = ?
-        """, (domain, path, path, policy_type, source))
-        
+            WHERE domain = ? AND (path = ? OR (path IS NULL AND ? IS NULL)) AND type = ? AND source = ? AND (user_id = ? OR (user_id IS NULL AND ? IS NULL))
+        """, (domain, path, path, policy_type, source, user_id, user_id))
         row = cursor.fetchone()
         if row:
             return row_to_dict(row)
@@ -314,7 +443,8 @@ def update_policy(policy_id: int, domain: Optional[str] = None,
                   path: Optional[str] = None, policy_type: Optional[str] = None,
                   state: Optional[str] = None, description: Optional[str] = None,
                   enabled: Optional[bool] = None, tags: Optional[List[str]] = None,
-                  source: Optional[str] = None, text_filter_enabled: Optional[bool] = None) -> Dict:
+                  source: Optional[str] = None, text_filter_enabled: Optional[bool] = None,
+                  image_filter_enabled: Optional[bool] = None) -> Dict:
     """Update an existing policy. Returns the updated policy dict."""
     cursor = db_connection.execute(f"""
         SELECT * FROM {POLICIES_TABLE_NAME} WHERE id = ?
@@ -336,6 +466,7 @@ def update_policy(policy_id: int, domain: Optional[str] = None,
     if new_source not in ("global", "user"):
         new_source = "user"
     new_text_filter = text_filter_enabled if text_filter_enabled is not None else current.get("text_filter_enabled", True)
+    new_image_filter = image_filter_enabled if image_filter_enabled is not None else current.get("image_filter_enabled", True)
 
     # Validate
     error = validate_policy(new_domain, new_path, new_type, new_state, new_tags if isinstance(new_tags, list) else None)
@@ -350,10 +481,10 @@ def update_policy(policy_id: int, domain: Optional[str] = None,
         db_connection.execute(f"""
             UPDATE {POLICIES_TABLE_NAME}
             SET domain = ?, path = ?, type = ?, state = ?,
-                description = ?, enabled = ?, updated_at = ?, tags = ?, source = ?, text_filter_enabled = ?
+                description = ?, enabled = ?, updated_at = ?, tags = ?, source = ?, text_filter_enabled = ?, image_filter_enabled = ?
             WHERE id = ?
         """, (new_domain, new_path, new_type, new_state,
-              new_description, 1 if new_enabled else 0, now, new_tags_str, new_source, 1 if new_text_filter else 0, policy_id))
+              new_description, 1 if new_enabled else 0, now, new_tags_str, new_source, 1 if new_text_filter else 0, 1 if new_image_filter else 0, policy_id))
         db_connection.commit()
         
         # Return updated policy
@@ -376,6 +507,12 @@ def delete_policy(policy_id: int) -> bool:
     return cursor.rowcount > 0
 
 
+def delete_user_policies(user_id: int) -> None:
+    """Delete all user policies for a given user_id (used when syncing that user from CRM)."""
+    db_connection.execute(f"DELETE FROM {POLICIES_TABLE_NAME} WHERE source = 'user' AND user_id = ?", (user_id,))
+    db_connection.commit()
+
+
 def get_policy(policy_id: int) -> Optional[Dict]:
     """Get a single policy by ID."""
     cursor = db_connection.execute(f"""
@@ -385,8 +522,8 @@ def get_policy(policy_id: int) -> Optional[Dict]:
     return row_to_dict(row) if row else None
 
 
-def get_all_policies(enabled_only: bool = False, source_filter: Optional[str] = None) -> List[Dict]:
-    """Get all policies, optionally filtered by enabled status and source ('global' or 'user')."""
+def get_all_policies(enabled_only: bool = False, source_filter: Optional[str] = None, user_id: Optional[int] = None) -> List[Dict]:
+    """Get all policies. When source_filter='user' and user_id is set, return only that user's policies."""
     query = f"SELECT * FROM {POLICIES_TABLE_NAME}"
     params = []
     where = []
@@ -395,6 +532,9 @@ def get_all_policies(enabled_only: bool = False, source_filter: Optional[str] = 
     if source_filter in ("global", "user"):
         where.append("source = ?")
         params.append(source_filter)
+    if source_filter == "user" and user_id is not None:
+        where.append("user_id = ?")
+        params.append(user_id)
     if where:
         query += " WHERE " + " AND ".join(where)
     query += " ORDER BY created_at DESC"
@@ -422,14 +562,15 @@ def get_global_policies_for_resolver() -> List[Dict]:
     """Get enabled global (base whitelist) policies for resolver."""
     policies = get_all_policies(enabled_only=True, source_filter="global")
     return [
-        {"domain": p["domain"], "path": p["path"], "type": p["type"], "state": p["state"], "tags": p.get("tags", []), "text_filter_enabled": p.get("text_filter_enabled", True)}
+        {"domain": p["domain"], "path": p["path"], "type": p["type"], "state": p["state"], "tags": p.get("tags", []), "text_filter_enabled": p.get("text_filter_enabled", True), "image_filter_enabled": p.get("image_filter_enabled", True)}
         for p in policies
     ]
 
 
-def get_user_policies_for_resolver() -> List[Dict]:
-    """Get enabled user policies for resolver (per-user overrides)."""
-    policies = get_all_policies(enabled_only=True, source_filter="user")
+def get_user_policies_for_resolver(user_id: Optional[int] = None) -> List[Dict]:
+    """Get enabled user policies for resolver. When user_id is None, use default_user_id (first user)."""
+    _uid = user_id if user_id is not None else get_default_user_id()
+    policies = get_all_policies(enabled_only=True, source_filter="user", user_id=_uid)
     return [
         {"domain": p["domain"], "path": p["path"], "type": p["type"], "state": p["state"], "tags": p.get("tags", [])}
         for p in policies
@@ -546,6 +687,14 @@ def row_to_dict(row: tuple) -> Dict:
         d["text_filter_enabled"] = bool(row[11])
     else:
         d["text_filter_enabled"] = True
+    if len(row) > 12:
+        d["image_filter_enabled"] = bool(row[12])
+    else:
+        d["image_filter_enabled"] = True
+    if len(row) > 13:
+        d["user_id"] = row[13] if row[13] is not None else None
+    else:
+        d["user_id"] = None
     return d
 
 

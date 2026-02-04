@@ -140,7 +140,7 @@ const ProfilesPage: React.FC = () => {
   };
 
   const handleDeleteProfile = async (id: number) => {
-    if (!confirm('האם אתה בטוח שברצונך למחוק את הפרופיל הזה?')) return;
+    if (!confirm('למחוק את הפרופיל הזה?')) return;
     try {
       await deleteProfile(id, managedUserId ?? undefined);
     } catch (error: unknown) {
@@ -165,11 +165,11 @@ const ProfilesPage: React.FC = () => {
           }
           sx={{ mb: 2 }}
         >
-          מנהל כללים של {managedUserPhone}
+          הפרופילים של {managedUserPhone}
         </Alert>
       )}
       <Typography variant="h4" gutterBottom>
-        {managedUserId != null && managedUserPhone ? `מנהל כללים של ${managedUserPhone}` : 'פרופילי סינון'}
+        {managedUserId != null && managedUserPhone ? `הפרופילים של ${managedUserPhone}` : 'הפרופילים שלי'}
       </Typography>
 
       {/* Tabs */}
@@ -234,7 +234,7 @@ const ProfilesPage: React.FC = () => {
                   disabled={!!selectedProfile.is_default || lockedSettings.includes('profile_name')}
                   helperText={
                     selectedProfile.is_default
-                      ? 'לא ניתן לשנות את שם פרופיל ברירת המחדל'
+                      ? 'לא ניתן לשנות את שם הפרופיל של ברירת המחדל'
                       : lockedSettings.includes('profile_name')
                         ? 'נחסם על ידי ההנהלה'
                         : undefined
@@ -257,8 +257,8 @@ const ProfilesPage: React.FC = () => {
                 </Typography>
                 <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 0.5 }}>
                   <Chip
-                    label={selectedProfile.mode === 'whitelist' ? 'רשימה לבנה + חריגים' : 'רשימה שחורה + חריגים'}
-                    color={selectedProfile.mode === 'whitelist' ? 'success' : 'default'}
+                    label={selectedProfile.mode === 'whitelist' ? 'הכל חסום – אוסיף פתיחות' : 'הכל פתוח – אוסיף חסימות'}
+                    color={selectedProfile.mode === 'whitelist' ? 'default' : 'success'}
                     size="small"
                     onClick={lockedSettings.includes('profile_mode') ? undefined : async () => {
                       const newMode = selectedProfile.mode === 'whitelist' ? 'blacklist' : 'whitelist';
@@ -304,13 +304,9 @@ const ProfilesPage: React.FC = () => {
               <Paper sx={{ p: 2, mb: 2, bgcolor: 'background.default' }}>
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
                   {selectedProfile.mode === 'whitelist' ? (
-                    <>
-                      כל האתרים במערכת <strong style={{ color: '#4caf50' }}>פתוחים</strong> למעט האתרים הרשומים למטה:
-                    </>
+                    <>כל האתרים <strong>חסומים</strong> במצב הזה. למטה תוסיף רק את האתרים שתרצה לפתוח.</>
                   ) : (
-                    <>
-                      כל האתרים במערכת <strong style={{ color: '#f44336' }}>חסומים</strong> למעט האתרים הרשומים למטה:
-                    </>
+                    <>כל האתרים <strong>פתוחים</strong> במצב הזה. למטה תוסיף רק את האתרים שתרצה לחסום.</>
                   )}
                 </Typography>
               </Paper>
@@ -355,8 +351,8 @@ const ProfilesPage: React.FC = () => {
               onChange={(e) => setNewProfileMode(e.target.value as 'whitelist' | 'blacklist')}
               label="מצב עבודה"
             >
-              <MenuItem value="whitelist">רשימה לבנה + חריגים</MenuItem>
-              <MenuItem value="blacklist">רשימה שחורה + חריגים</MenuItem>
+              <MenuItem value="whitelist">הכל חסום – אוסיף פתיחות</MenuItem>
+              <MenuItem value="blacklist">הכל פתוח – אוסיף חסימות</MenuItem>
             </Select>
           </FormControl>
         </DialogContent>

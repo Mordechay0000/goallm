@@ -45,14 +45,14 @@ const DashboardPage: React.FC = () => {
           {currentProfile ? (
             <Box>
               <Typography variant="body1" sx={{ mb: 2 }}>
-                <strong>{currentProfile.name}</strong> ({currentProfile.mode === 'whitelist' ? 'רשימה לבנה' : 'רשימה שחורה'})
+                <strong>{currentProfile.name}</strong> ({currentProfile.mode === 'whitelist' ? 'הכל חסום – אוסיף פתיחות' : 'הכל פתוח – אוסיף חסימות'})
               </Typography>
               <Box sx={{ display: 'flex', gap: 2 }}>
                 <Button
                   variant="contained"
                   onClick={() => navigate(`/profiles/${currentProfile.id}/rules`)}
                 >
-                  ערוך חוקים
+                  ערוך אתרים
                 </Button>
                 <Button
                   variant="outlined"

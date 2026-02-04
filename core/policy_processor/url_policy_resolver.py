@@ -203,22 +203,29 @@ class URLPolicyResolver:
         self._validate_normalized(domain, path)
 
         if self._two_phase:
-            # Phase 1: global whitelist. Not in global → always review (not dependent on user).
+            # Phase 1: global list. Only URLs in the global list are considered; rest → review.
             global_rule = self._match_candidates(self.global_policies, domain, path, req_type)
             if global_rule is None:
-                self._log("Not in global whitelist -> review")
+                self._log("Not in global list -> review")
                 return {"state": "review"}
-            # Global allows this URL (or block with tag). If global says block (e.g. tag), return block.
             if global_rule.get("state") == "block":
                 self._log("Global rule says block (e.g. tag)")
                 return global_rule
-            # Phase 2: user overrides. In global (allow) but user has block → block with block_reason user_settings.
+            # Phase 2: user profile mode. Subject to global, apply user rules.
             user_rule = self._match_candidates(self.user_policies, domain, path, req_type)
-            if user_rule is not None and user_rule.get("state") == "block":
-                self._log("User rule blocks (in global whitelist) -> block_reason user_settings")
-                return {**user_rule, "state": "block", "block_reason": "user_settings"}
-            self._log("In global whitelist, no user block -> allow")
-            return {**global_rule, "state": "allow"}
+            if self.default_mode == "blacklist":
+                # Blacklist: all open except what the user added as block.
+                if user_rule is not None and user_rule.get("state") == "block":
+                    self._log("User rule blocks -> block_reason user_settings")
+                    return {**user_rule, "state": "block", "block_reason": "user_settings"}
+                self._log("In global, no user block -> allow")
+                return {**global_rule, "state": "allow"}
+            # Whitelist: all blocked except what the user added as allow.
+            if user_rule is not None and user_rule.get("state") == "allow":
+                self._log("User rule allows -> allow")
+                return {**global_rule, "state": "allow"}
+            self._log("In global, no user allow -> block (whitelist mode)")
+            return {"state": "block", "block_reason": "user_settings"}
 
         # Legacy single-phase: one policies list
         candidates = []

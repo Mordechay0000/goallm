@@ -19,40 +19,117 @@ def _crm_request_link(request_url: str, request_type: str) -> str:
     redirect_path = f"/requests?url={quote(url_param, safe='')}&request_type={request_type}"
     return f"{CRM_FRONTEND_URL}/login?redirect={quote(redirect_path, safe='')}"
 
+# Open, flowing layout – no box; clear title → subtitle → details
 _COMMON_STYLES = """
 * { box-sizing: border-box; }
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); color: #eee; margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 1rem; }
-.card { background: rgba(255,255,255,0.08); border-radius: 16px; padding: 2.5rem; max-width: 520px; width: 100%; border: 1px solid rgba(255,255,255,0.12); text-align: right; }
-h1 { font-size: 1.75rem; margin: 0 0 0.5rem; color: #fff; }
-h2 { font-size: 1.1rem; margin: 1.25rem 0 0.5rem; color: #ccc; }
-p { margin: 0; line-height: 1.6; color: #ccc; }
-.rule { margin: 0.5rem 0; padding: 0.5rem; background: rgba(0,0,0,0.2); border-radius: 8px; font-size: 0.9rem; }
-.form { margin-top: 1rem; text-align: right; }
-.form label { display: block; margin: 0.5rem 0 0.2rem; color: #ccc; font-size: 0.9rem; }
-.form input[type=text], .form select { width: 100%; padding: 0.5rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.3); background: rgba(0,0,0,0.2); color: #fff; font-size: 1rem; }
-.form select option { background: #1a1a2e; color: #fff; }
-.form .row { margin: 0.75rem 0; }
-.form .checkbox { display: flex; align-items: center; gap: 0.5rem; margin: 0.75rem 0; }
-.form .checkbox input { width: auto; }
-.btn { display: inline-block; margin-top: 1rem; padding: 0.6rem 1.2rem; background: #4a90d9; color: #fff; border: none; border-radius: 8px; font-size: 1rem; cursor: pointer; text-decoration: none; }
-.btn:hover { background: #357abd; }
-.btn:disabled { opacity: 0.6; cursor: not-allowed; }
-.btn-secondary { background: rgba(255,255,255,0.15); margin-left: 0.5rem; }
-.btn-secondary:hover { background: rgba(255,255,255,0.25); }
-.error { color: #f44336; font-size: 0.9rem; margin-top: 0.5rem; }
-.success { color: #4caf50; font-size: 1rem; margin-top: 1rem; font-weight: 500; }
-.tag-box { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; min-height: 42px; padding: 0.4rem; border: 1px solid rgba(255,255,255,0.3); border-radius: 8px; background: rgba(0,0,0,0.2); }
-.tag-box:focus-within { border-color: #4a90d9; }
-.tag-chip { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.2rem 0.5rem; background: rgba(74,144,217,0.4); border-radius: 6px; font-size: 0.9rem; }
-.tag-chip .tag-remove { cursor: pointer; padding: 0 0.2rem; color: #ccc; font-size: 1.1rem; line-height: 1; }
-.tag-chip .tag-remove:hover { color: #fff; }
-.tag-box input { flex: 1; min-width: 120px; padding: 0.35rem 0.5rem; border: none; background: transparent; color: #fff; font-size: 1rem; outline: none; }
-.tag-box-readonly { cursor: default; }
-.tag-box-readonly .tag-chip { padding: 0.25rem 0.5rem; }
-.form-section { display: none; }
-.form-section.visible { display: block; }
-.info-url { color: #aaa; font-size: 0.9rem; margin-top: 0.25rem; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2.5rem 1.5rem;
+  text-align: right;
+  line-height: 1.6;
+}
+.page-wrap {
+  max-width: 520px;
+  width: 100%;
+  padding: 0;
+}
+.status-badge {
+  display: inline-block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 0.3rem 0.75rem;
+  border-radius: 999px;
+  margin-bottom: 1rem;
+  text-transform: uppercase;
+  opacity: 0.95;
+}
+.page-head { margin-bottom: 0.5rem; }
+h1 {
+  font-size: 2rem;
+  font-weight: 700;
+  margin: 0 0 1rem;
+  line-height: 1.3;
+  letter-spacing: -0.02em;
+}
+.lead {
+  font-size: 1.1rem;
+  margin: 0 0 2rem;
+  opacity: 0.9;
+  line-height: 1.55;
+}
+.details-head {
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  margin: 0 0 0.6rem;
+  opacity: 0.7;
+  text-transform: uppercase;
+}
+.detail {
+  font-size: 0.95rem;
+  margin: 0.4rem 0;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid rgba(0,0,0,0.06);
+  background: none;
+}
+.detail:last-of-type { border-bottom: none; }
+.detail strong {
+  font-weight: 600;
+  display: inline-block;
+  min-width: 4.5em;
+}
+.info-url { color: inherit; opacity: 0.85; }
+.actions { margin-top: 2rem; }
+.btn {
+  display: inline-block;
+  padding: 0.7rem 1.5rem;
+  border-radius: 12px;
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: none;
+  border: none;
+  transition: opacity 0.2s, transform 0.15s;
+}
+.btn:hover { opacity: 0.92; transform: translateY(-1px); }
+.btn:active { transform: translateY(0); }
+.tag-chip {
+  display: inline-block;
+  padding: 0.2rem 0.5rem;
+  border-radius: 6px;
+  font-size: 0.88rem;
+  margin: 0.15rem 0.15rem 0 0;
+}
+textarea.readonly-debug {
+  width: 100%; min-height: 80px; font-size: 0.75rem;
+  border-radius: 10px; padding: 0.6rem; margin-top: 0.5rem;
+  resize: vertical; border: 1px solid rgba(0,0,0,0.08);
+}
 """
+
+def _svg_bg_uri(svg: str) -> str:
+    """Encode SVG for use as CSS background-image data URI. Single quotes so style=\"...\" is valid."""
+    return "url('data:image/svg+xml," + quote(svg, safe="") + "')"
+
+# Soft center overlay so text is readable on all backgrounds (no box, just flow)
+_BG_OVERLAY = "radial-gradient(ellipse 90% 80% at 50% 50%, rgba(255,255,255,0.93), transparent 70%), "
+
+
+# Background SVGs – full-page mood per state (danger / personal / filtered / pending)
+# Danger: policy block – "מסוכן/רע", hazard feel so user feels site is bad (not "locked")
+_BG_DANGER = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600"><defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#6b1a1a"/><stop offset="50%" style="stop-color:#4a0e0e"/><stop offset="100%" style="stop-color:#1a0505"/></linearGradient><pattern id="stripes" patternUnits="userSpaceOnUse" width="40" height="20"><path d="M0 0L20 20M20 0L40 20" stroke="#dc2626" stroke-width="3" opacity="0.25"/></pattern></defs><rect width="600" height="600" fill="url(#g)"/><rect width="600" height="600" fill="url(#stripes)"/><path d="M300 120 L480 480 L120 480 Z" fill="none" stroke="#f87171" stroke-width="2" opacity="0.12"/></svg>"""
+# User settings: calm, personal, indigo
+_BG_USER = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600"><defs><linearGradient id="u" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#e0e7ff"/><stop offset="70%" style="stop-color:#c7d2fe"/><stop offset="100%" style="stop-color:#a5b4fc"/></linearGradient><pattern id="dots" patternUnits="userSpaceOnUse" width="48" height="48"><circle cx="24" cy="24" r="2" fill="#4f46e5" opacity="0.15"/></pattern></defs><rect width="600" height="600" fill="url(#u)"/><rect width="600" height="600" fill="url(#dots)"/></svg>"""
+# Text filter: content censored, red-orange, "filtered" lines
+_BG_FILTER = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600"><defs><linearGradient id="f" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#fff7ed"/><stop offset="60%" style="stop-color:#ffedd5"/><stop offset="100%" style="stop-color:#fed7aa"/></linearGradient><pattern id="lines" patternUnits="userSpaceOnUse" width="8" height="24"><line x1="0" y1="4" x2="8" y2="4" stroke="#ea580c" stroke-width="1.5" opacity="0.35"/><line x1="0" y1="12" x2="6" y2="12" stroke="#c2410c" stroke-width="1" opacity="0.25"/><line x1="0" y1="20" x2="7" y2="20" stroke="#ea580c" stroke-width="1" opacity="0.2"/></pattern></defs><rect width="600" height="600" fill="url(#f)"/><rect width="600" height="600" fill="url(#lines)"/><path d="M200 150 L400 150 L300 450 L200 450 Z" fill="#fef3c7" opacity="0.2"/></svg>"""
+# Pending: soft amber, waiting
+_BG_PENDING = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600"><defs><linearGradient id="p" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#fffbeb"/><stop offset="50%" style="stop-color:#fef3c7"/><stop offset="100%" style="stop-color:#fde68a"/></linearGradient><pattern id="waves" patternUnits="userSpaceOnUse" width="80" height="40"><path d="M0 20 Q20 10 40 20 T80 20" stroke="#d97706" stroke-width="1" fill="none" opacity="0.2"/><path d="M0 28 Q20 18 40 28 T80 28" stroke="#b45309" stroke-width="1" fill="none" opacity="0.15"/></pattern></defs><rect width="600" height="600" fill="url(#p)"/><rect width="600" height="600" fill="url(#waves)"/></svg>"""
 
 
 def _url_to_domain_only(url: str) -> str:
@@ -87,48 +164,67 @@ def _blocked_page_html(
     debug_b64 = (block_debug_b64 or "").strip()
 
     if is_text_filter:
-        title_msg = "הדף נחסם – סינון מלל"
-        body_msg = "הדף נחסם כי התוכן הטקסטואלי לא עבר את סינון המלל. זוהי חסימה אוטומטית לפי רשימת מילים וכללי תוכן – לא חסימת האתר ברשימה הגלובלית."
         full_request_url = request_url.replace("https://", "").replace("http://", "").strip() if request_url else ""
         full_url_display = html.escape(full_request_url, quote=False) if full_request_url else "—"
         reason_detail_html = ""
         if reason_detail:
             reason_detail_esc = html.escape(reason_detail, quote=False)
-            reason_detail_html = f'<p class="rule" style="margin-top:1rem;"><strong>גורם לחסימה (לדיבוג):</strong> <code style="background:rgba(0,0,0,0.3); padding:0.2rem 0.5rem; border-radius:4px; font-size:0.9rem; word-break:break-all;">{reason_detail_esc}</code></p>'
+            reason_detail_html = f'<p class="detail"><strong>מידע נוסף לשירות הלקוחות:</strong> <code style="word-break:break-all;">{reason_detail_esc}</code></p>'
         debug_section = ""
         if debug_b64:
             debug_b64_esc = html.escape(debug_b64, quote=False)
-            debug_section = f"""
-        <h2 style="margin-top:1.5rem; font-size:1rem;">דיבוג מלא (base64)</h2>
-        <textarea readonly style="width:100%; min-height:80px; font-size:0.75rem; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.2); border-radius:8px; color:#ccc; padding:0.5rem; margin-top:0.5rem; resize:vertical;" id="debug-b64">{debug_b64_esc}</textarea>
-"""
+            debug_section = f'<p class="detail" style="margin-top:1rem;"><strong>מידע נוסף לשירות הלקוחות:</strong></p><textarea readonly class="readonly-debug" id="debug-b64">{debug_b64_esc}</textarea>'
         return f"""<!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{html.escape(title_msg)}</title>
+    <title>הדף נחסם – תוכן לא מתאים</title>
     <style>{_COMMON_STYLES}</style>
 </head>
-<body>
-    <div class="card">
-        <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">📝</div>
-        <h1>{html.escape(title_msg)}</h1>
-        <p>{html.escape(body_msg)}</p>
-        <p class="rule info-url"><strong>הכתובת שניגש אליה:</strong> {full_url_display}</p>
+<body style="background: {_BG_OVERLAY}{_svg_bg_uri(_BG_FILTER)} center/cover no-repeat; color: #2d2d2d;">
+    <div class="page-wrap">
+        <div class="page-head">
+            <span class="status-badge" style="background: #ffebe6; color: #b91c1c;">הדף נחסם</span>
+        </div>
+        <h1>התוכן בדף הזה לא מתאים</h1>
+        <p class="lead">המערכת חסמה את הדף כי התוכן שבו לא עבר את הבדיקה (למשל מילים או תוכן שלא מותרים). האתר עצמו יכול להיות פתוח בדפים אחרים.</p>
+        <p class="details-head">פרטים</p>
+        <p class="detail info-url"><strong>כתובת הדף:</strong> {full_url_display}</p>
         {reason_detail_html}
         {debug_section}
     </div>
 </body>
 </html>"""
 
-    title_msg = "נחסם בגלל הגדרות משתמש" if is_user_settings else "האתר נחסם"
-    body_msg = "הגישה לאתר זה חסומה בהתאם להגדרות הפרופיל שלך (האתר פתוח ברשימה הגלובלית)." if is_user_settings else "הגישה לאתר זה חסומה בהתאם להגדרות המדיניות."
+    # Blocked by policy or by user settings
+    if is_user_settings:
+        badge_text = "חסום בהגדרות שלך"
+        title_msg = "אתר זה חסום אצלך"
+        body_msg = "בהגדרות שבחרת בחשבון, אתר זה מוגדר כחסום. אפשר לשנות את זה בהגדרות החשבון."
+        badge_style = "background: #e0e7ff; color: #3730a3;"
+        body_bg = "#f8fafc"
+        body_color = "#1e293b"
+        btn_style = "background: #4f46e5; color: #fff;"
+    else:
+        badge_text = "האתר חסום"
+        title_msg = "אין גישה לאתר הזה"
+        body_msg = "האתר חסום במערכת. אם אתה חושב שצריך לפתוח אותו – אפשר לשלוח בקשה מהחשבון שלך."
+        badge_style = "background: #fee2e2; color: #b91c1c;"
+        body_bg = "#fef8f5"
+        body_color = "#2d2d2d"
+        btn_style = "background: #dc2626; color: #fff;"
     full_request_url = request_url.replace("https://", "").replace("http://", "").strip() if request_url else ""
     prefilled_url = (rule_domain or "").strip() or full_request_url
     full_url_display = html.escape(full_request_url, quote=False) if full_request_url else "—"
     crm_link = _crm_request_link(prefilled_url or full_request_url, "change")
     crm_link_esc = html.escape(crm_link, quote=True)
+    tags_html = "".join(f'<span class="tag-chip" style="background:#e0e7ff;color:#3730a3;">{html.escape(t)}</span>' for t in tags_list) if tags_list else '<span style="opacity:0.6;">—</span>'
+    actions_html = (
+        f'<div class="actions"><a href="{crm_link_esc}" class="btn" style="{btn_style}">שלח בקשה לפתיחה</a></div>'
+        if not is_user_settings
+        else ""
+    )
     return f"""<!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
@@ -137,19 +233,18 @@ def _blocked_page_html(
     <title>{html.escape(title_msg)}</title>
     <style>{_COMMON_STYLES}</style>
 </head>
-<body>
-    <div class="card">
-        <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">🚫</div>
-        <h1>{html.escape(title_msg)}</h1>
-        <p>{html.escape(body_msg)}</p>
-        <p class="rule"><strong>כלל:</strong> {rule_domain or "—"}{rule_path or ""} (מצב: {rule_state or "block"})</p>
-        <p class="rule info-url"><strong>הכתובת שניגש אליה:</strong> {full_url_display}</p>
-        <div class="rule"><strong>תגיות:</strong>
-        <span class="tag-box tag-box-readonly">{''.join('<span class="tag-chip">' + html.escape(t) + '</span>' for t in tags_list) if tags_list else '<span style="color:#888">—</span>'}</span>
+<body style="background: {_BG_OVERLAY}{_svg_bg_uri(_BG_USER if is_user_settings else _BG_DANGER)} center/cover no-repeat; color: {body_color};">
+    <div class="page-wrap">
+        <div class="page-head">
+            <span class="status-badge" style="{badge_style}">{html.escape(badge_text)}</span>
         </div>
-
-        <p style="margin-top: 1.5rem; color: #ccc;">לשליחת בקשה לשינוי – התחבר לחשבון וצור בקשה מתוך הממשק.</p>
-        <a href="{crm_link_esc}" class="btn" style="{'display:none;' if is_user_settings else 'margin-top:1rem;'}">הוסף בקשה בחשבון שלי</a>
+        <h1>{html.escape(title_msg)}</h1>
+        <p class="lead">{html.escape(body_msg)}</p>
+        <p class="details-head">פרטים</p>
+        <p class="detail"><strong>אתר שחסום:</strong> {html.escape(rule_domain or "—")}{html.escape(rule_path or "")}</p>
+        <p class="detail info-url"><strong>כתובת:</strong> {full_url_display}</p>
+        <p class="detail"><strong>תגיות:</strong> {tags_html}</p>
+        {actions_html}
     </div>
 </body>
 </html>"""
@@ -166,18 +261,21 @@ def _send_for_review_page_html(request_url: str = "") -> str:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>נא לשלוח לבדיקה</title>
+    <title>האתר עדיין לא נבדק</title>
     <style>{_COMMON_STYLES}</style>
 </head>
-<body>
-    <div class="card">
-        <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">⏳</div>
-        <h1>נא לשלוח לבדיקה</h1>
-        <p>עדיין לא הוגדר כלל לאתר זה. התחבר לחשבון וצור בקשה לפתיחה מתוך הממשק.</p>
-        <p class="rule info-url"><strong>הכתובת שניגש אליה:</strong> {full_url_display}</p>
-
-        <p style="margin-top: 1.5rem; color: #ccc;">לשליחת בקשה לפתיחת אתר – התחבר לחשבון וצור בקשה מתוך הממשק.</p>
-        <a href="{crm_link_esc}" class="btn" style="margin-top:1rem;">הוסף בקשה בחשבון שלי</a>
+<body style="background: {_BG_OVERLAY}{_svg_bg_uri(_BG_PENDING)} center/cover no-repeat; color: #1c1917;">
+    <div class="page-wrap">
+        <div class="page-head">
+            <span class="status-badge" style="background: #fef3c7; color: #b45309;">האתר עדיין לא נבדק</span>
+        </div>
+        <h1>האתר עדיין לא נבדק</h1>
+        <p class="lead">המערכת עדיין לא בדקה את האתר הזה. אפשר לשלוח בקשה לבדיקה – אחרי שאישרו, האתר ייפתח.</p>
+        <p class="details-head">פרטים</p>
+        <p class="detail info-url"><strong>כתובת:</strong> {full_url_display}</p>
+        <div class="actions">
+            <a href="{crm_link_esc}" class="btn" style="background: #d97706; color: #fff;">שלח בקשה לבדיקה</a>
+        </div>
     </div>
 </body>
 </html>"""

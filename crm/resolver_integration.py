@@ -23,7 +23,7 @@ def _current_time_str() -> str:
 
 
 def _time_in_range(now_hhmm: str, from_time: Optional[str], to_time: Optional[str]) -> bool:
-    """True if now_hhmm is in [from_time, to_time]. None means no bound."""
+    """True if now_hhmm is in [from_time, to_time]. None means no bound. Uses string comparison (HH:MM); overnight ranges not supported."""
     if from_time is None and to_time is None:
         return True
     if from_time is None:

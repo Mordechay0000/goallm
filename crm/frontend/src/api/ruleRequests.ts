@@ -11,7 +11,6 @@ export interface RuleRequest {
   domain_pattern?: string;
   path_pattern?: string;
   action?: string;
-  type?: string;
   include_subdomains: boolean;
   tags?: string[];
   status: 'pending' | 'approved' | 'rejected';
@@ -28,7 +27,6 @@ export interface RuleRequest {
 export interface RuleRequestUpdate {
   url?: string;
   action?: 'allow' | 'block';
-  type?: '*' | 'image' | 'video';
   include_subdomains?: boolean;
   tags?: string[];
 }
@@ -39,7 +37,6 @@ export interface RuleRequestCreate {
   domain_pattern?: string;
   path_pattern?: string;
   action?: string;
-  type?: string;
   include_subdomains?: boolean;
   tags?: string[];
 }

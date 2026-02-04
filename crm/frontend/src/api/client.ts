@@ -32,7 +32,8 @@ apiClient.interceptors.response.use(
     if (error.response?.status === 401) {
       localStorage.removeItem('access_token');
       localStorage.removeItem('user');
-      window.location.href = '/login';
+      const redirect = encodeURIComponent(window.location.pathname + window.location.search);
+      window.location.href = redirect ? `/login?redirect=${redirect}` : '/login';
     }
     // Don't redirect on 422 (validation errors) - let the component handle it
     return Promise.reject(error);

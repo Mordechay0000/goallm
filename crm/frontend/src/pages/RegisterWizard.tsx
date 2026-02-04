@@ -2,7 +2,7 @@
  * Registration Wizard - Multi-step registration process
  * Minimal, functional design
  */
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   Container,
   Paper,
@@ -11,10 +11,11 @@ import {
   Box,
   Avatar,
   InputAdornment,
+  Button,
 } from '@mui/material';
 import { Phone as PhoneIcon } from '@mui/icons-material';
 import { useAuthStore } from '../store/authStore';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { PasswordField } from '../components/PasswordField';
 import { FormErrors } from '../components/FormErrors';
 import Stepper from '../components/Stepper';
@@ -38,48 +39,58 @@ const RegisterWizard: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formErrors, setFormErrors] = useState<string[]>([]);
-  const { register } = useAuthStore();
+  const { register, logout, isAuthenticated } = useAuthStore();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const redirectTo = searchParams.get('redirect') || '/login';
+  const isBindFlow = redirectTo.includes('/bind') && (redirectTo.includes('from_login=1') || redirectTo.includes('from_login%3D1'));
+
+  // When coming from bind flow while already logged in: disconnect from current account so the new registration binds the device to the new account
+  useEffect(() => {
+    if (isBindFlow && isAuthenticated) {
+      logout();
+    }
+  }, [isBindFlow, isAuthenticated, logout]);
 
   // Live validation functions
   const validateEmailLive = useCallback((value: string): string | undefined => {
-    if (value.length === 0) return 'אימייל הוא שדה חובה';
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) return 'כתובת אימייל לא תקינה';
+    if (value.length === 0) return 'נא להזין אימייל';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) return 'נא להזין כתובת אימייל תקינה';
     return undefined;
   }, []);
 
   const validatePasswordLive = useCallback((value: string): string | undefined => {
-    if (value.length === 0) return 'סיסמה היא שדה חובה';
-    if (value.length < 8) return 'סיסמה חייבת להכיל לפחות 8 תווים';
-    if (value.length > 128) return 'סיסמה לא יכולה להכיל יותר מ-128 תווים';
-    if (!/\d/.test(value)) return 'סיסמה חייבת להכיל לפחות ספרה אחת';
-    if (!/[a-zA-Zא-ת]/.test(value)) return 'סיסמה חייבת להכיל לפחות אות אחת';
+    if (value.length === 0) return 'נא להזין סיסמה';
+    if (value.length < 8) return 'הסיסמה צריכה לפחות 8 תווים';
+    if (value.length > 128) return 'הסיסמה ארוכה מדי';
+    if (!/\d/.test(value)) return 'הסיסמה צריכה לכלול לפחות ספרה אחת';
+    if (!/[a-zA-Zא-ת]/.test(value)) return 'הסיסמה צריכה לכלול לפחות אות אחת';
     return undefined;
   }, []);
 
   const validateConfirmPasswordLive = useCallback((value: string, password: string): string | undefined => {
-    if (value.length === 0) return 'אימות סיסמה הוא שדה חובה';
-    if (value !== password) return 'סיסמאות לא תואמות';
+    if (value.length === 0) return 'נא להזין שוב את הסיסמה';
+    if (value !== password) return 'הסיסמאות לא זהות';
     return undefined;
   }, []);
 
   const validateFirstNameLive = useCallback((value: string): string | undefined => {
-    if (!value.trim()) return 'שם פרטי הוא שדה חובה';
-    if (value.length > 100) return 'שם פרטי לא יכול להכיל יותר מ-100 תווים';
+    if (!value.trim()) return 'נא להזין שם פרטי';
+    if (value.length > 100) return 'השם ארוך מדי';
     return undefined;
   }, []);
 
   const validateLastNameLive = useCallback((value: string): string | undefined => {
-    if (!value.trim()) return 'שם משפחה הוא שדה חובה';
-    if (value.length > 100) return 'שם משפחה לא יכול להכיל יותר מ-100 תווים';
+    if (!value.trim()) return 'נא להזין שם משפחה';
+    if (value.length > 100) return 'השם ארוך מדי';
     return undefined;
   }, []);
 
   const validatePhoneLive = useCallback((value: string): string | undefined => {
     const ph = (value || '').replace(/\D/g, '');
-    if (ph.length === 0) return 'מספר טלפון חובה (לפחות 9 ספרות). ההתחברות מתבצעת באמצעות טלפון וסיסמה';
-    if (ph.length < 9) return 'מספר טלפון חובה (לפחות 9 ספרות). ההתחברות מתבצעת באמצעות טלפון וסיסמה';
-    if (!/^[0-9+\s()-]+$/.test(value)) return 'מספר טלפון לא תקין';
+    if (ph.length === 0) return 'נא להזין מספר טלפון (לפחות 9 ספרות)';
+    if (ph.length < 9) return 'נא להזין מספר טלפון מלא (לפחות 9 ספרות)';
+    if (!/^[0-9+\s()-]+$/.test(value)) return 'מספר הטלפון לא נראה תקין';
     return undefined;
   }, []);
 
@@ -136,11 +147,13 @@ const RegisterWizard: React.FC = () => {
         phone: formData.phone.trim(),
         avatar: avatarFile || undefined,
       });
-      navigate('/login', {
-        state: { message: 'הרשמה הושלמה! התחבר עם הטלפון והסיסמה שלך.' },
-      });
+      const loginUrl = redirectTo.startsWith('/') ? `/login?redirect=${encodeURIComponent(redirectTo)}` : '/login';
+      const successMessage = isBindFlow
+        ? 'החשבון החדש נוצר! עכשיו היכנס עם הטלפון והסיסמה שבחרת – ואז נחבר את המכשיר לחשבון הזה.'
+        : 'החשבון נוצר! עכשיו אפשר להיכנס עם הטלפון והסיסמה שבחרת.';
+      navigate(loginUrl, { state: { message: successMessage } });
     } catch (error: unknown) {
-      let msg = 'שגיאה בהרשמה';
+      let msg = 'משהו השתבש – נסה שוב או פנה לתמיכה';
       const ax = error as { response?: { data?: { detail?: string | { msg?: string; message?: string }[] } }; message?: string };
       const detail = ax?.response?.data?.detail;
       if (Array.isArray(detail) && detail[0]) msg = detail[0].msg || detail[0].message || msg;
@@ -170,8 +183,8 @@ const RegisterWizard: React.FC = () => {
 
   const steps = [
     {
-      label: 'פרטים אישיים',
-      description: 'הזן את הפרטים האישיים שלך',
+      label: 'מי אני',
+      description: 'שם ותמונת פרופיל (לא חובה)',
       content: (
         <Box>
           <FormErrors errors={formErrors} />
@@ -279,8 +292,8 @@ const RegisterWizard: React.FC = () => {
       ),
     },
     {
-      label: 'פרטי התחברות',
-      description: 'מספר טלפון ואימייל - ההתחברות מתבצעת באמצעות טלפון וסיסמה',
+      label: 'איך ניצור קשר',
+      description: 'טלפון ואימייל – נכנסים עם הטלפון והסיסמה',
       content: (
         <Box>
           <TextField
@@ -311,7 +324,7 @@ const RegisterWizard: React.FC = () => {
               setErrors((prev) => (err ? { ...prev, phone: err } : (() => { const n = { ...prev }; delete n.phone; return n; })()));
             }}
             error={!!errors.phone}
-            helperText={errors.phone || 'ההתחברות מתבצעת באמצעות טלפון וסיסמה. לדוגמה: 050-1234567'}
+            helperText={errors.phone || 'נכנסים עם הטלפון והסיסמה. לדוגמה: 050-1234567'}
             placeholder="050-1234567"
             sx={{ mb: 2 }}
             inputProps={{ inputMode: 'tel' }}
@@ -327,8 +340,8 @@ const RegisterWizard: React.FC = () => {
       ),
     },
     {
-      label: 'אבטחה',
-      description: 'הגדר סיסמה חזקה לחשבון שלך',
+      label: 'סיסמה',
+      description: 'בחר סיסמה שתשתמש בה לכניסה',
       content: (
         <Box>
           <PasswordField
@@ -345,7 +358,7 @@ const RegisterWizard: React.FC = () => {
             }}
             required
             error={!!errors.password}
-            helperText={errors.password || 'מינימום 8 תווים, ספרה ואות'}
+            helperText={errors.password || 'לפחות 8 תווים, עם ספרה ואות'}
             sx={{ mb: 2 }}
           />
           <PasswordField
@@ -366,11 +379,23 @@ const RegisterWizard: React.FC = () => {
     },
   ];
 
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key !== 'Enter') return;
+    const target = e.target as HTMLElement;
+    if (target.tagName === 'TEXTAREA') return;
+    e.preventDefault();
+    if (activeStep === steps.length - 1) {
+      if (validateStep(activeStep)) handleFinish();
+    } else {
+      handleNext();
+    }
+  };
+
   return (
-    <Container maxWidth="md" sx={{ mt: 4, mb: 4 }}>
+    <Container maxWidth="md" sx={{ mt: 4, mb: 4 }} onKeyDown={handleKeyDown}>
       <Paper sx={{ p: 4 }}>
         <Typography variant="h5" component="h1" gutterBottom sx={{ mb: 4, fontWeight: 600 }}>
-          הרשמה למערכת
+          יצירת חשבון חדש
         </Typography>
 
         <Stepper
@@ -381,8 +406,13 @@ const RegisterWizard: React.FC = () => {
           onFinish={handleFinish}
           nextLabel="הבא"
           backLabel="חזור"
-          finishLabel={loading ? 'מעבד...' : 'סיום והרשמה'}
+          finishLabel={loading ? 'יוצר חשבון...' : 'סיום – ליצור את החשבון'}
         />
+        <Box sx={{ textAlign: 'center', mt: 3 }}>
+          <Button variant="text" size="small" onClick={() => navigate(redirectTo.startsWith('/') ? `/login?redirect=${encodeURIComponent(redirectTo)}` : '/login')}>
+            כבר יש לי חשבון – אני רוצה להיכנס
+          </Button>
+        </Box>
       </Paper>
     </Container>
   );

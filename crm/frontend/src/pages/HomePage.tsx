@@ -88,10 +88,10 @@ const HomePage: React.FC = () => {
       {/* Page Header */}
       <Box sx={{ mb: 4 }}>
         <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
-          לוח בקרה
+          ברוך הבא
         </Typography>
         <Typography variant="body2" color="text.secondary">
-          סקירה כללית של המערכת
+          סיכום ההגדרות והמספרים שלך
         </Typography>
       </Box>
 
@@ -105,7 +105,7 @@ const HomePage: React.FC = () => {
                 {stats.totalRules}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                כללי סינון
+                אתרים שהגדרת (חסום או פתוח)
               </Typography>
             </Box>
           </Box>
@@ -119,7 +119,7 @@ const HomePage: React.FC = () => {
                 {stats.totalSchedules}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                תזמונים
+                שעות פעילות
               </Typography>
             </Box>
           </Box>
@@ -133,7 +133,7 @@ const HomePage: React.FC = () => {
                 {profiles.length}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                פרופילי סינון
+                פרופילים
               </Typography>
             </Box>
           </Box>
@@ -144,7 +144,7 @@ const HomePage: React.FC = () => {
       <Paper sx={{ mb: 4 }}>
         <Box sx={{ p: 3 }}>
           <Typography variant="h6" sx={{ fontWeight: 600, mb: 3 }}>
-            פרופיל פעיל
+            הפרופיל שפעיל כרגע
           </Typography>
           <Divider sx={{ mb: 3 }} />
           {currentProfile ? (
@@ -154,22 +154,22 @@ const HomePage: React.FC = () => {
                   {currentProfile.name}
                 </Typography>
                 <Chip
-                  label={currentProfile.mode === 'whitelist' ? 'רשימה לבנה' : 'רשימה שחורה'}
-                  color={currentProfile.mode === 'whitelist' ? 'success' : 'default'}
+                  label={currentProfile.mode === 'whitelist' ? 'הכל חסום – אוסיף פתיחות' : 'הכל פתוח – אוסיף חסימות'}
+                  color={currentProfile.mode === 'whitelist' ? 'default' : 'success'}
                   size="small"
                 />
               </Box>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
                 {currentProfile.mode === 'whitelist'
-                  ? 'כל האתרים פתוחים למעט אלו שחסומים'
-                  : 'כל האתרים חסומים למעט אלו שפתוחים'}
+                  ? 'כל האתרים חסומים – פותח רק את האתרים שתוסיף'
+                  : 'כל האתרים פתוחים – חוסם רק את האתרים שתוסיף'}
               </Typography>
               <Box sx={{ display: 'flex', gap: 2 }}>
                 <Button
                   variant="contained"
                   onClick={() => navigate('/profiles')}
                 >
-                  ניהול פרופיל
+                  לערוך את ההגדרות
                 </Button>
                 <Button
                   variant="outlined"
@@ -177,20 +177,20 @@ const HomePage: React.FC = () => {
                     state: { openDialog: true, profileId: currentProfile.id } 
                   })}
                 >
-                  הגדר זמנים
+                  להגדיר שעות פעילות
                 </Button>
               </Box>
             </Box>
           ) : (
             <Box>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                אין פרופיל פעיל
+                עדיין לא הגדרת פרופיל. אפשר ליצור אחד ולבחור אילו אתרים לחסום ואילו לפתוח.
               </Typography>
               <Button
                 variant="contained"
                 onClick={() => navigate('/profiles')}
               >
-                צור פרופיל חדש
+                ליצור פרופיל חדש
               </Button>
             </Box>
           )}
@@ -202,13 +202,13 @@ const HomePage: React.FC = () => {
         <Paper>
           <Box sx={{ p: 3 }}>
             <Typography variant="h6" sx={{ fontWeight: 600, mb: 3 }}>
-              פרופילי סינון
+              כל הפרופילים שלך
             </Typography>
             <Divider sx={{ mb: 3 }} />
             <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 2, mb: 2 }}>
               <TextField
                 size="small"
-                placeholder="חיפוש לפי שם פרופיל..."
+                placeholder="לחפש לפי שם..."
                 value={profileSearch}
                 onChange={(e) => { setProfileSearch(e.target.value); setProfilePage(0); }}
                 sx={{ minWidth: 240 }}
@@ -235,8 +235,8 @@ const HomePage: React.FC = () => {
                         מצב
                       </TableSortLabel>
                     </TableCell>
-                    <TableCell sx={{ fontWeight: 600 }}>סוג</TableCell>
-                    <TableCell sx={{ fontWeight: 600 }} align="right">פעולות</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>אופן עבודה</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }} align="right">מה אפשר לעשות</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -247,7 +247,7 @@ const HomePage: React.FC = () => {
                       return (
                         <TableRow>
                           <TableCell colSpan={4} align="center">
-                            {profiles.length === 0 ? 'אין פרופילים' : 'אין תוצאות לחיפוש'}
+                            {profiles.length === 0 ? 'עדיין אין פרופילים' : 'לא נמצאו תוצאות'}
                           </TableCell>
                         </TableRow>
                       );
@@ -271,7 +271,7 @@ const HomePage: React.FC = () => {
                         </TableCell>
                         <TableCell>
                           <Chip
-                            label={profile.mode === 'whitelist' ? 'רשימה לבנה' : 'רשימה שחורה'}
+                            label={profile.mode === 'whitelist' ? 'הכל חסום – אוסיף פתיחות' : 'הכל פתוח – אוסיף חסימות'}
                             variant="outlined"
                             size="small"
                           />
@@ -281,7 +281,7 @@ const HomePage: React.FC = () => {
                             size="small"
                             onClick={() => navigate('/profiles')}
                           >
-                            ניהול
+                            לערוך
                           </Button>
                           <Button
                             size="small"
@@ -289,7 +289,7 @@ const HomePage: React.FC = () => {
                               state: { openDialog: true, profileId: profile.id } 
                             })}
                           >
-                            תזמונים
+                            שעות פעילות
                           </Button>
                         </TableCell>
                       </TableRow>

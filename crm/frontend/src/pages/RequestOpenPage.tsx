@@ -28,12 +28,10 @@ const RequestOpenPage: React.FC = () => {
   const navigate = useNavigate();
   const urlFromQuery = searchParams.get('url') || '';
   const actionFromQuery = searchParams.get('action') || 'allow';
-  const typeFromQuery = searchParams.get('type') || '*';
   const includeSubdomainsFromQuery = searchParams.get('include_subdomains') || '';
   const tagsFromQuery = searchParams.get('tags') || '';
   const [url, setUrl] = useState('');
   const [action, setAction] = useState<'allow' | 'block'>('allow');
-  const [type, setType] = useState<string>('*');
   const [includeSubdomains, setIncludeSubdomains] = useState(false);
   const [tags, setTags] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -50,10 +48,9 @@ const RequestOpenPage: React.FC = () => {
       }
     }
     if (actionFromQuery === 'allow' || actionFromQuery === 'block') setAction(actionFromQuery);
-    if (typeFromQuery === '*' || typeFromQuery === 'image' || typeFromQuery === 'video') setType(typeFromQuery);
     if (includeSubdomainsFromQuery === '1' || includeSubdomainsFromQuery.toLowerCase() === 'true') setIncludeSubdomains(true);
     if (tagsFromQuery) setTags(tagsFromQuery.split(',').map((t) => t.trim()).filter(Boolean));
-  }, [urlFromQuery, actionFromQuery, typeFromQuery, includeSubdomainsFromQuery, tagsFromQuery]);
+  }, [urlFromQuery, actionFromQuery, includeSubdomainsFromQuery, tagsFromQuery]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -68,7 +65,6 @@ const RequestOpenPage: React.FC = () => {
         request_type: 'open',
         url: url.trim(),
         action,
-        type: type as '*' | 'image' | 'video',
         include_subdomains: includeSubdomains,
         tags: tags.length > 0 ? tags : undefined,
       });
@@ -103,7 +99,7 @@ const RequestOpenPage: React.FC = () => {
         בקשה לפתיחת אתר
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        מלא את הפרטים. הבקשה תישלח למנהל לאישור.
+        מלא את הפרטים והבקשה תישלח למנהל לאישור.
       </Typography>
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
       <Paper sx={{ p: 2 }}>
@@ -122,14 +118,6 @@ const RequestOpenPage: React.FC = () => {
             <Select value={action} label="פעולה" onChange={(e) => setAction(e.target.value as 'allow' | 'block')}>
               <MenuItem value="allow">אפשר</MenuItem>
               <MenuItem value="block">חסום</MenuItem>
-            </Select>
-          </FormControl>
-          <FormControl fullWidth sx={{ mb: 2 }}>
-            <InputLabel>סוג</InputLabel>
-            <Select value={type} label="סוג" onChange={(e) => setType(e.target.value)}>
-              <MenuItem value="*">הכל</MenuItem>
-              <MenuItem value="image">תמונה</MenuItem>
-              <MenuItem value="video">וידאו</MenuItem>
             </Select>
           </FormControl>
           <FormControlLabel

@@ -13,6 +13,8 @@ import { theme } from './theme';
 import { useAuthStore } from './store/authStore';
 import LoginPage from './pages/LoginPage';
 import RegisterWizard from './pages/RegisterWizard';
+import BindPage from './pages/BindPage';
+import ConnectionsPage from './pages/ConnectionsPage';
 import HomePage from './pages/HomePage';
 import FilterManagementPage from './pages/FilterManagementPage';
 import ProfilesPage from './pages/ProfilesPage';
@@ -38,6 +40,30 @@ const LoginRedirect: React.FC = () => {
   const redirect = searchParams.get('redirect');
   const to = redirect && redirect.startsWith('/') ? redirect : '/';
   return <Navigate to={to} replace />;
+};
+
+// Login route: show login form when coming from bind flow (force re-login) even if already authenticated; otherwise redirect if authenticated
+const LoginRoute: React.FC = () => {
+  const [searchParams] = useSearchParams();
+  const { isAuthenticated } = useAuthStore();
+  const redirect = searchParams.get('redirect') || '';
+  const isBindFlowReLogin = redirect.includes('/bind') && (redirect.includes('from_login=1') || redirect.includes('from_login%3D1'));
+  if (isAuthenticated && !isBindFlowReLogin) return <LoginRedirect />;
+  return <LoginPage />;
+};
+
+// True when redirect URL is the bind flow (so we allow register/login even when already logged in)
+function isBindFlowRedirect(redirect: string): boolean {
+  return redirect.includes('/bind') && (redirect.includes('from_login=1') || redirect.includes('from_login%3D1'));
+}
+
+// Register route: when coming from bind flow, show RegisterWizard even if authenticated (user can create new account for this device); otherwise redirect to home if authenticated
+const RegisterRoute: React.FC = () => {
+  const [searchParams] = useSearchParams();
+  const { isAuthenticated } = useAuthStore();
+  const redirect = searchParams.get('redirect') || '';
+  if (isAuthenticated && !isBindFlowRedirect(redirect)) return <Navigate to="/" replace />;
+  return <RegisterWizard />;
 };
 
 // Redirect /request-open and /request-change to /requests with params
@@ -74,8 +100,19 @@ function App() {
         <CssBaseline />
         <BrowserRouter>
         <Routes>
-          <Route path="/login" element={isAuthenticated ? <LoginRedirect /> : <LoginPage />} />
-          <Route path="/register" element={isAuthenticated ? <Navigate to="/" /> : <RegisterWizard />} />
+          <Route path="/login" element={<LoginRoute />} />
+          <Route path="/register" element={<RegisterRoute />} />
+          <Route path="/bind" element={<BindPage />} />
+          <Route
+            path="/connections"
+            element={
+              <ProtectedRoute>
+                <AdminLayout>
+                  <ConnectionsPage />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
           <Route
             path="/"
             element={

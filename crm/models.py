@@ -90,7 +90,6 @@ class ProfileResponse(BaseModel):
 class RuleCreate(BaseModel):
     url: str = Field(..., min_length=1)
     action: str = Field(default="block", pattern="^(allow|block)$")
-    type: str = Field(default="*", pattern="^(\\*|image|video)$")
     include_subdomains: bool = Field(default=False)
     tags: Optional[List[str]] = Field(default=None, description="תגיות לאתר (למשל ממכר, בידור)")
     
@@ -127,7 +126,6 @@ class RuleCreate(BaseModel):
 class RuleUpdate(BaseModel):
     url: Optional[str] = None
     action: Optional[str] = Field(None, pattern="^(allow|block)$")
-    type: Optional[str] = Field(None, pattern="^(\\*|image|video)$")
     include_subdomains: Optional[bool] = None
     tags: Optional[List[str]] = None
 
@@ -138,7 +136,6 @@ class RuleResponse(BaseModel):
     domain_pattern: str
     path_pattern: Optional[str]
     action: str
-    type: str
     include_subdomains: bool
     tags: Optional[List[str]] = None
     created_at: int
@@ -162,10 +159,11 @@ class RuleResponse(BaseModel):
 class GlobalRuleCreate(BaseModel):
     url: str = Field(..., min_length=1)
     action: str = Field(default="allow", pattern="^(allow|block)$")
-    type: str = Field(default="*", pattern="^(\\*|image|video)$")
     include_subdomains: bool = Field(default=False)
     tags: Optional[List[str]] = Field(default=None)
-    text_filter_enabled: bool = Field(default=True, description="Whether to apply text filtering for this site")
+    text_filter_enabled: Optional[bool] = Field(default=None, description="Only when action=allow; ignored when action=block")
+    image_filter_enabled: Optional[bool] = Field(default=None, description="Only when action=allow; ignored when action=block")
+    file_filter_enabled: Optional[bool] = Field(default=None, description="Only when action=allow; ignored when action=block")
 
     @validator('url')
     def validate_url(cls, v):
@@ -187,10 +185,11 @@ class GlobalRuleCreate(BaseModel):
 class GlobalRuleUpdate(BaseModel):
     url: Optional[str] = None
     action: Optional[str] = Field(None, pattern="^(allow|block)$")
-    type: Optional[str] = Field(None, pattern="^(\\*|image|video)$")
     include_subdomains: Optional[bool] = None
     tags: Optional[List[str]] = None
     text_filter_enabled: Optional[bool] = None
+    image_filter_enabled: Optional[bool] = None
+    file_filter_enabled: Optional[bool] = None
 
 
 class GlobalRuleResponse(BaseModel):
@@ -198,10 +197,11 @@ class GlobalRuleResponse(BaseModel):
     domain_pattern: str
     path_pattern: Optional[str]
     action: str
-    type: str
     include_subdomains: bool
     tags: Optional[List[str]] = None
     text_filter_enabled: bool = True
+    image_filter_enabled: bool = True
+    file_filter_enabled: bool = True
     created_at: int
     updated_at: int
 
@@ -299,7 +299,6 @@ class RuleRequestCreate(BaseModel):
     domain_pattern: Optional[str] = None
     path_pattern: Optional[str] = None
     action: Optional[str] = Field(None, pattern="^(allow|block)$")
-    type: Optional[str] = Field(None, pattern="^(\\*|image|video)$")
     include_subdomains: bool = False
     tags: Optional[List[str]] = None
 
@@ -317,7 +316,6 @@ class RuleRequestResponse(BaseModel):
     domain_pattern: Optional[str]
     path_pattern: Optional[str]
     action: Optional[str]
-    type: Optional[str]
     include_subdomains: bool
     tags: Optional[List[str]]
     status: str
@@ -336,7 +334,6 @@ class RuleRequestResponse(BaseModel):
 class RuleRequestUpdate(BaseModel):
     url: Optional[str] = None
     action: Optional[str] = Field(None, pattern="^(allow|block)$")
-    type: Optional[str] = Field(None, pattern="^(\\*|image|video)$")
     include_subdomains: Optional[bool] = None
     tags: Optional[List[str]] = None
 

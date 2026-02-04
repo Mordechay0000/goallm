@@ -93,7 +93,6 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
       await rulesApi.create(profileId, {
         url: newUrl,
         action: newAction,
-        type: '*',
         include_subdomains: includeSubdomains,
         tags: newTagsList.length > 0 ? newTagsList : undefined,
       }, managedUserId);
@@ -309,7 +308,7 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
                 <>
                   <Typography variant="body2" color="text.secondary">אין כלל מתאים</Typography>
                   <Typography variant="body2" color="text.secondary">
-                    ({checkResult.default_mode === 'whitelist' ? 'רשימה לבנה' : 'רשימה שחורה'} → {checkResult.state === 'review' ? 'נשלח לבדיקה' : 'פתוח'})
+                    ({checkResult.default_mode === 'whitelist' ? 'הכל חסום – אוסיף פתיחות' : 'הכל פתוח – אוסיף חסימות'} → {checkResult.state === 'review' ? 'נשלח לבדיקה' : 'פתוח'})
                   </Typography>
                 </>
               )}

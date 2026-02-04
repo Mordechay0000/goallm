@@ -54,18 +54,18 @@ const LoginPage: React.FC = () => {
   const validatePhoneLive = useCallback((value: string) => {
     const n = normalizePhone(value);
     if (n.length === 0) return undefined;
-    if (n.length < 9) return 'מספר טלפון לא תקין';
+    if (n.length < 9) return 'נא להזין מספר טלפון תקין (לפחות 9 ספרות)';
     return undefined;
   }, []);
 
   const validatePasswordLive = useCallback((value: string) => {
-    if (value.length === 0) return 'סיסמה היא שדה חובה';
+    if (value.length === 0) return 'נא להזין סיסמה';
     return undefined;
   }, []);
 
   const validateCodeLive = useCallback((value: string) => {
     if (value.length === 0) return undefined;
-    if (value.length !== 6 || !/^\d+$/.test(value)) return 'הזן קוד בן 6 ספרות';
+    if (value.length !== 6 || !/^\d+$/.test(value)) return 'הקוד הוא 6 ספרות בדיוק';
     return undefined;
   }, []);
 
@@ -99,8 +99,8 @@ const LoginPage: React.FC = () => {
 
   const helperText =
     mode === 'phone'
-      ? 'להתחברות באמצעות סיסמה יש להזין בשדה סיסמה'
-      : 'להתחברות ללא סיסמה באמצעות אימות טלפוני יש למחוק את התוכן של השדה סיסמה';
+      ? 'אם יש לך סיסמה – הזן אותה בשדה סיסמה למטה'
+      : 'אם אין לך סיסמה – השאר את השדה ריק ונשלח קוד לטלפון';
 
   const handleRequestCode = async () => {
     if (!phoneValid || step !== 'request') return;
@@ -162,7 +162,7 @@ const LoginPage: React.FC = () => {
     <Container maxWidth="sm" sx={{ mt: 8, mb: 4 }}>
       <Paper sx={{ p: 4 }}>
         <Typography variant="h5" align="center" gutterBottom sx={{ fontWeight: 600, mb: 4 }}>
-          התחברות למערכת
+          כניסה לחשבון שלי
         </Typography>
 
         {registrationMessage && (
@@ -185,7 +185,7 @@ const LoginPage: React.FC = () => {
               setErrors((prev) => (e != null ? { ...prev, phone: e } : (() => { const n = { ...prev }; delete n.phone; return n; })()));
             }}
             error={!!errors.phone}
-            helperText={errors.phone || 'ההתחברות מתבצעת באמצעות טלפון וסיסמה'}
+            helperText={errors.phone || 'נכנסים עם הטלפון והסיסמה (או עם קוד שנשלח לטלפון)'}
             placeholder="050-1234567"
             sx={{ mb: 2 }}
             inputProps={{ inputMode: 'tel' }}
@@ -203,7 +203,7 @@ const LoginPage: React.FC = () => {
                 setErrors((prev) => (e != null ? { ...prev, code: e } : (() => { const n = { ...prev }; delete n.code; return n; })()));
               }}
               error={!!errors.code}
-              helperText={errors.code || 'קוד בן 6 ספרות שנשלח לנייד'}
+              helperText={errors.code || 'הקוד בן 6 ספרות שקיבלת בהודעה'}
               placeholder="123456"
               sx={{ mb: 2 }}
               inputProps={{ inputMode: 'numeric', maxLength: 6 }}
@@ -231,7 +231,7 @@ const LoginPage: React.FC = () => {
                   disabled={loading || !phoneValid}
                   onClick={handleRequestCode}
                 >
-                  אימות טלפוני – שלח קוד
+                  שלח לי קוד לטלפון
                 </Button>
               ) : (
                 <Button
@@ -242,7 +242,7 @@ const LoginPage: React.FC = () => {
                   disabled={loading || !phoneValid || !codeValid}
                   onClick={handleVerifyPhone}
                 >
-                  התחבר עם קוד
+                  נכנס עם הקוד
                 </Button>
               )}
             </Box>
@@ -257,13 +257,13 @@ const LoginPage: React.FC = () => {
               disabled={loading || !phoneValid || !passwordValid}
               sx={{ mb: 3 }}
             >
-              התחברות באמצעות סיסמה
+              נכנס עם הסיסמה
             </Button>
           )}
 
           <Box sx={{ textAlign: 'center' }}>
             <Button variant="text" onClick={() => navigate('/register')} size="small">
-              אין לך חשבון? הירשם
+              עדיין אין לי חשבון – אני רוצה ליצור אחד
             </Button>
           </Box>
         </form>

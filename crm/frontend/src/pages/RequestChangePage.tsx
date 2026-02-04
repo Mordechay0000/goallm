@@ -30,13 +30,11 @@ const RequestChangePage: React.FC = () => {
   const domainFromQuery = searchParams.get('domain') || '';
   const pathFromQuery = searchParams.get('path') || '';
   const actionFromQuery = searchParams.get('action') || 'block';
-  const typeFromQuery = searchParams.get('type') || '*';
   const includeSubdomainsFromQuery = searchParams.get('include_subdomains') || '';
   const tagsFromQuery = searchParams.get('tags') || '';
 
   const [url, setUrl] = useState('');
   const [action, setAction] = useState<'allow' | 'block'>('block');
-  const [type, setType] = useState<string>('*');
   const [includeSubdomains, setIncludeSubdomains] = useState(false);
   const [tags, setTags] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -54,11 +52,10 @@ const RequestChangePage: React.FC = () => {
       setUrl((domainFromQuery || '') + (pathFromQuery || '/'));
     }
     if (actionFromQuery === 'allow' || actionFromQuery === 'block') setAction(actionFromQuery);
-    if (typeFromQuery === '*' || typeFromQuery === 'image' || typeFromQuery === 'video') setType(typeFromQuery);
     if ((domainFromQuery || '').startsWith('*.')) setIncludeSubdomains(true);
     else if (includeSubdomainsFromQuery === '1' || includeSubdomainsFromQuery.toLowerCase() === 'true') setIncludeSubdomains(true);
     if (tagsFromQuery) setTags(tagsFromQuery.split(',').map((t) => t.trim()).filter(Boolean));
-  }, [urlFromQuery, domainFromQuery, pathFromQuery, actionFromQuery, typeFromQuery, includeSubdomainsFromQuery, tagsFromQuery]);
+  }, [urlFromQuery, domainFromQuery, pathFromQuery, actionFromQuery, includeSubdomainsFromQuery, tagsFromQuery]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -73,7 +70,6 @@ const RequestChangePage: React.FC = () => {
         request_type: 'change',
         url: url.trim(),
         action,
-        type: type as '*' | 'image' | 'video',
         include_subdomains: includeSubdomains,
         tags: tags.length > 0 ? tags : undefined,
       });
@@ -105,10 +101,10 @@ const RequestChangePage: React.FC = () => {
         חזרה
       </Button>
       <Typography variant="h5" gutterBottom>
-        בקשה לשינוי כלל
+        בקשה לשינוי (חסום/פתוח)
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        ערוך את הפרטים ושלח בקשה למנהל.
+        ערוך את הפרטים ושלח למנהל לאישור.
       </Typography>
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
       <Paper sx={{ p: 2 }}>
@@ -127,14 +123,6 @@ const RequestChangePage: React.FC = () => {
             <Select value={action} label="פעולה" onChange={(e) => setAction(e.target.value as 'allow' | 'block')}>
               <MenuItem value="allow">אפשר</MenuItem>
               <MenuItem value="block">חסום</MenuItem>
-            </Select>
-          </FormControl>
-          <FormControl fullWidth sx={{ mb: 2 }}>
-            <InputLabel>סוג</InputLabel>
-            <Select value={type} label="סוג" onChange={(e) => setType(e.target.value)}>
-              <MenuItem value="*">הכל</MenuItem>
-              <MenuItem value="image">תמונה</MenuItem>
-              <MenuItem value="video">וידאו</MenuItem>
             </Select>
           </FormControl>
           <FormControlLabel

@@ -9,7 +9,6 @@ export interface Rule {
   domain_pattern: string;
   path_pattern: string | null;
   action: 'allow' | 'block';
-  type: '*' | 'image' | 'video';
   include_subdomains: boolean;
   tags?: string[];
   created_at: number;
@@ -19,7 +18,6 @@ export interface Rule {
 export interface RuleCreate {
   url: string;
   action: 'allow' | 'block';
-  type: '*' | 'image' | 'video';
   include_subdomains: boolean;
   tags?: string[];
 }
@@ -27,7 +25,6 @@ export interface RuleCreate {
 export interface RuleUpdate {
   url?: string;
   action?: 'allow' | 'block';
-  type?: '*' | 'image' | 'video';
   include_subdomains?: boolean;
   tags?: string[];
 }

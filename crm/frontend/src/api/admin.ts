@@ -67,6 +67,12 @@ export const adminApi = {
   deleteGlobalRule: async (ruleId: number): Promise<void> => {
     await apiClient.delete(`/api/admin/global-rules/${ruleId}`);
   },
+  resolveGlobalRule: async (url: string): Promise<{ rule: GlobalRule | null }> => {
+    const response = await apiClient.get<{ rule: GlobalRule | null }>('/api/admin/global-rules/resolve', {
+      params: { url: url.trim() },
+    });
+    return response.data;
+  },
 
   // Filter switches (הפעלה/כיבוי סינונים – אדמין)
   getFilterSwitches: async (): Promise<FilterSwitches> => {
@@ -91,10 +97,11 @@ export interface GlobalRule {
   domain_pattern: string;
   path_pattern?: string;
   action: string;
-  type: string;
   include_subdomains: boolean;
   tags?: string[];
   text_filter_enabled?: boolean;
+  image_filter_enabled?: boolean;
+  file_filter_enabled?: boolean;
   created_at: number;
   updated_at: number;
   display_url?: string;
@@ -103,17 +110,19 @@ export interface GlobalRule {
 export interface GlobalRuleCreate {
   url: string;
   action?: string;
-  type?: string;
   include_subdomains?: boolean;
   tags?: string[];
   text_filter_enabled?: boolean;
+  image_filter_enabled?: boolean;
+  file_filter_enabled?: boolean;
 }
 
 export interface GlobalRuleUpdate {
   url?: string;
   action?: string;
-  type?: string;
   include_subdomains?: boolean;
   tags?: string[];
   text_filter_enabled?: boolean;
+  image_filter_enabled?: boolean;
+  file_filter_enabled?: boolean;
 }

@@ -5,7 +5,7 @@ Process HTTP flows: site-level policy (HTML), then image filtering.
 """
 import json
 import logging
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Any
 
 from mitmproxy import http
 
@@ -34,11 +34,11 @@ def _is_text_or_json_response(flow: http.HTTPFlow) -> bool:
     return "text/plain" in ct or "application/json" in ct or ct.strip().startswith("application/json")
 
 
-def _apply_site_policy_for_html(flow: http.HTTPFlow) -> Tuple[bool, Optional[dict]]:
+def _apply_site_policy_for_html(flow: http.HTTPFlow, user_id: Optional[int] = None) -> Tuple[bool, Optional[dict]]:
     """Apply site policy for HTML responses. Returns (replaced, rule). If allow: (False, rule); else (True, None)."""
     url = flow.request.url
     try:
-        resolver = get_policy_resolver()
+        resolver = get_policy_resolver(user_id)
         rule = resolver.resolve(url, "html")
         if rule is not None:
             state = rule.get("state", "block")
@@ -74,7 +74,7 @@ def _apply_site_policy_for_html(flow: http.HTTPFlow) -> Tuple[bool, Optional[dic
                         "Expires": "0",
                     },
                 )
-                current_mode = get_profile_mode()
+                current_mode = get_profile_mode(user_id)
                 logger.info(
                     "Site not in list, showing send-for-review - URL: %s (profile_mode in core: %s)",
                     url,
@@ -119,13 +119,17 @@ def _apply_site_policy_for_html(flow: http.HTTPFlow) -> Tuple[bool, Optional[dic
 
 
 def process_http_response(flow: http.HTTPFlow) -> None:
-    """Process HTTP response. Each filter (URL policy, text, image, embedded image) works independently per global switches."""
+    """Process HTTP response. Each filter (URL policy, text, image, embedded image) works independently per global switches.
+    When flow.metadata has user_id (from IP binding), that user's profile and rules are used."""
     url = flow.request.url
     referer_url = flow.request.headers.get("Referer")
     method = flow.request.method
     switches = get_filter_switches()
+    user_id: Optional[int] = None
+    if getattr(flow, "metadata", None) is not None:
+        user_id = flow.metadata.get("user_id")
 
-    logger.info("Processing HTTP response - Method: %s, URL: %s", method, url)
+    logger.info("Processing HTTP response - Method: %s, URL: %s (user_id=%s)", method, url, user_id)
     logger.debug(
         "Response status: %s, Content-Type: %s, Content-Length: %s bytes",
         flow.response.status_code,
@@ -137,7 +141,7 @@ def process_http_response(flow: http.HTTPFlow) -> None:
     if _is_html_response(flow):
         rule = None
         if switches.get("url_policy", True):
-            replaced, rule = _apply_site_policy_for_html(flow)
+            replaced, rule = _apply_site_policy_for_html(flow, user_id)
             logger.debug("HTML response: replaced=%s rule=%s", replaced, (rule.get("domain") if rule else None))
             if replaced:
                 return
@@ -198,7 +202,9 @@ def process_http_response(flow: http.HTTPFlow) -> None:
                 body_to_send = flow.response.content
             except ValueError:
                 body_to_send = flow.response.raw_content
-        if body_to_send and switches.get("embedded_image_filter", True):
+        embedded_switch = switches.get("embedded_image_filter", True)
+        rule_image_ok = (rule is None) or rule.get("image_filter_enabled", True)
+        if body_to_send and embedded_switch and rule_image_ok:
             # Embedded image filter (independent): data:image URLs in HTML
             try:
                 content_type = (flow.response.headers.get("content-type") or "").strip()
@@ -231,7 +237,7 @@ def process_http_response(flow: http.HTTPFlow) -> None:
         url_policy_on = switches.get("url_policy", True)
         if url_policy_on:
             try:
-                resolver = get_policy_resolver()
+                resolver = get_policy_resolver(user_id)
                 rule = resolver.resolve(url, "html")
                 if rule is not None and rule.get("state") in ("block", "review"):
                     logger.debug("Text/JSON response: policy block/review - URL: %s (pass through)", url)
@@ -284,10 +290,11 @@ def process_http_response(flow: http.HTTPFlow) -> None:
         logger.debug("Response is not an image, skipping processing for URL: %s", url)
         return
 
+    rule = None
     # URL policy for images (independent): if on and rule allows, pass through
     if switches.get("url_policy", True):
         try:
-            resolver = get_policy_resolver()
+            resolver = get_policy_resolver(user_id)
             rule = resolver.resolve(url, "image")
             if rule is not None and rule.get("state") == "allow":
                 if "domain" not in rule:
@@ -300,9 +307,18 @@ def process_http_response(flow: http.HTTPFlow) -> None:
     else:
         logger.debug("URL policy filter disabled - continuing to image filter check")
 
-    # Image filter (independent): analyze and replace with placeholder when on
+    # Image filter (independent): analyze and replace with placeholder when on; respect rule's image_filter_enabled
     if not switches.get("image_filter", True):
         logger.debug("Image filter disabled - passing image through - URL: %s", url)
+        return
+    if rule is None:
+        try:
+            resolver = get_policy_resolver(user_id)
+            rule = resolver.resolve(url, "image")
+        except Exception:
+            pass
+    if rule is not None and not rule.get("image_filter_enabled", True):
+        logger.debug("Image filter disabled for this rule - URL: %s", url)
         return
 
     image_content, mime_type = extracted

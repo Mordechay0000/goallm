@@ -149,7 +149,7 @@ const FilterManagementPage: React.FC = () => {
           </Typography>
         </Box>
         <Typography variant="body1" color="text.secondary">
-          הוסף, ערוך ומחק כללי סינון לפרופילי הסינון שלך
+          הוסף, ערוך ומחק אתרים (חסום/פתוח) לכל פרופיל
         </Typography>
       </Box>
 
@@ -190,15 +190,15 @@ const FilterManagementPage: React.FC = () => {
                 {selectedProfile.name}
               </Typography>
               <Chip
-                label={selectedProfile.mode === 'whitelist' ? 'רשימה לבנה + חריגים' : 'רשימה שחורה + חריגים'}
-                color={selectedProfile.mode === 'whitelist' ? 'success' : 'error'}
+                label={selectedProfile.mode === 'whitelist' ? 'הכל חסום – אוסיף פתיחות' : 'הכל פתוח – אוסיף חסימות'}
+                color={selectedProfile.mode === 'whitelist' ? 'default' : 'success'}
                 sx={{ mb: 2 }}
               />
               <Typography variant="body2" color="text.secondary" paragraph>
                 {selectedProfile.mode === 'whitelist' ? (
-                  <>כל האתרים במערכת <strong style={{ color: '#4caf50' }}>פתוחים</strong> למעט האתרים הרשומים למטה:</>
+                  <>כל האתרים חסומים – תוסיף רק את האתרים שתרצה לפתוח.</>
                 ) : (
-                  <>כל האתרים במערכת <strong style={{ color: '#f44336' }}>חסומים</strong> למעט האתרים הרשומים למטה:</>
+                  <>כל האתרים פתוחים – תוסיף רק את האתרים שתרצה לחסום.</>
                 )}
               </Typography>
             </Box>
@@ -221,7 +221,7 @@ const FilterManagementPage: React.FC = () => {
           כללי תגיות
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          כללים לפי תגית – למשל: אתרים עם תגית &quot;ממכר&quot; חסומים. תגיות מוגדרות בכלל האתר (בטבלה למעלה).
+          חסימה או פתיחה לפי תגית – למשל: אתרים עם תגית &quot;ממכר&quot; חסומים. התגיות מוגדרות לכל אתר בטבלה למעלה.
         </Typography>
         <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap', mb: 2 }}>
           <TextField
@@ -378,8 +378,8 @@ const FilterManagementPage: React.FC = () => {
               onChange={(e) => setNewProfileMode(e.target.value as 'whitelist' | 'blacklist')}
               label="מצב עבודה"
             >
-              <MenuItem value="whitelist">רשימה לבנה + חריגים</MenuItem>
-              <MenuItem value="blacklist">רשימה שחורה + חריגים</MenuItem>
+              <MenuItem value="whitelist">הכל חסום – אוסיף פתיחות</MenuItem>
+              <MenuItem value="blacklist">הכל פתוח – אוסיף חסימות</MenuItem>
             </Select>
           </FormControl>
         </DialogContent>

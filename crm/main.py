@@ -15,6 +15,7 @@ import os
 import csv
 import io
 from pathlib import Path
+import asyncio
 
 from .models import (
     UserCreate, UserResponse, UserUpdate, PasswordChange, LoginRequest,
@@ -31,12 +32,13 @@ from .services import (
     create_user, authenticate_user, authenticate_user_by_phone, get_user_by_id, update_user, change_password, get_user_profiles,
     create_profile, get_profile, update_profile, delete_profile,
     create_rule, get_rule, get_profile_rules, update_rule, delete_rule,
-    get_tag_rules, add_tag_rule, update_tag_rule, delete_tag_rule, sync_crm_rules_to_core,
+    get_tag_rules, add_tag_rule, update_tag_rule, delete_tag_rule, sync_crm_rules_to_core, get_user_ids_with_profiles,
     create_schedule, get_schedule, get_profile_schedules, update_schedule, delete_schedule,
     list_users, set_user_admin, delete_user, get_locked_settings, set_locked_setting, remove_locked_setting,
     add_rule_request, list_rule_requests, get_rule_request, approve_rule_request, reject_rule_request, delete_rule_request,
-    update_rule_request, get_or_create_blocked_page_user_id, list_all_profiles_for_admin,
-    get_global_rules, get_global_rule, create_global_rule, update_global_rule, delete_global_rule,
+    update_rule_request, list_all_profiles_for_admin,
+    get_global_rules, get_global_rule, create_global_rule, update_global_rule, delete_global_rule, resolve_global_rule_for_url,
+    list_bindings_for_user, add_ip_binding, remove_ip_binding, sync_ip_bindings_to_core, touch_ip_binding,
 )
 from .auth import create_user_access_token, get_current_user, get_current_admin
 from .database import init_db_schema, db_connection
@@ -101,6 +103,42 @@ manager = ConnectionManager()
 init_db_schema()
 
 
+@app.on_event("startup")
+async def startup_sync_bindings():
+    """Sync IP bindings to core so the proxy has current bindings on startup."""
+    try:
+        sync_ip_bindings_to_core()
+    except Exception as e:
+        logger.warning("Startup sync_ip_bindings_to_core failed: %s", e)
+
+
+async def _periodic_schedule_sync():
+    """Every 60 seconds, sync each user's active profile (by schedule) to core so day/hour changes apply automatically."""
+    while True:
+        try:
+            await asyncio.sleep(60)
+            for uid in get_user_ids_with_profiles():
+                try:
+                    sync_crm_rules_to_core(uid, set_default=False)
+                except Exception as e:
+                    logger.warning("Periodic sync for user %s failed: %s", uid, e)
+            # Refresh global rules and set default user to first user
+            try:
+                sync_crm_rules_to_core(None)
+            except Exception as e:
+                logger.debug("Periodic sync_crm_rules_to_core(None) failed: %s", e)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning("Periodic schedule sync error: %s", e)
+
+
+@app.on_event("startup")
+async def start_periodic_schedule_sync():
+    """Start background task so profile switches by schedule (day/hour) apply within ~1 minute."""
+    asyncio.create_task(_periodic_schedule_sync())
+
+
 # Static files (for React build)
 static_folder = Path(__file__).resolve().parent / "static"
 if static_folder.exists():
@@ -112,13 +150,24 @@ uploads_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=str(uploads_dir)), name="uploads")
 
 
-@app.get("/")
-async def root():
-    """Serve React app."""
+def _serve_spa():
+    """Serve React SPA (index.html) for client-side routes."""
     index_file = static_folder / "index.html"
     if index_file.exists():
         return FileResponse(str(index_file))
     return {"message": "CRM API", "version": "1.0.0"}
+
+
+@app.get("/")
+async def root():
+    """Serve React app."""
+    return _serve_spa()
+
+
+@app.get("/bind")
+async def bind_spa():
+    """Serve SPA for bind flow (proxy redirects unbound IPs here)."""
+    return _serve_spa()
 
 
 # ========== Auth Endpoints ==========
@@ -462,7 +511,7 @@ async def create_rule_endpoint(
             profile_id,
             rule_data.url,
             rule_data.action,
-            rule_data.type,
+            "*",
             rule_data.include_subdomains,
             tags=rule_data.tags,
         )
@@ -513,7 +562,6 @@ async def update_rule_endpoint(
             rule_id,
             url=rule_data.url,
             action=rule_data.action,
-            rule_type=rule_data.type,
             include_subdomains=rule_data.include_subdomains,
             tags=rule_data.tags,
         )
@@ -555,20 +603,19 @@ async def export_rules_csv(
     current_user: dict = Depends(get_current_user),
     managed_user_id: Optional[int] = Query(None),
 ):
-    """Export rules as CSV. Same format as import (url, action, type, include_subdomains, tags)."""
+    """Export rules as CSV. Same format as import (url, action, include_subdomains, tags)."""
     profile = get_profile(profile_id)
     if not profile or not _can_access_profile(profile, current_user, managed_user_id):
         raise HTTPException(status_code=404, detail="פרופיל לא נמצא")
     rules = get_profile_rules(profile_id)
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["url", "action", "type", "include_subdomains", "tags"])
+    writer.writerow(["url", "action", "include_subdomains", "tags"])
     for r in rules:
         url = (r.get("domain_pattern") or "") + (r.get("path_pattern") or "/")
         writer.writerow([
             url,
             r.get("action", "block"),
-            r.get("type", "*"),
             "true" if r.get("include_subdomains") else "false",
             ",".join(r.get("tags") or []),
         ])
@@ -595,9 +642,6 @@ def _validate_rule_row(row: dict) -> Optional[str]:
     action = (row.get("action") or "block").strip().lower()
     if action not in ("allow", "block"):
         return "action חייב allow או block"
-    typ = (row.get("type") or "*").strip().lower()
-    if typ not in ("*", "image", "video"):
-        return "type חייב * או image או video"
     return None
 
 
@@ -608,7 +652,7 @@ async def import_rules_csv(
     current_user: dict = Depends(get_current_user),
     managed_user_id: Optional[int] = Query(None),
 ):
-    """Import rules from CSV. Columns: url, action, type, include_subdomains, tags. Validates like add rule."""
+    """Import rules from CSV. Columns: url, action, include_subdomains, tags. Validates like add rule."""
     profile = get_profile(profile_id)
     if not profile or not _can_access_profile(profile, current_user, managed_user_id):
         raise HTTPException(status_code=404, detail="פרופיל לא נמצא")
@@ -626,12 +670,11 @@ async def import_rules_csv(
     for row in rows:
         url = (row.get("url") or "").strip()
         action = (row.get("action") or "block").strip().lower()
-        typ = (row.get("type") or "*").strip().lower()
         inc = (row.get("include_subdomains") or "false").strip().lower() in ("true", "1", "yes")
         tags_str = (row.get("tags") or "").strip()
         tags = [t.strip() for t in tags_str.split(",") if t.strip()] if tags_str else None
         try:
-            create_rule(profile_id, url, action, typ, inc, tags=tags)
+            create_rule(profile_id, url, action, "*", inc, tags=tags)
             created += 1
         except ValueError as e:
             errors.append({"line": "?", "error": str(e)})
@@ -834,11 +877,12 @@ async def get_all_resolver_rules():
     return {"rules": rules}
 
 
-def _get_core_resolver_state():
-    """Read profile mode and DB path from core (for proxy)."""
+def _get_core_resolver_state(user_id: Optional[int] = None):
+    """Read profile mode and DB path from core. When user_id is set, return that user's mode (for bound connections)."""
     try:
         from core.policy_processor.policy_database import get_profile_mode, get_core_resolver_db_path
-        return {"core_mode": get_profile_mode(), "core_db_path": get_core_resolver_db_path()}
+        mode = get_profile_mode(user_id) if user_id is not None else get_profile_mode()
+        return {"core_mode": mode, "core_db_path": get_core_resolver_db_path()}
     except Exception as e:
         return {"core_mode": None, "core_db_path": None, "error": str(e)}
 
@@ -890,16 +934,19 @@ async def sync_resolver_to_core(
 async def get_core_resolver_mode(current_user: dict = Depends(get_current_user)):
     """
     Return the profile mode currently stored in core (what the proxy uses).
-    Use to verify sync: if core_mode is whitelist but profile is blacklist, run sync again.
+    Syncs this user's rules to core first so the proxy and UI stay in sync for bound connections.
     """
-    return _get_core_resolver_state()
+    sync_crm_rules_to_core(current_user["id"], set_default=False)
+    return _get_core_resolver_state(current_user["id"])
 
 
 @app.get("/api/resolver/active")
 async def get_active_resolver_state(current_user: dict = Depends(get_current_user)):
     """
     Get the currently active profile and its mode for the current user (with schedule).
+    Syncs this user's rules to core first so the proxy uses the same state for their bound connections.
     """
+    sync_crm_rules_to_core(current_user["id"], set_default=False)
     from .resolver_integration import get_active_profile_id, get_system_active_profile_and_rules
     profile_id = get_active_profile_id(current_user["id"])
     if not profile_id:
@@ -947,37 +994,10 @@ async def resolver_test_url(
 
 
 # ========== Rule Requests (user requests for admin to approve) ==========
+# Incoming requests are only from logged-in users (no anonymous from-blocked-page).
 
-# Same value must be set when running the proxy (mitmdump). Default "dev-secret" for local dev only.
+# Same value must be set when running the proxy (mitmdump). Used for internal endpoints e.g. touch-ip.
 CRM_PROXY_SECRET = os.environ.get("CRM_PROXY_SECRET", "dev-secret").strip()
-
-
-@app.post("/api/rule-requests/from-blocked-page", response_model=RuleRequestResponse, status_code=status.HTTP_201_CREATED)
-async def create_rule_request_from_blocked_page(body: dict):
-    """Create a rule request from the blocked/send-for-review page (no auth). Requires CRM_PROXY_SECRET in body."""
-    secret = body.get("secret")
-    if not CRM_PROXY_SECRET or secret != CRM_PROXY_SECRET:
-        raise HTTPException(status_code=403, detail="גישה נדחתה")
-    request_type = body.get("request_type")
-    if request_type not in ("open", "change"):
-        raise HTTPException(status_code=400, detail="request_type חייב open או change")
-    user_id = get_or_create_blocked_page_user_id()
-    try:
-        req = add_rule_request(
-            user_id=user_id,
-            request_type=request_type,
-            url=(body.get("url") or "").strip() or None,
-            action=body.get("action") or "allow",
-            rule_type=body.get("type") or "*",
-            include_subdomains=bool(body.get("include_subdomains")),
-            tags=body.get("tags") if isinstance(body.get("tags"), list) else None,
-            request_url=(body.get("request_url") or "").strip() or None,
-        )
-        out = dict(req)
-        out["include_subdomains"] = bool(req.get("include_subdomains"))
-        return RuleRequestResponse(**out)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.post("/api/rule-requests", response_model=RuleRequestResponse, status_code=status.HTTP_201_CREATED)
@@ -994,7 +1014,6 @@ async def create_rule_request(
             domain_pattern=data.domain_pattern,
             path_pattern=data.path_pattern,
             action=data.action,
-            rule_type=data.type,
             include_subdomains=data.include_subdomains,
             tags=data.tags,
         )
@@ -1034,7 +1053,6 @@ async def list_rule_requests_endpoint(
         page=page,
         page_size=page_size,
     )
-    blocked_user_id = get_or_create_blocked_page_user_id()
     out = []
     for r in rows:
         user = get_user_by_id(r["user_id"])
@@ -1049,7 +1067,6 @@ async def list_rule_requests_endpoint(
             domain_pattern=r.get("domain_pattern"),
             path_pattern=r.get("path_pattern"),
             action=r.get("action"),
-            type=r.get("type"),
             include_subdomains=bool(r.get("include_subdomains")),
             tags=r.get("tags"),
             status=r["status"],
@@ -1058,7 +1075,7 @@ async def list_rule_requests_endpoint(
             user_phone=user_phone,
             approved_rule_id=r.get("approved_rule_id"),
             approved_profile_id=r.get("approved_profile_id"),
-            is_from_blocked_page=(r["user_id"] == blocked_user_id),
+            is_from_blocked_page=False,
             request_url=r.get("request_url"),
         ))
     return {"requests": out, "total": total}
@@ -1077,7 +1094,6 @@ async def get_rule_request_endpoint(
         raise HTTPException(status_code=404, detail="בקשה לא נמצאה")
     user = get_user_by_id(req["user_id"])
     user_phone = user.get("phone") if user else None
-    blocked_user_id = get_or_create_blocked_page_user_id()
     return RuleRequestResponse(
         id=req["id"],
         user_id=req["user_id"],
@@ -1086,7 +1102,6 @@ async def get_rule_request_endpoint(
         domain_pattern=req.get("domain_pattern"),
         path_pattern=req.get("path_pattern"),
         action=req.get("action"),
-        type=req.get("type"),
         include_subdomains=bool(req.get("include_subdomains")),
         tags=req.get("tags"),
         status=req["status"],
@@ -1095,14 +1110,14 @@ async def get_rule_request_endpoint(
         user_phone=user_phone,
         approved_rule_id=req.get("approved_rule_id"),
         approved_profile_id=req.get("approved_profile_id"),
-        is_from_blocked_page=(req["user_id"] == blocked_user_id),
+        is_from_blocked_page=False,
         request_url=req.get("request_url"),
     )
 
 
 @app.get("/api/admin/all-profiles")
 async def admin_list_all_profiles(admin: dict = Depends(get_current_admin)):
-    """List all profiles with user phone (for approving blocked-page requests)."""
+    """List all profiles with user phone (admin only)."""
     profiles = list_all_profiles_for_admin()
     return {"profiles": profiles}
 
@@ -1124,13 +1139,11 @@ async def update_rule_request_endpoint(
             request_id,
             url=body.url,
             action=body.action,
-            rule_type=body.type,
             include_subdomains=body.include_subdomains,
             tags=body.tags,
         )
         user = get_user_by_id(updated["user_id"])
         user_phone = user.get("phone") if user else None
-        blocked_user_id = get_or_create_blocked_page_user_id()
         return RuleRequestResponse(
             id=updated["id"],
             user_id=updated["user_id"],
@@ -1139,7 +1152,6 @@ async def update_rule_request_endpoint(
             domain_pattern=updated.get("domain_pattern"),
             path_pattern=updated.get("path_pattern"),
             action=updated.get("action"),
-            type=updated.get("type"),
             include_subdomains=bool(updated.get("include_subdomains")),
             tags=updated.get("tags"),
             status=updated["status"],
@@ -1148,7 +1160,7 @@ async def update_rule_request_endpoint(
             user_phone=user_phone,
             approved_rule_id=updated.get("approved_rule_id"),
             approved_profile_id=updated.get("approved_profile_id"),
-            is_from_blocked_page=(updated["user_id"] == blocked_user_id),
+            is_from_blocked_page=False,
             request_url=updated.get("request_url"),
         )
     except ValueError as e:
@@ -1209,6 +1221,18 @@ async def admin_list_global_rules(admin: dict = Depends(get_current_admin)):
     return [GlobalRuleResponse(**r) for r in rules]
 
 
+@app.get("/api/admin/global-rules/resolve")
+async def admin_resolve_global_rule(
+    url: str = Query(..., description="URL to check which global rule applies"),
+    admin: dict = Depends(get_current_admin),
+):
+    """Return the global rule that applies to the given URL, or null. Admin only."""
+    rule = resolve_global_rule_for_url(url)
+    if not rule:
+        return {"rule": None}
+    return {"rule": GlobalRuleResponse(**rule)}
+
+
 @app.post("/api/admin/global-rules", response_model=GlobalRuleResponse, status_code=status.HTTP_201_CREATED)
 async def admin_create_global_rule(
     data: GlobalRuleCreate,
@@ -1216,13 +1240,19 @@ async def admin_create_global_rule(
 ):
     """Create a global rule. Admin only."""
     try:
+        action_val = data.action or "allow"
+        # When action=block, filter toggles are not applicable (stored as False)
+        tf = getattr(data, "text_filter_enabled", True) if action_val == "allow" else False
+        imgf = getattr(data, "image_filter_enabled", True) if action_val == "allow" else False
+        filef = getattr(data, "file_filter_enabled", True) if action_val == "allow" else False
         rule = create_global_rule(
             url=data.url,
-            action=data.action,
-            rule_type=data.type,
+            action=action_val,
             include_subdomains=data.include_subdomains,
             tags=data.tags,
-            text_filter_enabled=getattr(data, "text_filter_enabled", True),
+            text_filter_enabled=tf,
+            image_filter_enabled=imgf,
+            file_filter_enabled=filef,
         )
         sync_crm_rules_to_core(None)
         return GlobalRuleResponse(**rule)
@@ -1253,14 +1283,22 @@ async def admin_update_global_rule(
     if not rule:
         raise HTTPException(status_code=404, detail="כלל גלובלי לא נמצא")
     try:
+        action_val = data.action if data.action is not None else rule.get("action", "allow")
+        if action_val == "block":
+            tf, imgf, filef = False, False, False
+        else:
+            tf = data.text_filter_enabled
+            imgf = data.image_filter_enabled
+            filef = data.file_filter_enabled
         updated = update_global_rule(
             rule_id,
             url=data.url,
             action=data.action,
-            rule_type=data.type,
             include_subdomains=data.include_subdomains,
             tags=data.tags,
-            text_filter_enabled=data.text_filter_enabled,
+            text_filter_enabled=tf,
+            image_filter_enabled=imgf,
+            file_filter_enabled=filef,
         )
         sync_crm_rules_to_core(None)
         return GlobalRuleResponse(**updated)
@@ -1379,6 +1417,78 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         "last_name": user.get("last_name"),
         "is_admin": user.get("is_admin", False),
     }
+
+
+def _client_ip(request: Request) -> str:
+    """Client IP from X-Forwarded-For (when behind proxy) or request.client."""
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    if request.client:
+        return request.client.host or ""
+    return ""
+
+
+# ---------- IP bindings (שיוך כתובת IP לחשבון – לסינון לפי משתמש) ----------
+
+@app.get("/api/me/bindings")
+async def list_my_bindings(current_user: dict = Depends(get_current_user)):
+    """List IP addresses bound to the current user's account (with last_used_at)."""
+    bindings = list_bindings_for_user(current_user["id"])
+    return [
+        {"id": b["id"], "ip": b["ip"], "created_at": b["created_at"], "last_used_at": b.get("last_used_at")}
+        for b in bindings
+    ]
+
+
+@app.post("/api/me/bindings", status_code=status.HTTP_201_CREATED)
+async def bind_my_ip(
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
+    """Bind the request's client IP to the current user. Used after login on the bind flow."""
+    ip = _client_ip(request)
+    if not ip:
+        raise HTTPException(status_code=400, detail="לא ניתן לזהות את כתובת ה-IP")
+    try:
+        binding = add_ip_binding(current_user["id"], ip)
+        sync_ip_bindings_to_core()
+        sync_crm_rules_to_core(current_user["id"])
+        return {"id": binding["id"], "ip": binding["ip"], "created_at": binding["created_at"]}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/me/client-ip")
+async def get_my_client_ip(request: Request, current_user: dict = Depends(get_current_user)):
+    """Return the client IP as seen by the server (for showing in bind flow)."""
+    return {"ip": _client_ip(request)}
+
+
+@app.delete("/api/me/bindings/{binding_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_my_binding(
+    binding_id: int,
+    current_user: dict = Depends(get_current_user),
+):
+    """Remove an IP binding. Only the owner can remove."""
+    removed = remove_ip_binding(binding_id, current_user["id"])
+    if not removed:
+        raise HTTPException(status_code=404, detail="שיוך לא נמצא")
+    sync_ip_bindings_to_core()
+    sync_crm_rules_to_core(current_user["id"])
+
+
+@app.post("/api/internal/touch-ip")
+async def internal_touch_ip(body: dict):
+    """Update last_used_at for an IP binding. Called by proxy. Requires CRM_PROXY_SECRET."""
+    secret = body.get("secret")
+    if not CRM_PROXY_SECRET or secret != CRM_PROXY_SECRET:
+        raise HTTPException(status_code=403, detail="גישה נדחתה")
+    ip = (body.get("ip") or "").strip()
+    if not ip:
+        raise HTTPException(status_code=400, detail="חסר ip")
+    touch_ip_binding(ip)
+    return {"status": "ok"}
 
 
 if __name__ == "__main__":

@@ -30,14 +30,28 @@ import {
   Accordion,
   AccordionSummary,
   AccordionDetails,
+  TableSortLabel,
+  TablePagination,
+  InputAdornment,
 } from '@mui/material';
-import { Add as AddIcon, Delete as DeleteIcon, Edit as EditIcon, ExpandMore as ExpandMoreIcon } from '@mui/icons-material';
+import { Add as AddIcon, Delete as DeleteIcon, Edit as EditIcon, ExpandMore as ExpandMoreIcon, Search as SearchIcon } from '@mui/icons-material';
 import { adminApi, type GlobalRule, type GlobalRuleCreate, type GlobalRuleUpdate } from '../api/admin';
 import { TagInput } from '../components/TagInput';
 import { validateDomainOrUrl, processUrlInput } from '../utils/validation';
 
 const ACTION_LABELS: Record<string, string> = { block: 'חסום', allow: 'אפשר' };
-const TYPE_LABELS: Record<string, string> = { '*': 'הכל', image: 'תמונה', video: 'וידאו' };
+
+type Order = 'asc' | 'desc';
+type OrderBy = 'url' | 'action';
+const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
+
+function stableSort<T>(arr: T[], cmp: (a: T, b: T) => number): T[] {
+  return [...arr].sort(cmp);
+}
+
+function ruleDisplayUrl(r: GlobalRule): string {
+  return r.display_url || (r.domain_pattern + (r.path_pattern || ''));
+}
 
 const AdminGlobalRulesPage: React.FC = () => {
   const [rules, setRules] = useState<GlobalRule[]>([]);
@@ -46,13 +60,28 @@ const AdminGlobalRulesPage: React.FC = () => {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [url, setUrl] = useState('');
   const [action, setAction] = useState<'allow' | 'block'>('allow');
-  const [type, setType] = useState('*');
   const [includeSubdomains, setIncludeSubdomains] = useState(false);
   const [tags, setTags] = useState<string[]>([]);
   const [textFilterEnabled, setTextFilterEnabled] = useState(true);
+  const [imageFilterEnabled, setImageFilterEnabled] = useState(true);
+  const [fileFilterEnabled, setFileFilterEnabled] = useState(true);
   const [urlError, setUrlError] = useState('');
   const [saving, setSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
+
+  // Table: search, filter, sort, pagination
+  const [search, setSearch] = useState('');
+  const [filterAction, setFilterAction] = useState<string>('');
+  const [order, setOrder] = useState<Order>('asc');
+  const [orderBy, setOrderBy] = useState<OrderBy>('url');
+  const [page, setPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(25);
+
+  // URL resolve: which rule applies
+  const [resolveUrl, setResolveUrl] = useState('');
+  const [resolveResult, setResolveResult] = useState<GlobalRule | null | 'loading' | 'invalid'>(null);
+  const [resolveError, setResolveError] = useState<string | null>(null);
+  const [resolveDone, setResolveDone] = useState(false);
 
   const loadRules = async () => {
     setLoading(true);
@@ -75,10 +104,11 @@ const AdminGlobalRulesPage: React.FC = () => {
     setUrl('');
     setUrlError('');
     setAction('allow');
-    setType('*');
     setIncludeSubdomains(false);
     setTags([]);
     setTextFilterEnabled(true);
+    setImageFilterEnabled(true);
+    setFileFilterEnabled(true);
     setDialogOpen(true);
   };
 
@@ -88,10 +118,11 @@ const AdminGlobalRulesPage: React.FC = () => {
     setUrl(u);
     setUrlError(validateDomainOrUrl(u));
     setAction((r.action as 'allow' | 'block') || 'allow');
-    setType(r.type || '*');
     setIncludeSubdomains(r.include_subdomains || false);
     setTags(r.tags || []);
     setTextFilterEnabled(r.text_filter_enabled !== false);
+    setImageFilterEnabled(r.image_filter_enabled !== false);
+    setFileFilterEnabled(r.file_filter_enabled !== false);
     setDialogOpen(true);
   };
 
@@ -104,11 +135,15 @@ const AdminGlobalRulesPage: React.FC = () => {
     }
     setSaving(true);
     try {
+      const isAllow = action === 'allow';
+      const tf = isAllow ? textFilterEnabled : undefined;
+      const imgf = isAllow ? imageFilterEnabled : undefined;
+      const filef = isAllow ? fileFilterEnabled : undefined;
       if (editingId) {
-        const data: GlobalRuleUpdate = { url: u, action, type, include_subdomains: includeSubdomains, tags: tags.length ? tags : undefined, text_filter_enabled: textFilterEnabled };
+        const data: GlobalRuleUpdate = { url: u, action, include_subdomains: includeSubdomains, tags: tags.length ? tags : undefined, text_filter_enabled: tf, image_filter_enabled: imgf, file_filter_enabled: filef };
         await adminApi.updateGlobalRule(editingId, data);
       } else {
-        const data: GlobalRuleCreate = { url: u, action, type, include_subdomains: includeSubdomains, tags: tags.length ? tags : undefined, text_filter_enabled: textFilterEnabled };
+        const data: GlobalRuleCreate = { url: u, action, include_subdomains: includeSubdomains, tags: tags.length ? tags : undefined, text_filter_enabled: tf, image_filter_enabled: imgf, file_filter_enabled: filef };
         await adminApi.createGlobalRule(data);
       }
       setDialogOpen(false);
@@ -132,6 +167,56 @@ const AdminGlobalRulesPage: React.FC = () => {
     }
   };
 
+  const handleResolveUrl = async () => {
+    const u = resolveUrl.trim();
+    setResolveError(null);
+    if (!u) {
+      setResolveResult(null);
+      setResolveDone(false);
+      return;
+    }
+    const err = validateDomainOrUrl(u);
+    if (err) {
+      setResolveResult('invalid');
+      setResolveError(err);
+      setResolveDone(true);
+      return;
+    }
+    setResolveResult('loading');
+    setResolveDone(false);
+    try {
+      const { rule } = await adminApi.resolveGlobalRule(u);
+      setResolveResult(rule);
+      setResolveDone(true);
+    } catch (e: unknown) {
+      const ax = e as { response?: { data?: { detail?: string } } };
+      setResolveError(ax?.response?.data?.detail ?? 'שגיאה בבדיקה');
+      setResolveResult('invalid');
+      setResolveDone(true);
+    }
+  };
+
+  // Filtered and sorted rules for table
+  const filteredRules = (() => {
+    let list = rules;
+    const q = search.trim().toLowerCase();
+    if (q) {
+      list = list.filter((r) => ruleDisplayUrl(r).toLowerCase().includes(q));
+    }
+    if (filterAction) {
+      list = list.filter((r) => (r.action || '') === filterAction);
+    }
+    return list;
+  })();
+  const cmp = (a: GlobalRule, b: GlobalRule) => {
+    let v = 0;
+    if (orderBy === 'url') v = ruleDisplayUrl(a).localeCompare(ruleDisplayUrl(b));
+    else v = (a.action || '').localeCompare(b.action || '');
+    return order === 'asc' ? v : -v;
+  };
+  const sortedRules = stableSort(filteredRules, cmp);
+  const paginatedRules = sortedRules.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
+
   return (
     <Container maxWidth="lg" sx={{ py: 3 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
@@ -143,36 +228,105 @@ const AdminGlobalRulesPage: React.FC = () => {
         </Button>
       </Box>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        הרשימה הגלובלית היא רשימה לבנה בסיסית – רק כתובות ברשימה זו פתוחות במערכת. משתמשים יכולים להגדיר חסימות נוספות (רשימה שחורה) רק על כתובות שפתוחות ברשימה זו. רק אדמין יכול לערוך את הרשימה הגלובלית.
+        הרשימה הגלובלית קובעת אילו אתרים בכלל יכולים להיות פתוחים במערכת. רק כתובות ברשימה זו כפופות להגדרות המשתמש (לפתוח או לחסום לפי הפרופיל). רק אדמין יכול לערוך את הרשימה הגלובלית.
       </Typography>
+
+      {/* Resolve URL: which rule applies */}
+      <Paper sx={{ p: 2, mb: 2 }}>
+        <Typography variant="subtitle2" sx={{ mb: 1 }}>בדיקת קישור – איזה כלל גלובלי חל?</Typography>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}>
+          <TextField
+            size="small"
+            placeholder="הזן קישור (דומיין או URL מלא)"
+            value={resolveUrl}
+            onChange={(e) => { setResolveUrl(e.target.value); setResolveResult(null); setResolveError(null); setResolveDone(false); }}
+            onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleResolveUrl())}
+            sx={{ minWidth: 320 }}
+          />
+          <Button variant="outlined" size="small" onClick={handleResolveUrl} disabled={!resolveUrl.trim() || resolveResult === 'loading'}>
+            {resolveResult === 'loading' ? 'בודק...' : 'בדוק'}
+          </Button>
+          {resolveResult === 'invalid' && resolveError && (
+            <Typography variant="body2" color="error">{resolveError}</Typography>
+          )}
+          {resolveDone && resolveResult !== 'invalid' && resolveResult !== 'loading' && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+              {resolveResult && typeof resolveResult === 'object' ? (
+                <>
+                  <Typography variant="body2" color="text.secondary">הכלל החל:</Typography>
+                  <Chip size="small" label={ruleDisplayUrl(resolveResult)} sx={{ fontFamily: 'monospace' }} />
+                  <Chip size="small" label={ACTION_LABELS[resolveResult.action] ?? resolveResult.action} color={resolveResult.action === 'block' ? 'error' : 'success'} />
+                </>
+              ) : (
+                <Typography variant="body2" color="text.secondary">אין כלל גלובלי מתאים לכתובת זו</Typography>
+              )}
+            </Box>
+          )}
+        </Box>
+      </Paper>
+
       <Paper>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, px: 2, pt: 2, pb: 1 }}>
+          <TextField
+            size="small"
+            placeholder="חיפוש (כתובת, דומיין)..."
+            value={search}
+            onChange={(e) => { setSearch(e.target.value); setPage(0); }}
+            sx={{ minWidth: 220 }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon fontSize="small" color="action" />
+                </InputAdornment>
+              ),
+            }}
+          />
+          <FormControl size="small" sx={{ minWidth: 100 }}>
+            <InputLabel>פעולה</InputLabel>
+            <Select value={filterAction} label="פעולה" onChange={(e) => { setFilterAction(e.target.value); setPage(0); }}>
+              <MenuItem value="">הכל</MenuItem>
+              <MenuItem value="allow">אפשר</MenuItem>
+              <MenuItem value="block">חסום</MenuItem>
+            </Select>
+          </FormControl>
+        </Box>
         <TableContainer>
           <Table size="small">
             <TableHead>
               <TableRow>
-                <TableCell>כתובת</TableCell>
-                <TableCell>פעולה</TableCell>
-                <TableCell>סוג</TableCell>
+                <TableCell sortDirection={orderBy === 'url' ? order : false}>
+                  <TableSortLabel active={orderBy === 'url'} direction={orderBy === 'url' ? order : 'asc'} onClick={() => { setOrderBy('url'); setOrder(orderBy === 'url' && order === 'asc' ? 'desc' : 'asc'); setPage(0); }}>
+                    כתובת
+                  </TableSortLabel>
+                </TableCell>
+                <TableCell sortDirection={orderBy === 'action' ? order : false}>
+                  <TableSortLabel active={orderBy === 'action'} direction={orderBy === 'action' ? order : 'asc'} onClick={() => { setOrderBy('action'); setOrder(orderBy === 'action' && order === 'asc' ? 'desc' : 'asc'); setPage(0); }}>
+                    פעולה
+                  </TableSortLabel>
+                </TableCell>
                 <TableCell>תגיות</TableCell>
                 <TableCell>סינון מלל</TableCell>
+                <TableCell>סינון תמונות</TableCell>
+                <TableCell>סינון קבצים</TableCell>
                 <TableCell align="left">פעולות</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {loading ? (
-                <TableRow><TableCell colSpan={6}>טוען...</TableCell></TableRow>
-              ) : rules.length === 0 ? (
-                <TableRow><TableCell colSpan={6}>אין כללים גלובליים</TableCell></TableRow>
+                <TableRow><TableCell colSpan={7}>טוען...</TableCell></TableRow>
+              ) : filteredRules.length === 0 ? (
+                <TableRow><TableCell colSpan={7}>{rules.length === 0 ? 'אין כללים גלובליים' : 'אין תוצאות לחיפוש או לסינון'}</TableCell></TableRow>
               ) : (
-                rules.map((r) => (
+                paginatedRules.map((r) => (
                   <TableRow key={r.id}>
-                    <TableCell>{r.display_url || (r.domain_pattern + (r.path_pattern || ''))}</TableCell>
+                    <TableCell>{ruleDisplayUrl(r)}</TableCell>
                     <TableCell>{ACTION_LABELS[r.action] || r.action}</TableCell>
-                    <TableCell>{TYPE_LABELS[r.type] || r.type}</TableCell>
                     <TableCell>
                       {(r.tags || []).length ? (r.tags || []).map((t) => <Chip key={t} label={t} size="small" sx={{ mr: 0.5 }} />) : '—'}
                     </TableCell>
-                    <TableCell>{r.text_filter_enabled !== false ? 'כן' : 'לא'}</TableCell>
+                    <TableCell>{r.action === 'block' ? '—' : (r.text_filter_enabled !== false ? 'כן' : 'לא')}</TableCell>
+                    <TableCell>{r.action === 'block' ? '—' : (r.image_filter_enabled !== false ? 'כן' : 'לא')}</TableCell>
+                    <TableCell>{r.action === 'block' ? '—' : (r.file_filter_enabled !== false ? 'כן' : 'לא')}</TableCell>
                     <TableCell align="left">
                       <IconButton size="small" onClick={() => openEdit(r)}><EditIcon /></IconButton>
                       <IconButton size="small" color="error" onClick={() => setDeleteConfirm(r.id)}><DeleteIcon /></IconButton>
@@ -183,6 +337,19 @@ const AdminGlobalRulesPage: React.FC = () => {
             </TableBody>
           </Table>
         </TableContainer>
+        {filteredRules.length > 0 && (
+          <TablePagination
+            component="div"
+            count={filteredRules.length}
+            page={page}
+            onPageChange={(_, p) => setPage(p)}
+            rowsPerPage={rowsPerPage}
+            onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
+            rowsPerPageOptions={ROWS_PER_PAGE_OPTIONS}
+            labelRowsPerPage="שורות בעמוד:"
+            labelDisplayedRows={({ from, to, count }) => `${from}–${to} מתוך ${count}`}
+          />
+        )}
       </Paper>
 
       <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
@@ -210,27 +377,31 @@ const AdminGlobalRulesPage: React.FC = () => {
               <MenuItem value="block">חסום</MenuItem>
             </Select>
           </FormControl>
-          <FormControl fullWidth sx={{ mt: 2 }}>
-            <InputLabel>סוג</InputLabel>
-            <Select value={type} label="סוג" onChange={(e) => setType(e.target.value)}>
-              <MenuItem value="*">הכל</MenuItem>
-              <MenuItem value="image">תמונה</MenuItem>
-              <MenuItem value="video">וידאו</MenuItem>
-            </Select>
-          </FormControl>
           <FormControlLabel control={<Checkbox checked={includeSubdomains} onChange={(e) => setIncludeSubdomains(e.target.checked)} />} label="כלול תת-דומיינים" sx={{ mt: 2 }} />
           <Box sx={{ mt: 2 }}>
             <TagInput value={tags} onChange={setTags} label="תגיות" helperText="" />
           </Box>
-          <Accordion sx={{ mt: 2 }} disableGutters elevation={0} square>
-            <AccordionSummary expandIcon={<ExpandMoreIcon />}>אפשרויות נוספות</AccordionSummary>
-            <AccordionDetails>
-              <FormControlLabel
-                control={<Checkbox checked={textFilterEnabled} onChange={(e) => setTextFilterEnabled(e.target.checked)} />}
-                label="סינון מלל לאתר"
-              />
-            </AccordionDetails>
-          </Accordion>
+          {action === 'allow' && (
+            <Accordion sx={{ mt: 2 }} disableGutters elevation={0} square>
+              <AccordionSummary expandIcon={<ExpandMoreIcon />}>הגדרות מתקדמות</AccordionSummary>
+              <AccordionDetails>
+                <FormControlLabel
+                  control={<Checkbox checked={textFilterEnabled} onChange={(e) => setTextFilterEnabled(e.target.checked)} />}
+                  label="סינון מלל לאתר"
+                />
+                <FormControlLabel
+                  control={<Checkbox checked={imageFilterEnabled} onChange={(e) => setImageFilterEnabled(e.target.checked)} />}
+                  label="סינון תמונות לאתר"
+                  sx={{ display: 'block', mt: 0.5 }}
+                />
+                <FormControlLabel
+                  control={<Checkbox checked={fileFilterEnabled} onChange={(e) => setFileFilterEnabled(e.target.checked)} />}
+                  label="סינון קבצים לאתר (טרם נתמך)"
+                  sx={{ display: 'block', mt: 0.5 }}
+                />
+              </AccordionDetails>
+            </Accordion>
+          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setDialogOpen(false)}>ביטול</Button>

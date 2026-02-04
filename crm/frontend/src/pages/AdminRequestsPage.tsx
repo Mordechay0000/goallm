@@ -215,7 +215,6 @@ const AdminRequestsPage: React.FC = () => {
       const data: RuleRequestUpdate = {
         url: editUrl.trim(),
         action: editAction,
-        type: '*',
         include_subdomains: editIncludeSubdomains,
         tags: editTags.length > 0 ? editTags : undefined,
       };
@@ -244,7 +243,6 @@ const AdminRequestsPage: React.FC = () => {
       const data: RuleRequestUpdate = {
         url: editUrl.trim(),
         action: editAction,
-        type: '*',
         include_subdomains: editIncludeSubdomains,
         tags: editTags.length > 0 ? editTags : undefined,
       };

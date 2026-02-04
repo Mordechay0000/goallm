@@ -6,7 +6,7 @@ from datetime import datetime
 import logging
 import re
 import sqlite3
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 
 from .database import db_connection
 from .security import get_password_hash, verify_password, validate_password_strength
@@ -309,7 +309,7 @@ def get_user_profiles(user_id: int) -> List[Dict]:
 
 
 def list_all_profiles_for_admin() -> List[Dict]:
-    """Get all profiles with user phone (admin only, for approving blocked-page requests)."""
+    """Get all profiles with user phone (admin only)."""
     cursor = db_connection.execute("""
         SELECT p.id, p.user_id, p.name, p.mode, p.is_default, p.created_at, p.updated_at, u.phone AS user_phone
         FROM profiles p
@@ -618,9 +618,11 @@ def delete_rule(rule_id: int) -> bool:
 def get_global_rules() -> List[Dict]:
     """Get all global rules (base whitelist)."""
     cursor = db_connection.execute("""
-        SELECT id, domain_pattern, path_pattern, action, type,
+        SELECT id, domain_pattern, path_pattern, action,
                include_subdomains, tags, created_at, updated_at,
-               COALESCE(text_filter_enabled, 1) AS text_filter_enabled
+               COALESCE(text_filter_enabled, 1) AS text_filter_enabled,
+               COALESCE(image_filter_enabled, 1) AS image_filter_enabled,
+               COALESCE(file_filter_enabled, 1) AS file_filter_enabled
         FROM global_rules
         ORDER BY created_at DESC
     """)
@@ -630,16 +632,82 @@ def get_global_rules() -> List[Dict]:
         d = dict(row)
         d["tags"] = _parse_tags(d.get("tags"))
         d["text_filter_enabled"] = bool(d.get("text_filter_enabled", 1))
+        d["image_filter_enabled"] = bool(d.get("image_filter_enabled", 1))
+        d["file_filter_enabled"] = bool(d.get("file_filter_enabled", 1))
         out.append(d)
     return out
+
+
+def _parse_url_for_resolve(url: str) -> tuple[str, str]:
+    """Parse URL into (domain, path) for rule matching. Normalized like policy resolver."""
+    u = (url or "").strip()
+    if not u:
+        return "", "/"
+    if "://" not in u:
+        u = "https://" + u
+    parsed = urlparse(u)
+    domain = (parsed.hostname or "").lower().rstrip(".")
+    path = (parsed.path or "").strip() or "/"
+    path = "/" + path.lstrip("/")
+    if path != "/" and path.endswith("/"):
+        path = path.rstrip("/")
+    return domain, path
+
+
+def _domain_matches_rule(rule_domain: str, domain: str) -> bool:
+    """True if domain matches the rule's domain_pattern (*.x or exact)."""
+    if not rule_domain or not domain:
+        return False
+    if rule_domain.startswith("*."):
+        base = rule_domain[2:]
+        return domain == base or domain.endswith("." + base)
+    return domain == rule_domain
+
+
+def _path_matches_rule(rule_path: Optional[str], path: str) -> bool:
+    """True if path matches the rule's path_pattern (prefix or /)."""
+    if not rule_path or rule_path == "/" or (rule_path or "").strip() == "":
+        return True
+    rp = (rule_path or "").rstrip("/")
+    if not path:
+        path = "/"
+    if path != "/" and path.endswith("/"):
+        path = path.rstrip("/")
+    return path.startswith(rp) or (rp == "/" and path.startswith("/"))
+
+
+def resolve_global_rule_for_url(url: str) -> Optional[Dict]:
+    """Return the global rule that applies to this URL (best match), or None. Type treated as *."""
+    domain, path = _parse_url_for_resolve(url)
+    if not domain:
+        return None
+    rules = get_global_rules()
+    best = None
+    best_score = -1
+    for r in rules:
+        if not _domain_matches_rule(r.get("domain_pattern") or "", domain):
+            continue
+        rpath = r.get("path_pattern") or "/"
+        if not _path_matches_rule(rpath, path):
+            continue
+        # Prefer more specific: longer path, then exact domain (not *. )
+        p_score = len((r.get("path_pattern") or "").rstrip("/"))
+        d_score = 100 if (r.get("domain_pattern") or "").startswith("*.") else 200
+        score = d_score + p_score
+        if score > best_score:
+            best_score = score
+            best = r
+    return best
 
 
 def get_global_rule(rule_id: int) -> Optional[Dict]:
     """Get a single global rule by ID."""
     cursor = db_connection.execute("""
-        SELECT id, domain_pattern, path_pattern, action, type,
+        SELECT id, domain_pattern, path_pattern, action,
                include_subdomains, tags, created_at, updated_at,
-               COALESCE(text_filter_enabled, 1) AS text_filter_enabled
+               COALESCE(text_filter_enabled, 1) AS text_filter_enabled,
+               COALESCE(image_filter_enabled, 1) AS image_filter_enabled,
+               COALESCE(file_filter_enabled, 1) AS file_filter_enabled
         FROM global_rules WHERE id = ?
     """, (rule_id,))
     row = cursor.fetchone()
@@ -648,16 +716,19 @@ def get_global_rule(rule_id: int) -> Optional[Dict]:
     d = dict(row)
     d["tags"] = _parse_tags(d.get("tags"))
     d["text_filter_enabled"] = bool(d.get("text_filter_enabled", 1))
+    d["image_filter_enabled"] = bool(d.get("image_filter_enabled", 1))
+    d["file_filter_enabled"] = bool(d.get("file_filter_enabled", 1))
     return d
 
 
 def create_global_rule(
     url: str,
     action: str = "allow",
-    rule_type: str = "*",
     include_subdomains: bool = False,
     tags: Optional[List[str]] = None,
     text_filter_enabled: bool = True,
+    image_filter_enabled: bool = True,
+    file_filter_enabled: bool = True,
 ) -> Dict:
     """Create a global rule (admin only). Raises if exact duplicate exists."""
     url = _normalize_url(url)
@@ -676,9 +747,9 @@ def create_global_rule(
     try:
         cursor = db_connection.execute("""
             INSERT INTO global_rules
-            (domain_pattern, path_pattern, action, type, include_subdomains, tags, text_filter_enabled, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (domain_pattern, path_val, action, rule_type, 1 if include_subdomains else 0, tags_str, 1 if text_filter_enabled else 0, now, now))
+            (domain_pattern, path_pattern, action, include_subdomains, tags, text_filter_enabled, image_filter_enabled, file_filter_enabled, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (domain_pattern, path_val, action, 1 if include_subdomains else 0, tags_str, 1 if text_filter_enabled else 0, 1 if image_filter_enabled else 0, 1 if file_filter_enabled else 0, now, now))
         rule_id = cursor.lastrowid
         db_connection.commit()
         return get_global_rule(rule_id)
@@ -691,10 +762,11 @@ def update_global_rule(
     rule_id: int,
     url: Optional[str] = None,
     action: Optional[str] = None,
-    rule_type: Optional[str] = None,
     include_subdomains: Optional[bool] = None,
     tags: Optional[List[str]] = None,
     text_filter_enabled: Optional[bool] = None,
+    image_filter_enabled: Optional[bool] = None,
+    file_filter_enabled: Optional[bool] = None,
 ) -> Dict:
     """Update a global rule. Raises if change would create duplicate."""
     rule = get_global_rule(rule_id)
@@ -719,16 +791,17 @@ def update_global_rule(
     if existing and existing != rule_id:
         raise ValueError("כלל גלובלי זהה כבר קיים (כפילות)")
     new_action = action if action is not None else rule["action"]
-    new_type = rule_type if rule_type is not None else rule["type"]
     new_tags_str = _tags_to_str(tags) if tags is not None else _tags_to_str(rule.get("tags"))
     new_text_filter = text_filter_enabled if text_filter_enabled is not None else rule.get("text_filter_enabled", True)
+    new_image_filter = image_filter_enabled if image_filter_enabled is not None else rule.get("image_filter_enabled", True)
+    new_file_filter = file_filter_enabled if file_filter_enabled is not None else rule.get("file_filter_enabled", True)
     now = int(datetime.now().timestamp())
     db_connection.execute("""
         UPDATE global_rules
-        SET domain_pattern = ?, path_pattern = ?, action = ?, type = ?,
-            include_subdomains = ?, tags = ?, text_filter_enabled = ?, updated_at = ?
+        SET domain_pattern = ?, path_pattern = ?, action = ?,
+            include_subdomains = ?, tags = ?, text_filter_enabled = ?, image_filter_enabled = ?, file_filter_enabled = ?, updated_at = ?
         WHERE id = ?
-    """, (domain_pattern, path, new_action, new_type, 1 if include_subdomains else 0, new_tags_str, 1 if new_text_filter else 0, now, rule_id))
+    """, (domain_pattern, path, new_action, 1 if include_subdomains else 0, new_tags_str, 1 if new_text_filter else 0, 1 if new_image_filter else 0, 1 if new_file_filter else 0, now, rule_id))
     db_connection.commit()
     return get_global_rule(rule_id)
 
@@ -738,6 +811,106 @@ def delete_global_rule(rule_id: int) -> bool:
     cursor = db_connection.execute("DELETE FROM global_rules WHERE id = ?", (rule_id,))
     db_connection.commit()
     return cursor.rowcount > 0
+
+
+# IP bindings (שיוך IP לחשבון – סינון לפי משתמש)
+def get_all_ip_bindings() -> List[Dict]:
+    """Get all ip→user bindings (for syncing to core)."""
+    cursor = db_connection.execute("""
+        SELECT id, user_id, ip, created_at, last_used_at FROM ip_bindings ORDER BY created_at DESC
+    """)
+    rows = cursor.fetchall()
+    return [_binding_row_to_dict(row) for row in rows]
+
+
+def _binding_row_to_dict(row) -> Dict:
+    d = dict(row)
+    if "last_used_at" in d and d["last_used_at"] is not None:
+        d["last_used_at"] = int(d["last_used_at"])
+    return d
+
+
+def get_user_id_for_ip(ip: str) -> Optional[int]:
+    """Return user_id bound to this IP, or None."""
+    ip = (ip or "").strip()
+    if not ip:
+        return None
+    row = db_connection.execute("SELECT user_id FROM ip_bindings WHERE ip = ?", (ip,)).fetchone()
+    return int(row["user_id"]) if row else None
+
+
+def list_bindings_for_user(user_id: int) -> List[Dict]:
+    """List all IP bindings for a user (includes last_used_at)."""
+    cursor = db_connection.execute("""
+        SELECT id, user_id, ip, created_at, last_used_at FROM ip_bindings WHERE user_id = ? ORDER BY created_at DESC
+    """, (user_id,))
+    return [_binding_row_to_dict(row) for row in cursor.fetchall()]
+
+
+def touch_ip_binding(ip: str) -> bool:
+    """Update last_used_at for the binding with this IP. Returns True if updated."""
+    ip = (ip or "").strip()
+    if not ip:
+        return False
+    now = int(datetime.now().timestamp())
+    cursor = db_connection.execute(
+        "UPDATE ip_bindings SET last_used_at = ? WHERE ip = ?",
+        (now, ip),
+    )
+    db_connection.commit()
+    return cursor.rowcount > 0
+
+
+def add_ip_binding(user_id: int, ip: str) -> Dict:
+    """Bind an IP to a user. Replaces any existing binding for this IP. Returns the binding dict."""
+    ip = (ip or "").strip()
+    if not ip:
+        raise ValueError("נא להזין כתובת IP.")
+    now = int(datetime.now().timestamp())
+    try:
+        cursor = db_connection.execute("SELECT id FROM ip_bindings WHERE ip = ?", (ip,))
+        existing = cursor.fetchone()
+        if existing:
+            db_connection.execute(
+                "UPDATE ip_bindings SET user_id = ?, created_at = ? WHERE ip = ?",
+                (user_id, now, ip),
+            )
+        else:
+            db_connection.execute(
+                "INSERT INTO ip_bindings (user_id, ip, created_at) VALUES (?, ?, ?)",
+                (user_id, ip, now),
+            )
+        db_connection.commit()
+        row = db_connection.execute("SELECT id, user_id, ip, created_at, last_used_at FROM ip_bindings WHERE ip = ?", (ip,)).fetchone()
+        return _binding_row_to_dict(row) if row else {}
+    except sqlite3.IntegrityError:
+        db_connection.rollback()
+        raise ValueError("שיוך IP נכשל")
+
+
+def remove_ip_binding(binding_id: int, user_id: int) -> bool:
+    """Remove a binding. Only the owning user can remove. Returns True if deleted."""
+    row = db_connection.execute("SELECT id, user_id FROM ip_bindings WHERE id = ?", (binding_id,)).fetchone()
+    if not row or int(row["user_id"]) != user_id:
+        return False
+    cursor = db_connection.execute("DELETE FROM ip_bindings WHERE id = ? AND user_id = ?", (binding_id, user_id))
+    db_connection.commit()
+    return cursor.rowcount > 0
+
+
+def sync_ip_bindings_to_core() -> None:
+    """Push all CRM ip_bindings to core so the proxy can resolve IP→user_id."""
+    try:
+        import sys
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        from core.policy_processor.policy_database import set_ip_bindings
+        bindings = get_all_ip_bindings()
+        set_ip_bindings([(b["ip"], b["user_id"]) for b in bindings])
+    except Exception as e:
+        logger.warning("sync_ip_bindings_to_core failed: %s", e)
 
 
 # Tag rules (כללי תגיות)
@@ -800,11 +973,18 @@ def delete_tag_rule(rule_id: int) -> bool:
     return cursor.rowcount > 0
 
 
-def sync_crm_rules_to_core(user_id: Optional[int] = None) -> None:
+def get_user_ids_with_profiles() -> List[int]:
+    """Return all user IDs that have at least one profile (for periodic schedule sync)."""
+    cursor = db_connection.execute("SELECT DISTINCT user_id FROM profiles ORDER BY user_id ASC")
+    return [row["user_id"] for row in cursor.fetchall()]
+
+
+def sync_crm_rules_to_core(user_id: Optional[int] = None, set_default: bool = True) -> None:
     """
     Sync CRM global rules (base whitelist) + active user profile rules and tag_rules to core policy_database.
     Global rules go to core with source='global'; user's active profile rules with source='user'.
     When user_id is None, sync first user's active profile for user layer.
+    When set_default is False, do not update core default_user_id (for periodic schedule sync of all users).
     """
     try:
         import sys
@@ -818,22 +998,36 @@ def sync_crm_rules_to_core(user_id: Optional[int] = None) -> None:
             add_policy as core_add_policy,
             update_policy as core_update_policy,
             delete_policy as core_delete_policy,
+            delete_user_policies as core_delete_user_policies,
             get_tag_rules as core_get_tag_rules,
             add_tag_rule as core_add_tag_rule,
             update_tag_rule as core_update_tag_rule,
             delete_tag_rule as core_delete_tag_rule,
             set_profile_mode as core_set_profile_mode,
+            set_default_user_id as core_set_default_user_id,
         )
+        # Which user to sync for user layer (None → first user for backward compat)
+        sync_user_id = user_id
+        if sync_user_id is None:
+            row = db_connection.execute("SELECT id FROM users ORDER BY id ASC LIMIT 1").fetchone()
+            if row:
+                sync_user_id = row["id"]
+
         # Global rules (base whitelist) – from CRM global_rules
         crm_global = get_global_rules()
         crm_global_keys = {(r["domain_pattern"], r.get("path_pattern") or None, r.get("type") or "*") for r in crm_global}
         # User's active profile rules
         mode, crm_rules, crm_tag_rules = get_system_active_profile_and_rules(user_id=user_id)
-        core_set_profile_mode(mode)
+        if sync_user_id is not None:
+            core_set_profile_mode(mode, sync_user_id)
+            if set_default:
+                core_set_default_user_id(sync_user_id)  # so unbound flows use this user when binding is disabled
+        else:
+            core_set_profile_mode(mode)
         crm_user_keys = {(r["domain"], r.get("path") or None, r.get("type") or "*") for r in crm_rules}
 
         core_global = get_all_policies(enabled_only=False, source_filter="global")
-        core_user = get_all_policies(enabled_only=False, source_filter="user")
+        core_user = get_all_policies(enabled_only=False, source_filter="user", user_id=sync_user_id) if sync_user_id is not None else []
         for p in core_global:
             key = (p["domain"], p.get("path") or None, p.get("type") or "*")
             if key not in crm_global_keys:
@@ -844,7 +1038,7 @@ def sync_crm_rules_to_core(user_id: Optional[int] = None) -> None:
                 core_delete_policy(p["id"])
 
         core_global = get_all_policies(enabled_only=False, source_filter="global")
-        core_user = get_all_policies(enabled_only=False, source_filter="user")
+        core_user = get_all_policies(enabled_only=False, source_filter="user", user_id=sync_user_id) if sync_user_id is not None else []
         for r in crm_global:
             domain = r["domain_pattern"]
             path = r.get("path_pattern")
@@ -852,22 +1046,21 @@ def sync_crm_rules_to_core(user_id: Optional[int] = None) -> None:
             state = r.get("action") or "allow"
             tags = r.get("tags") or []
             text_filter_enabled = r.get("text_filter_enabled", True)
+            image_filter_enabled = r.get("image_filter_enabled", True)
             existing = next((p for p in core_global if p["domain"] == domain and (p.get("path") or None) == (path or None) and (p.get("type") or "*") == typ), None)
             if existing:
-                core_update_policy(existing["id"], state=state, tags=tags, source="global", text_filter_enabled=text_filter_enabled)
+                core_update_policy(existing["id"], state=state, tags=tags, source="global", text_filter_enabled=text_filter_enabled, image_filter_enabled=image_filter_enabled)
             else:
-                core_add_policy(domain, path, policy_type=typ, state=state, tags=tags, source="global", text_filter_enabled=text_filter_enabled)
+                core_add_policy(domain, path, policy_type=typ, state=state, tags=tags, source="global", text_filter_enabled=text_filter_enabled, image_filter_enabled=image_filter_enabled)
+        if sync_user_id is not None:
+            core_delete_user_policies(sync_user_id)
         for r in crm_rules:
             domain = r["domain"]
             path = r.get("path")
             typ = r.get("type") or "*"
             state = r.get("state") or "block"
             tags = r.get("tags") or []
-            existing = next((p for p in core_user if p["domain"] == domain and (p.get("path") or None) == (path or None) and (p.get("type") or "*") == typ), None)
-            if existing:
-                core_update_policy(existing["id"], state=state, tags=tags, source="user")
-            else:
-                core_add_policy(domain, path, policy_type=typ, state=state, tags=tags, source="user")
+            core_add_policy(domain, path, policy_type=typ, state=state, tags=tags, source="user", user_id=sync_user_id or 0)
 
         core_tag_rules = core_get_tag_rules(enabled_only=False)
         crm_tag_set = {tr["tag"] for tr in crm_tag_rules}
@@ -1096,33 +1289,6 @@ def remove_locked_setting(user_id: int, setting_key: str) -> None:
 
 
 # ---------- Rule requests (user requests open/change for admin to approve) ----------
-BLOCKED_PAGE_USER_PHONE = "__from_blocked_page__"
-
-
-def get_or_create_blocked_page_user_id() -> int:
-    """Get or create the special user for rule requests submitted from blocked/send-for-review pages."""
-    cursor = db_connection.execute(
-        "SELECT id FROM users WHERE phone = ? LIMIT 1",
-        (BLOCKED_PAGE_USER_PHONE,),
-    )
-    row = cursor.fetchone()
-    if row:
-        return row[0]
-    now = int(datetime.now().timestamp())
-    password_hash = get_password_hash("__no_login_blocked_page__")
-    db_connection.execute(
-        """INSERT INTO users (email, password_hash, first_name, last_name, phone, avatar_url, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, NULL, ?, ?)""",
-        ("__blocked_page@local", password_hash, "מעמוד חסום", "", BLOCKED_PAGE_USER_PHONE, now, now),
-    )
-    user_id = db_connection.execute("SELECT last_insert_rowid()").fetchone()[0]
-    db_connection.execute(
-        """INSERT INTO profiles (user_id, name, mode, is_default, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (user_id, "ברירת מחדל", "whitelist", 1, now, now),
-    )
-    db_connection.commit()
-    return user_id
 
 
 def add_rule_request(
@@ -1132,7 +1298,6 @@ def add_rule_request(
     domain_pattern: Optional[str] = None,
     path_pattern: Optional[str] = None,
     action: Optional[str] = None,
-    rule_type: Optional[str] = None,
     include_subdomains: bool = False,
     tags: Optional[List[str]] = None,
     request_url: Optional[str] = None,
@@ -1153,7 +1318,7 @@ def add_rule_request(
         INSERT INTO rule_requests
         (user_id, request_type, url, domain_pattern, path_pattern, action, type, include_subdomains, tags, status, created_at, updated_at, request_url)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
-    """, (user_id, request_type, url or "", domain_pattern or "", path_pattern or "", action or "allow", rule_type or "*", 1 if include_subdomains else 0, tags_str, now, now, req_url))
+    """, (user_id, request_type, url or "", domain_pattern or "", path_pattern or "", action or "allow", "*", 1 if include_subdomains else 0, tags_str, now, now, req_url))
     rid = cursor.lastrowid
     db_connection.commit()
     return get_rule_request(rid)
@@ -1252,25 +1417,26 @@ def approve_rule_request(request_id: int, profile_id: Optional[int] = None) -> D
     inc = inc or bool(req.get("include_subdomains"))
     domain_pattern = f"*.{domain}" if inc else domain
     action = req.get("action") or "allow"
-    rule_type = req.get("type") or "*"
     tags = req.get("tags")
     existing_id = _global_rule_exists(domain_pattern, path, inc)
     if existing_id:
         updated = update_global_rule(
             existing_id,
             action=action,
-            rule_type=rule_type,
             include_subdomains=inc,
             tags=tags,
         )
         rule_id = updated["id"]
     else:
+        tf = imgf = filef = (action == "allow")
         created = create_global_rule(
             url=url_for_rule,
             action=action,
-            rule_type=rule_type,
             include_subdomains=inc,
             tags=tags,
+            text_filter_enabled=tf,
+            image_filter_enabled=imgf,
+            file_filter_enabled=filef,
         )
         rule_id = created["id"]
     now = int(datetime.now().timestamp())
@@ -1287,7 +1453,6 @@ def update_rule_request(
     request_id: int,
     url: Optional[str] = None,
     action: Optional[str] = None,
-    rule_type: Optional[str] = None,
     include_subdomains: Optional[bool] = None,
     tags: Optional[List[str]] = None,
 ) -> Dict:
@@ -1306,8 +1471,6 @@ def update_rule_request(
         )
     if action is not None and action in ("allow", "block"):
         db_connection.execute("UPDATE rule_requests SET action = ?, updated_at = ? WHERE id = ?", (action, int(datetime.now().timestamp()), request_id))
-    if rule_type is not None and rule_type in ("*", "image", "video"):
-        db_connection.execute("UPDATE rule_requests SET type = ?, updated_at = ? WHERE id = ?", (rule_type, int(datetime.now().timestamp()), request_id))
     if include_subdomains is not None:
         db_connection.execute("UPDATE rule_requests SET include_subdomains = ?, updated_at = ? WHERE id = ?", (1 if include_subdomains else 0, int(datetime.now().timestamp()), request_id))
     if tags is not None:

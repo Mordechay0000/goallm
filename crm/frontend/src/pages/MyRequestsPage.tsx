@@ -142,7 +142,6 @@ const MyRequestsPage: React.FC = () => {
         request_type: requestType,
         url: url.trim(),
         action,
-        type: '*',
         include_subdomains: includeSubdomains,
         tags: tags.length > 0 ? tags : undefined,
       };
@@ -186,7 +185,7 @@ const MyRequestsPage: React.FC = () => {
             בקשה לפתיחת אתר
           </Button>
           <Button variant="contained" startIcon={<AddIcon />} onClick={() => openAddDialog('change')}>
-            בקשה לשינוי כלל
+            בקשה לשינוי (חסום/פתוח)
           </Button>
         </Box>
       </Box>
@@ -261,7 +260,7 @@ const MyRequestsPage: React.FC = () => {
       {/* Add Request Dialog */}
       <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>
-          {requestType === 'open' ? 'בקשה לפתיחת אתר' : 'בקשה לשינוי כלל'}
+          {requestType === 'open' ? 'בקשה לפתיחת אתר' : 'בקשה לשינוי (חסום/פתוח)'}
         </DialogTitle>
         <DialogContent>
           <form id="add-request-form" onSubmit={handleSubmit}>
@@ -317,7 +316,7 @@ const MyRequestsPage: React.FC = () => {
       {/* Delete confirmation */}
       <Dialog open={deleteConfirm !== null} onClose={() => setDeleteConfirm(null)}>
         <DialogTitle>מחיקת בקשה</DialogTitle>
-        <DialogContent>האם למחוק את הבקשה?</DialogContent>
+        <DialogContent>למחוק את הבקשה?</DialogContent>
         <DialogActions>
           <Button onClick={() => setDeleteConfirm(null)}>ביטול</Button>
           <Button color="error" variant="contained" onClick={() => deleteConfirm !== null && handleDelete(deleteConfirm)}>
