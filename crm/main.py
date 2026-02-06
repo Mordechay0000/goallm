@@ -27,6 +27,7 @@ from .models import (
     ScheduleCreate, ScheduleUpdate, ScheduleResponse,
     RuleRequestCreate, RuleRequestApprove, RuleRequestUpdate, RuleRequestResponse,
     ResolverTestUrlBody,
+    SupportTicketCreate, SupportTicketResponse, SupportReplyCreate, SupportReplyResponse,
 )
 from .services import (
     create_user, authenticate_user, authenticate_user_by_phone, get_user_by_id, update_user, change_password, get_user_profiles,
@@ -37,6 +38,11 @@ from .services import (
     list_users, set_user_admin, delete_user, get_locked_settings, set_locked_setting, remove_locked_setting,
     add_rule_request, list_rule_requests, get_rule_request, approve_rule_request, reject_rule_request, delete_rule_request,
     update_rule_request, list_all_profiles_for_admin,
+    create_support_ticket, get_support_ticket, list_my_support_tickets, list_all_support_tickets,
+    add_support_reply, list_support_replies, get_support_reply,
+    count_my_tickets_with_replies, count_all_tickets_with_replies,
+    count_my_tickets_with_unread_replies, count_all_tickets_with_unread_replies,
+    mark_support_ticket_read, delete_support_ticket,
     get_global_rules, get_global_rule, create_global_rule, update_global_rule, delete_global_rule, resolve_global_rule_for_url,
     list_bindings_for_user, add_ip_binding, remove_ip_binding, sync_ip_bindings_to_core, touch_ip_binding,
 )
@@ -50,6 +56,7 @@ from .verification import (
     verify_email_code,
 )
 from .uploads import validate_avatar_file, save_avatar
+from .support_uploads import save_support_file
 from .security import validate_password_strength
 
 logger = logging.getLogger(__name__)
@@ -1210,6 +1217,208 @@ async def delete_rule_request_endpoint(
         raise HTTPException(status_code=404, detail="בקשה לא נמצאה")
 
 
+# ========== Support tickets (פניות משתמשים) ==========
+
+@app.post("/api/support/upload")
+async def support_upload_endpoint(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+):
+    """Upload a file for support ticket/reply. Returns { url, name }."""
+    try:
+        content = await file.read()
+        info = save_support_file(content, file.filename or "file", current_user["id"])
+        return info
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/support/tickets", response_model=SupportTicketResponse, status_code=status.HTTP_201_CREATED)
+async def create_support_ticket_endpoint(
+    data: SupportTicketCreate,
+    current_user: dict = Depends(get_current_user),
+):
+    """Create a new support ticket (subject + content, optional attachments)."""
+    try:
+        attachments = [{"name": a.name, "url": a.url} for a in (data.attachments or [])]
+        ticket = create_support_ticket(
+            user_id=current_user["id"],
+            subject=data.subject,
+            content=data.content,
+            attachments=attachments or None,
+        )
+        return SupportTicketResponse(
+            id=ticket["id"],
+            user_id=ticket["user_id"],
+            subject=ticket["subject"],
+            content=ticket["content"],
+            created_at=ticket["created_at"],
+            updated_at=ticket["updated_at"],
+            attachments=ticket.get("attachments"),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/support/tickets")
+async def list_support_tickets_endpoint(
+    current_user: dict = Depends(get_current_user),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    sort_order: str = Query("desc"),
+    search: Optional[str] = Query(None),
+    scope: Optional[str] = Query(None, description="mine = רק הפניות שלי (גם לאדמין); all או לא מועבר = לאדמין כל הפניות"),
+):
+    """List support tickets. scope=mine: only current user's tickets (also for admin). Otherwise: user gets own, admin gets all."""
+    if scope == "mine":
+        rows, total = list_my_support_tickets(
+            user_id=current_user["id"], page=page, page_size=page_size, sort_order=sort_order
+        )
+    elif current_user.get("is_admin"):
+        rows, total = list_all_support_tickets(
+            page=page, page_size=page_size, sort_order=sort_order, search=search
+        )
+    else:
+        rows, total = list_my_support_tickets(
+            user_id=current_user["id"], page=page, page_size=page_size, sort_order=sort_order
+        )
+    out = [
+        SupportTicketResponse(
+            id=r["id"],
+            user_id=r["user_id"],
+            subject=r["subject"],
+            content=r.get("content", ""),
+            created_at=r["created_at"],
+            updated_at=r["updated_at"],
+            content_preview=r.get("content_preview"),
+            user_first_name=r.get("user_first_name"),
+            user_phone=r.get("user_phone"),
+            replies_count=r.get("replies_count", 0),
+            unread_replies_count=r.get("unread_replies_count", 0),
+        )
+        for r in rows
+    ]
+    return {"tickets": out, "total": total}
+
+
+@app.get("/api/support/stats")
+async def support_stats_endpoint(current_user: dict = Depends(get_current_user)):
+    """Return counts for sidebar: tickets_with_replies = my tickets with unread replies; admin = all with unread (for owner)."""
+    tickets_with_replies = count_my_tickets_with_unread_replies(current_user["id"])
+    out = {"tickets_with_replies": tickets_with_replies}
+    if current_user.get("is_admin"):
+        out["admin_tickets_with_replies"] = count_all_tickets_with_unread_replies()
+    return out
+
+
+@app.get("/api/support/tickets/{ticket_id}", response_model=SupportTicketResponse)
+async def get_support_ticket_endpoint(
+    ticket_id: int,
+    current_user: dict = Depends(get_current_user),
+):
+    """Get a single support ticket. User: own only. Admin: any."""
+    ticket = get_support_ticket(ticket_id)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="פנייה לא נמצאה")
+    if ticket["user_id"] != current_user["id"] and not current_user.get("is_admin"):
+        raise HTTPException(status_code=404, detail="פנייה לא נמצאה")
+    user = get_user_by_id(ticket["user_id"])
+    return SupportTicketResponse(
+        id=ticket["id"],
+        user_id=ticket["user_id"],
+        subject=ticket["subject"],
+        content=ticket["content"],
+        created_at=ticket["created_at"],
+        updated_at=ticket["updated_at"],
+        user_first_name=user.get("first_name") if user else None,
+        user_last_name=user.get("last_name") if user else None,
+        user_phone=user.get("phone") if user else None,
+        user_avatar_url=user.get("avatar_url") if user else None,
+        attachments=ticket.get("attachments"),
+    )
+
+
+@app.get("/api/support/tickets/{ticket_id}/replies", response_model=List[SupportReplyResponse])
+async def list_support_replies_endpoint(
+    ticket_id: int,
+    current_user: dict = Depends(get_current_user),
+):
+    """List replies for a ticket. User: own ticket only. Admin: any."""
+    ticket = get_support_ticket(ticket_id)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="פנייה לא נמצאה")
+    if ticket["user_id"] != current_user["id"] and not current_user.get("is_admin"):
+        raise HTTPException(status_code=404, detail="פנייה לא נמצאה")
+    mark_support_ticket_read(ticket_id, current_user["id"])
+    replies = list_support_replies(ticket_id, viewer_id=current_user["id"])
+    return [
+        SupportReplyResponse(
+            id=r["id"],
+            ticket_id=r["ticket_id"],
+            author_id=r["author_id"],
+            content=r["content"],
+            created_at=r["created_at"],
+            author_first_name=r.get("author_first_name"),
+            author_last_name=r.get("author_last_name"),
+            author_avatar_url=r.get("author_avatar_url"),
+            is_unread=r.get("is_unread", False),
+            attachments=r.get("attachments"),
+        )
+        for r in replies
+    ]
+
+
+@app.post("/api/support/tickets/{ticket_id}/replies", response_model=SupportReplyResponse, status_code=status.HTTP_201_CREATED)
+async def create_support_reply_endpoint(
+    ticket_id: int,
+    data: SupportReplyCreate,
+    current_user: dict = Depends(get_current_user),
+):
+    """Add a reply to a ticket. User: own ticket. Admin: any. Content is markdown."""
+    ticket = get_support_ticket(ticket_id)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="פנייה לא נמצאה")
+    if ticket["user_id"] != current_user["id"] and not current_user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="אין הרשאה להגיב על פנייה זו")
+    try:
+        attachments = [{"name": a.name, "url": a.url} for a in (data.attachments or [])]
+        reply = add_support_reply(
+            ticket_id=ticket_id,
+            author_id=current_user["id"],
+            content=data.content,
+            attachments=attachments or None,
+        )
+        return SupportReplyResponse(
+            id=reply["id"],
+            ticket_id=reply["ticket_id"],
+            author_id=reply["author_id"],
+            content=reply["content"],
+            created_at=reply["created_at"],
+            author_first_name=reply.get("author_first_name"),
+            author_last_name=reply.get("author_last_name"),
+            author_avatar_url=reply.get("author_avatar_url"),
+            is_unread=False,
+            attachments=reply.get("attachments"),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/support/tickets/{ticket_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_support_ticket_endpoint(
+    ticket_id: int,
+    current_user: dict = Depends(get_current_user),
+):
+    """Close/delete a support ticket. Owner or admin only."""
+    ticket = get_support_ticket(ticket_id)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="פנייה לא נמצאה")
+    if ticket["user_id"] != current_user["id"] and not current_user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="אין הרשאה לסגור פנייה זו")
+    if not delete_support_ticket(ticket_id):
+        raise HTTPException(status_code=404, detail="פנייה לא נמצאה")
+
+
 # ========== Admin Endpoints ==========
 
 # ---------- Global rules (רשימה גלובלית – רק אדמין) ----------
@@ -1476,6 +1685,73 @@ async def delete_my_binding(
         raise HTTPException(status_code=404, detail="שיוך לא נמצא")
     sync_ip_bindings_to_core()
     sync_crm_rules_to_core(current_user["id"])
+
+
+# ---------- Traffic recording (הקלטת תעבורה – התחל/סיום/קבלת לוג) ----------
+
+@app.post("/api/traffic/start", status_code=status.HTTP_201_CREATED)
+async def traffic_start(current_user: dict = Depends(get_current_user)):
+    """Start traffic recording for the current user. Proxy will log requests until stop."""
+    from core.policy_processor.policy_database import start_traffic_session, get_active_traffic_session_id
+    if get_active_traffic_session_id(current_user["id"]) is not None:
+        raise HTTPException(status_code=400, detail="הקלטה כבר פעילה. סיים הקלטה קיימת לפני התחלה חדשה.")
+    session_id = start_traffic_session(current_user["id"])
+    return {"session_id": session_id, "message": "ההקלטה החלה. גלוש דרך המכשירים המשויכים לחשבון."}
+
+
+@app.post("/api/traffic/stop")
+async def traffic_stop(current_user: dict = Depends(get_current_user)):
+    """Stop traffic recording and return session_id and share_token (link for anyone to view)."""
+    from core.policy_processor.policy_database import stop_traffic_session
+    result = stop_traffic_session(current_user["id"])
+    if result is None:
+        raise HTTPException(status_code=400, detail="אין הקלטה פעילה.")
+    session_id, share_token = result
+    return {"session_id": session_id, "share_token": share_token, "message": "ההקלטה הסתיימה."}
+
+
+@app.get("/api/traffic/status")
+async def traffic_status(current_user: dict = Depends(get_current_user)):
+    """Return whether the user is currently recording and active session_id if any."""
+    from core.policy_processor.policy_database import get_active_traffic_session_id
+    session_id = get_active_traffic_session_id(current_user["id"])
+    return {"recording": session_id is not None, "session_id": session_id}
+
+
+@app.get("/api/traffic/sessions")
+async def traffic_sessions(current_user: dict = Depends(get_current_user)):
+    """List traffic recording sessions for the current user."""
+    from core.policy_processor.policy_database import get_traffic_sessions
+    sessions = get_traffic_sessions(current_user["id"])
+    return {"sessions": sessions}
+
+
+@app.get("/api/traffic/log")
+async def traffic_log(
+    session_id: int = Query(..., description="Session id to fetch log for"),
+    current_user: dict = Depends(get_current_user),
+):
+    """Get traffic log entries for a recording session. Session must belong to current user."""
+    from core.policy_processor.policy_database import get_traffic_log
+    entries = get_traffic_log(session_id, current_user["id"])
+    return {"session_id": session_id, "entries": entries}
+
+
+@app.get("/api/traffic/view/{token}")
+async def traffic_view_by_token(token: str):
+    """Public: view a recording by share token. Anyone with the link can see the full log."""
+    from core.policy_processor.policy_database import get_traffic_session_by_token, get_traffic_log_by_session_id
+    session = get_traffic_session_by_token(token)
+    if not session:
+        raise HTTPException(status_code=404, detail="הקלטה לא נמצאה או שהקישור לא תקין.")
+    entries = get_traffic_log_by_session_id(session["id"])
+    return {
+        "session_id": session["id"],
+        "started_at": session["started_at"],
+        "ended_at": session["ended_at"],
+        "share_token": session["share_token"],
+        "entries": entries,
+    }
 
 
 @app.post("/api/internal/touch-ip")
