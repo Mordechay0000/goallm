@@ -263,10 +263,15 @@ const AdminRequestsPage: React.FC = () => {
   };
 
   return (
-    <Container maxWidth="xl" sx={{ mt: 4 }}>
-      <Typography variant="h4" gutterBottom>
-        בקשות משתמשים
-      </Typography>
+    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+      <Box sx={{ mb: 3 }}>
+        <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
+          בקשות משתמשים
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
+          בקשות לפתיחת אתרים ולשינוי כללים – אישור או דחייה (אדמין).
+        </Typography>
+      </Box>
 
       <Paper sx={{ p: 2, mb: 2 }}>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}>
@@ -342,7 +347,10 @@ const AdminRequestsPage: React.FC = () => {
                 <TableRow
                   key={r.id}
                   hover
-                  sx={{ cursor: r.status === 'approved' || r.status === 'pending' || r.status === 'rejected' ? 'pointer' : 'default' }}
+                  sx={{
+                    cursor: r.status === 'approved' || r.status === 'pending' || r.status === 'rejected' ? 'pointer' : 'default',
+                    '&:hover': { bgcolor: 'action.selected' },
+                  }}
                   onClick={() => handleRowClick(r)}
                 >
                   <TableCell>{formatDate(r.created_at)}</TableCell>

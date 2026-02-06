@@ -7,8 +7,9 @@ regardless of CWD (e.g. running uvicorn from crm/ vs mitmdump from project root)
 import sqlite3
 import logging
 import os
+import secrets
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -214,6 +215,45 @@ def init_db_schema():
             user_id INTEGER NOT NULL
         )
     """)
+
+    # Traffic recording: user starts recording in CRM → proxy logs each request until user stops
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS traffic_recording_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            started_at INTEGER NOT NULL,
+            ended_at INTEGER
+        )
+    """)
+    db_connection.execute("""
+        CREATE INDEX IF NOT EXISTS idx_traffic_sessions_user_ended
+        ON traffic_recording_sessions(user_id, ended_at)
+    """)
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS traffic_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            url TEXT NOT NULL,
+            protocol TEXT,
+            status TEXT NOT NULL,
+            time_sec REAL,
+            content_type TEXT,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES traffic_recording_sessions(id)
+        )
+    """)
+    db_connection.execute("""
+        CREATE INDEX IF NOT EXISTS idx_traffic_log_session ON traffic_log(session_id)
+    """)
+
+    # share_token: צפייה בהקלטה לכל מי שיש לו את הקישור
+    cursor = db_connection.execute("PRAGMA table_info(traffic_recording_sessions)")
+    columns = [row[1] for row in cursor.fetchall()]
+    if "share_token" not in columns:
+        db_connection.execute("ALTER TABLE traffic_recording_sessions ADD COLUMN share_token TEXT")
+        db_connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_traffic_sessions_share_token ON traffic_recording_sessions(share_token)")
+        db_connection.commit()
+        logger.info("Added share_token to traffic_recording_sessions")
 
     db_connection.commit()
     logger.info("Policies database schema initialized successfully")
@@ -696,6 +736,146 @@ def row_to_dict(row: tuple) -> Dict:
     else:
         d["user_id"] = None
     return d
+
+
+# --- Traffic recording (start/stop from CRM, proxy appends log entries) ---
+
+
+def start_traffic_session(user_id: int) -> int:
+    """Start a traffic recording session for user. Returns session id."""
+    now = int(datetime.now().timestamp())
+    cursor = db_connection.execute(
+        "INSERT INTO traffic_recording_sessions (user_id, started_at, ended_at) VALUES (?, ?, NULL)",
+        (user_id, now),
+    )
+    db_connection.commit()
+    return cursor.lastrowid
+
+
+def stop_traffic_session(user_id: int) -> Optional[Tuple[int, str]]:
+    """End the active traffic session for user. Returns (session_id, share_token) if one was active."""
+    now = int(datetime.now().timestamp())
+    cursor = db_connection.execute(
+        "SELECT id FROM traffic_recording_sessions WHERE user_id = ? AND ended_at IS NULL LIMIT 1",
+        (user_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return None
+    session_id = row[0]
+    share_token = secrets.token_urlsafe(32)
+    db_connection.execute(
+        "UPDATE traffic_recording_sessions SET ended_at = ?, share_token = ? WHERE id = ?",
+        (now, share_token, session_id),
+    )
+    db_connection.commit()
+    return (session_id, share_token)
+
+
+def get_active_traffic_session_id(user_id: int) -> Optional[int]:
+    """Return active session id for user (for proxy to know if it should log)."""
+    cursor = db_connection.execute(
+        "SELECT id FROM traffic_recording_sessions WHERE user_id = ? AND ended_at IS NULL LIMIT 1",
+        (user_id,),
+    )
+    row = cursor.fetchone()
+    return row[0] if row else None
+
+
+def add_traffic_log_entry(
+    session_id: int,
+    user_id: int,
+    url: str,
+    protocol: str,
+    status: str,
+    time_sec: float,
+    content_type: Optional[str],
+) -> None:
+    """Append one request to traffic log. Proxy calls this; session must belong to user_id."""
+    cursor = db_connection.execute(
+        "SELECT id FROM traffic_recording_sessions WHERE id = ? AND user_id = ?",
+        (session_id, user_id),
+    )
+    if not cursor.fetchone():
+        logger.warning("add_traffic_log_entry: session %s not found for user %s", session_id, user_id)
+        return
+    now = int(datetime.now().timestamp())
+    db_connection.execute(
+        """INSERT INTO traffic_log (session_id, url, protocol, status, time_sec, content_type, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (session_id, url or "", protocol or "", status or "open", time_sec, content_type or "", now),
+    )
+    db_connection.commit()
+
+
+def get_traffic_sessions(user_id: int) -> List[Dict]:
+    """List recording sessions for user (for CRM)."""
+    cursor = db_connection.execute(
+        """SELECT id, user_id, started_at, ended_at FROM traffic_recording_sessions
+           WHERE user_id = ? ORDER BY started_at DESC""",
+        (user_id,),
+    )
+    return [
+        {"id": row[0], "user_id": row[1], "started_at": row[2], "ended_at": row[3]}
+        for row in cursor.fetchall()
+    ]
+
+
+def get_traffic_log(session_id: int, user_id: int) -> List[Dict]:
+    """Get log entries for a session. Session must belong to user_id."""
+    cursor = db_connection.execute(
+        "SELECT id FROM traffic_recording_sessions WHERE id = ? AND user_id = ?",
+        (session_id, user_id),
+    )
+    if not cursor.fetchone():
+        return []
+    return _get_traffic_log_rows(session_id)
+
+
+def get_traffic_session_by_token(token: str) -> Optional[Dict]:
+    """Get session by share_token. For public view (anyone with link)."""
+    if not token or not token.strip():
+        return None
+    cursor = db_connection.execute(
+        "SELECT id, user_id, started_at, ended_at, share_token FROM traffic_recording_sessions WHERE share_token = ?",
+        (token.strip(),),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "user_id": row[1],
+        "started_at": row[2],
+        "ended_at": row[3],
+        "share_token": row[4],
+    }
+
+
+def get_traffic_log_by_session_id(session_id: int) -> List[Dict]:
+    """Get log entries for a session (public – no user check). Use with get_traffic_session_by_token."""
+    return _get_traffic_log_rows(session_id)
+
+
+def _get_traffic_log_rows(session_id: int) -> List[Dict]:
+    cursor = db_connection.execute(
+        """SELECT id, session_id, url, protocol, status, time_sec, content_type, created_at
+           FROM traffic_log WHERE session_id = ? ORDER BY id ASC""",
+        (session_id,),
+    )
+    return [
+        {
+            "id": row[0],
+            "session_id": row[1],
+            "url": row[2],
+            "protocol": row[3],
+            "status": row[4],
+            "time_sec": row[5],
+            "content_type": row[6] or "",
+            "created_at": row[7],
+        }
+        for row in cursor.fetchall()
+    ]
 
 
 # Initialize schema on import

@@ -373,7 +373,7 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
                 const sorted = stableSort(filtered, cmp);
                 const paginated = sorted.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
                 return paginated.map((rule) => (
-                <TableRow key={rule.id}>
+                <TableRow key={rule.id} hover sx={{ '&:hover': { bgcolor: 'action.selected' } }}>
                   <TableCell>
                     <code>{formatRuleDisplay(rule)}</code>
                   </TableCell>

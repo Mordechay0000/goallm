@@ -466,6 +466,56 @@ def init_db_schema():
         db_connection.execute("ALTER TABLE ip_bindings ADD COLUMN last_used_at INTEGER")
         logger.info("Added last_used_at to ip_bindings")
 
+    # support_tickets: user support requests (subject + content, markdown)
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS support_tickets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            subject TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+    db_connection.execute("CREATE INDEX IF NOT EXISTS idx_support_tickets_user ON support_tickets(user_id)")
+    db_connection.execute("CREATE INDEX IF NOT EXISTS idx_support_tickets_created ON support_tickets(created_at)")
+
+    # support_replies: admin/user replies to tickets (author_id = user who wrote the reply)
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS support_replies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticket_id INTEGER NOT NULL,
+            author_id INTEGER NOT NULL,
+            content TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY (ticket_id) REFERENCES support_tickets(id) ON DELETE CASCADE,
+            FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+    db_connection.execute("CREATE INDEX IF NOT EXISTS idx_support_replies_ticket ON support_replies(ticket_id)")
+
+    # attachments on tickets and replies (JSON array of {name, url})
+    for table in ("support_tickets", "support_replies"):
+        cursor = db_connection.execute(f"PRAGMA table_info({table})")
+        cols = [row[1] for row in cursor.fetchall()]
+        if "attachments" not in cols:
+            db_connection.execute(f"ALTER TABLE {table} ADD COLUMN attachments TEXT")
+            logger.info("Added attachments column to %s", table)
+
+    # support_ticket_views: when user last viewed ticket (for unread replies)
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS support_ticket_views (
+            ticket_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            last_read_at INTEGER NOT NULL,
+            PRIMARY KEY (ticket_id, user_id),
+            FOREIGN KEY (ticket_id) REFERENCES support_tickets(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+    db_connection.execute("CREATE INDEX IF NOT EXISTS idx_support_ticket_views_user ON support_ticket_views(user_id)")
+
     db_connection.commit()
     logger.info("CRM database schema initialized successfully")
 

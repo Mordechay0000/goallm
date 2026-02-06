@@ -74,11 +74,11 @@ def _send_email_mock(email: str, code: str) -> None:
     logger.info("Email (mock) to %s: code=%s", email, code)
 
 
-def request_phone_code(phone: str) -> dict:
+def request_phone_code(phone_raw: str) -> dict:
     """Request OTP for phone. Returns { sent: True } or raises ValueError."""
-    phone = _normalize_phone(phone)
-    if len(phone) < 9:
-        raise ValueError("מספר טלפון לא תקין.")
+    from .services import _validate_phone_format
+    _validate_phone_format(phone_raw)
+    phone = _normalize_phone(phone_raw)
     user = get_user_by_phone(phone)
     if not user:
         raise ValueError("לא נמצא משתמש עם מספר טלפון זה.")

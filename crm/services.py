@@ -27,9 +27,8 @@ def create_user(email: str, password: str, first_name: str, last_name: str,
     if not email or '@' not in email:
         raise ValueError("כתובת אימייל לא תקינה")
     
+    _validate_phone_format(phone)
     normalized = _normalize_phone(phone)
-    if len(normalized) < 9:
-        raise ValueError("מספר טלפון לא תקין")
     existing_phone = get_user_by_phone(phone)
     if existing_phone:
         raise ValueError("מספר טלפון זה כבר רשום במערכת")
@@ -99,6 +98,21 @@ def _normalize_phone(phone: str) -> str:
     return "".join(c for c in (phone or "") if c.isdigit()).strip()
 
 
+def _validate_phone_format(phone: str) -> None:
+    """Validate phone: min 10 digits, must start with 05 (Israeli) or + (international)."""
+    raw = (phone or "").strip()
+    digits = _normalize_phone(raw)
+    if len(digits) < 10:
+        raise ValueError("מספר טלפון חייב להכיל לפחות 10 ספרות")
+    # Israeli: 05 + 8 digits = 10 total
+    if digits.startswith("05") and len(digits) == 10:
+        return
+    # International: must start with +
+    if raw.startswith("+") and len(digits) >= 10:
+        return
+    raise ValueError("מספר טלפון חייב להתחיל ב־05 (ישראל) או ב־+ (קידומת בינלאומית)")
+
+
 def get_user_by_phone(phone: str) -> Optional[Dict]:
     """Get user by phone (normalized digits)."""
     normalized = _normalize_phone(phone)
@@ -149,9 +163,7 @@ def update_user(user_id: int, email: Optional[str] = None, first_name: Optional[
     
     # Check if phone already exists (if changing phone)
     if phone and phone != user["phone"]:
-        normalized = _normalize_phone(phone)
-        if len(normalized) < 9:
-            raise ValueError("מספר טלפון לא תקין")
+        _validate_phone_format(phone)
         existing = get_user_by_phone(phone)
         if existing and existing["id"] != user_id:
             raise ValueError("מספר טלפון זה כבר רשום במערכת")
@@ -1227,7 +1239,12 @@ def delete_user(user_id: int) -> None:
     user = get_user_by_id(user_id)
     if not user:
         raise ValueError("משתמש לא נמצא")
-    # Delete in order: rule_requests, user_locked_settings, then profiles (rules/schedules are per profile)
+    # Delete in order: support_replies (via tickets), support_tickets, rule_requests, user_locked_settings, then profiles
+    cursor = db_connection.execute("SELECT id FROM support_tickets WHERE user_id = ?", (user_id,))
+    ticket_ids = [row[0] for row in cursor.fetchall()]
+    for tid in ticket_ids:
+        db_connection.execute("DELETE FROM support_replies WHERE ticket_id = ?", (tid,))
+    db_connection.execute("DELETE FROM support_tickets WHERE user_id = ?", (user_id,))
     db_connection.execute("DELETE FROM rule_requests WHERE user_id = ?", (user_id,))
     db_connection.execute("DELETE FROM user_locked_settings WHERE user_id = ?", (user_id,))
     cursor = db_connection.execute("SELECT id FROM profiles WHERE user_id = ?", (user_id,))
@@ -1501,5 +1518,351 @@ def delete_rule_request(request_id: int) -> bool:
     if not req:
         return False
     db_connection.execute("DELETE FROM rule_requests WHERE id = ?", (request_id,))
+    db_connection.commit()
+    return True
+
+
+# ---------- Support tickets (פניות משתמשים) ----------
+
+def _support_attachments_json(attachments: Optional[List[Dict]] = None) -> Optional[str]:
+    if not attachments:
+        return None
+    import json
+    return json.dumps([{"name": str(a.get("name", "")), "url": str(a.get("url", ""))} for a in attachments], ensure_ascii=False)
+
+
+def _support_attachments_parse(raw: Optional[str] = None) -> List[Dict]:
+    if not raw or not str(raw).strip():
+        return []
+    import json
+    try:
+        out = json.loads(raw)
+        if not isinstance(out, list):
+            return []
+        return [{"name": str(x.get("name", "")), "url": str(x.get("url", ""))} for x in out if isinstance(x, dict)]
+    except Exception:
+        return []
+
+
+def _content_preview(content: str, max_len: int = 200) -> str:
+    if not content:
+        return ""
+    text = (content or "").strip().replace("\n", " ")
+    if len(text) <= max_len:
+        return text
+    return text[:max_len].rstrip() + "…"
+
+
+def create_support_ticket(
+    user_id: int,
+    subject: str,
+    content: str,
+    attachments: Optional[List[Dict]] = None,
+) -> Dict:
+    """Create a new support ticket. attachments = list of {name, url}."""
+    subject = (subject or "").strip()
+    content = (content or "").strip()
+    if not subject:
+        raise ValueError("נא להזין נושא")
+    if not content:
+        raise ValueError("נא להזין תוכן")
+    now = int(datetime.now().timestamp())
+    att_json = _support_attachments_json(attachments)
+    cursor = db_connection.execute(
+        "INSERT INTO support_tickets (user_id, subject, content, created_at, updated_at, attachments) VALUES (?, ?, ?, ?, ?, ?)",
+        (user_id, subject, content, now, now, att_json),
+    )
+    tid = cursor.lastrowid
+    db_connection.commit()
+    return get_support_ticket(tid)
+
+
+def get_support_ticket(ticket_id: int) -> Optional[Dict]:
+    """Get a single support ticket."""
+    cursor = db_connection.execute(
+        "SELECT id, user_id, subject, content, created_at, updated_at, attachments FROM support_tickets WHERE id = ?",
+        (ticket_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["attachments"] = _support_attachments_parse(d.get("attachments"))
+    return d
+
+
+def _get_ticket_last_read_at(ticket_id: int, user_id: int) -> int:
+    """Return last_read_at for user on this ticket, or 0 if never read."""
+    cursor = db_connection.execute(
+        "SELECT last_read_at FROM support_ticket_views WHERE ticket_id = ? AND user_id = ?",
+        (ticket_id, user_id),
+    )
+    row = cursor.fetchone()
+    return row[0] if row else 0
+
+
+def mark_support_ticket_read(ticket_id: int, user_id: int) -> None:
+    """Mark ticket as read by user (updates last_read_at so replies become read)."""
+    ticket = get_support_ticket(ticket_id)
+    if not ticket:
+        return
+    now = int(datetime.now().timestamp())
+    cursor = db_connection.execute(
+        "SELECT 1 FROM support_ticket_views WHERE ticket_id = ? AND user_id = ?",
+        (ticket_id, user_id),
+    )
+    if cursor.fetchone():
+        db_connection.execute(
+            "UPDATE support_ticket_views SET last_read_at = ? WHERE ticket_id = ? AND user_id = ?",
+            (now, ticket_id, user_id),
+        )
+    else:
+        db_connection.execute(
+            "INSERT INTO support_ticket_views (ticket_id, user_id, last_read_at) VALUES (?, ?, ?)",
+            (ticket_id, user_id, now),
+        )
+    db_connection.commit()
+
+
+def list_my_support_tickets(
+    user_id: int,
+    page: int = 1,
+    page_size: int = 25,
+    sort_order: str = "desc",
+) -> tuple[List[Dict], int]:
+    """List support tickets for a user (own only). Includes replies_count and unread_replies_count."""
+    page = max(1, page)
+    page_size = max(1, min(100, page_size))
+    offset = (page - 1) * page_size
+    direction = "DESC" if sort_order == "desc" else "ASC"
+    cursor = db_connection.execute(
+        "SELECT COUNT(*) FROM support_tickets WHERE user_id = ?", (user_id,)
+    )
+    total = cursor.fetchone()[0]
+    cursor = db_connection.execute(
+        f"""
+        SELECT t.id, t.user_id, t.subject, t.content, t.created_at, t.updated_at,
+               (SELECT COUNT(*) FROM support_replies r WHERE r.ticket_id = t.id) AS replies_count
+        FROM support_tickets t
+        WHERE t.user_id = ?
+        ORDER BY t.updated_at {direction}
+        LIMIT ? OFFSET ?
+        """,
+        (user_id, page_size, offset),
+    )
+    rows = [dict(row) for row in cursor.fetchall()]
+    for r in rows:
+        r["content_preview"] = _content_preview(r.get("content") or "")
+        r["replies_count"] = r.get("replies_count") or 0
+        last_read = _get_ticket_last_read_at(r["id"], user_id)
+        cursor2 = db_connection.execute(
+            "SELECT COUNT(*) FROM support_replies WHERE ticket_id = ? AND author_id != ? AND created_at > ?",
+            (r["id"], user_id, last_read),
+        )
+        r["unread_replies_count"] = cursor2.fetchone()[0] or 0
+    return rows, total
+
+
+def list_all_support_tickets(
+    page: int = 1,
+    page_size: int = 25,
+    sort_order: str = "desc",
+    search: Optional[str] = None,
+) -> tuple[List[Dict], int]:
+    """List all support tickets (admin). Returns (list, total). Includes replies_count. Optional search by subject/content/user."""
+    page = max(1, page)
+    page_size = max(1, min(100, page_size))
+    offset = (page - 1) * page_size
+    direction = "DESC" if sort_order == "desc" else "ASC"
+    where = ""
+    params: list = []
+    if search and (q := search.strip()):
+        q_like = f"%{q}%"
+        where = """
+        WHERE (
+            t.subject LIKE ? OR t.content LIKE ?
+            OR u.first_name LIKE ? OR u.last_name LIKE ? OR u.phone LIKE ?
+        )
+        """
+        params = [q_like, q_like, q_like, q_like, q_like]
+    cursor = db_connection.execute(
+        f"SELECT COUNT(*) FROM support_tickets t LEFT JOIN users u ON u.id = t.user_id {where}",
+        params,
+    )
+    total = cursor.fetchone()[0]
+    cursor = db_connection.execute(
+        f"""
+        SELECT t.id, t.user_id, t.subject, t.content, t.created_at, t.updated_at,
+               (SELECT COUNT(*) FROM support_replies r WHERE r.ticket_id = t.id) AS replies_count
+        FROM support_tickets t
+        LEFT JOIN users u ON u.id = t.user_id
+        {where}
+        ORDER BY t.updated_at {direction}
+        LIMIT ? OFFSET ?
+        """,
+        params + [page_size, offset],
+    )
+    rows = [dict(row) for row in cursor.fetchall()]
+    for r in rows:
+        r["content_preview"] = _content_preview(r.get("content") or "")
+        r["replies_count"] = r.get("replies_count") or 0
+        # unread_replies_count = replies from others not yet read by ticket owner
+        owner_id = r["user_id"]
+        last_read = _get_ticket_last_read_at(r["id"], owner_id)
+        cursor2 = db_connection.execute(
+            "SELECT COUNT(*) FROM support_replies WHERE ticket_id = ? AND author_id != ? AND created_at > ?",
+            (r["id"], owner_id, last_read),
+        )
+        r["unread_replies_count"] = cursor2.fetchone()[0] or 0
+        user = get_user_by_id(r["user_id"])
+        r["user_first_name"] = (user or {}).get("first_name")
+        r["user_phone"] = (user or {}).get("phone")
+    return rows, total
+
+
+def count_my_tickets_with_replies(user_id: int) -> int:
+    """Count tickets belonging to user that have at least one reply."""
+    cursor = db_connection.execute(
+        """
+        SELECT COUNT(*) FROM support_tickets t
+        WHERE t.user_id = ? AND EXISTS (SELECT 1 FROM support_replies r WHERE r.ticket_id = t.id)
+        """,
+        (user_id,),
+    )
+    return cursor.fetchone()[0] or 0
+
+
+def count_my_tickets_with_unread_replies(user_id: int) -> int:
+    """Count tickets where the owner has at least one unread reply (from someone else)."""
+    cursor = db_connection.execute(
+        """
+        SELECT COUNT(DISTINCT t.id) FROM support_tickets t
+        JOIN support_replies r ON r.ticket_id = t.id AND r.author_id != t.user_id
+        LEFT JOIN support_ticket_views v ON v.ticket_id = t.id AND v.user_id = t.user_id
+        WHERE t.user_id = ?
+          AND r.created_at > COALESCE(v.last_read_at, 0)
+        """,
+        (user_id,),
+    )
+    return cursor.fetchone()[0] or 0
+
+
+def count_all_tickets_with_replies() -> int:
+    """Count all tickets that have at least one reply (admin)."""
+    cursor = db_connection.execute(
+        """
+        SELECT COUNT(*) FROM support_tickets t
+        WHERE EXISTS (SELECT 1 FROM support_replies r WHERE r.ticket_id = t.id)
+        """
+    )
+    return cursor.fetchone()[0] or 0
+
+
+def count_all_tickets_with_unread_replies() -> int:
+    """Count tickets where the owner has at least one unread reply (admin badge)."""
+    cursor = db_connection.execute(
+        """
+        SELECT COUNT(DISTINCT t.id) FROM support_tickets t
+        JOIN support_replies r ON r.ticket_id = t.id AND r.author_id != t.user_id
+        LEFT JOIN support_ticket_views v ON v.ticket_id = t.id AND v.user_id = t.user_id
+        WHERE r.created_at > COALESCE(v.last_read_at, 0)
+        """
+    )
+    return cursor.fetchone()[0] or 0
+
+
+def add_support_reply(
+    ticket_id: int,
+    author_id: int,
+    content: str,
+    attachments: Optional[List[Dict]] = None,
+) -> Dict:
+    """Add a reply to a ticket (admin or ticket owner). attachments = list of {name, url}."""
+    ticket = get_support_ticket(ticket_id)
+    if not ticket:
+        raise ValueError("פנייה לא נמצאה")
+    content = (content or "").strip()
+    if not content and not attachments:
+        raise ValueError("נא להזין תוכן תגובה או לצרף קובץ")
+    now = int(datetime.now().timestamp())
+    att_json = _support_attachments_json(attachments)
+    cursor = db_connection.execute(
+        "INSERT INTO support_replies (ticket_id, author_id, content, created_at, attachments) VALUES (?, ?, ?, ?, ?)",
+        (ticket_id, author_id, content or "", now, att_json),
+    )
+    rid = cursor.lastrowid
+    db_connection.execute(
+        "UPDATE support_tickets SET updated_at = ? WHERE id = ?", (now, ticket_id)
+    )
+    db_connection.commit()
+    return get_support_reply(rid)
+
+
+def get_support_reply(reply_id: int) -> Optional[Dict]:
+    """Get a single support reply with author profile (first_name, last_name, avatar_url) and attachments."""
+    cursor = db_connection.execute(
+        "SELECT id, ticket_id, author_id, content, created_at, attachments FROM support_replies WHERE id = ?",
+        (reply_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["attachments"] = _support_attachments_parse(d.get("attachments"))
+    author = get_user_by_id(d["author_id"])
+    if author:
+        d["author_first_name"] = author.get("first_name") or "—"
+        d["author_last_name"] = author.get("last_name") or ""
+        d["author_avatar_url"] = author.get("avatar_url")
+    else:
+        d["author_first_name"] = "—"
+        d["author_last_name"] = ""
+        d["author_avatar_url"] = None
+    return d
+
+
+def list_support_replies(ticket_id: int, viewer_id: Optional[int] = None) -> List[Dict]:
+    """List all replies for a ticket, with author profile. If viewer_id is the ticket owner, set is_unread for replies from others not yet read."""
+    ticket = get_support_ticket(ticket_id)
+    if not ticket:
+        return []
+    last_read = _get_ticket_last_read_at(ticket_id, viewer_id) if viewer_id else 0
+    ticket_owner_id = ticket["user_id"]
+    cursor = db_connection.execute(
+        """
+        SELECT id, ticket_id, author_id, content, created_at, attachments
+        FROM support_replies WHERE ticket_id = ?
+        ORDER BY created_at ASC
+        """,
+        (ticket_id,),
+    )
+    rows = [dict(row) for row in cursor.fetchall()]
+    for r in rows:
+        r["attachments"] = _support_attachments_parse(r.get("attachments"))
+        author = get_user_by_id(r["author_id"])
+        if author:
+            r["author_first_name"] = author.get("first_name") or "—"
+            r["author_last_name"] = author.get("last_name") or ""
+            r["author_avatar_url"] = author.get("avatar_url")
+        else:
+            r["author_first_name"] = "—"
+            r["author_last_name"] = ""
+            r["author_avatar_url"] = None
+        # Unread only for ticket owner: reply from someone else, after their last read
+        if viewer_id == ticket_owner_id and r["author_id"] != ticket_owner_id:
+            r["is_unread"] = r["created_at"] > last_read
+        else:
+            r["is_unread"] = False
+    return rows
+
+
+def delete_support_ticket(ticket_id: int) -> bool:
+    """Delete a support ticket and all its replies. Returns True if deleted."""
+    ticket = get_support_ticket(ticket_id)
+    if not ticket:
+        return False
+    db_connection.execute("DELETE FROM support_replies WHERE ticket_id = ?", (ticket_id,))
+    db_connection.execute("DELETE FROM support_ticket_views WHERE ticket_id = ?", (ticket_id,))
+    db_connection.execute("DELETE FROM support_tickets WHERE id = ?", (ticket_id,))
     db_connection.commit()
     return True

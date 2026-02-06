@@ -1,26 +1,33 @@
 /**
- * MUI Theme configuration - Minimal Admin Design
- * Functional, clean, no marketing elements
+ * MUI Theme - עיצוב כללי: צבע ראשי Blue–Violet (סגנון AI), צבע משני תואם
  */
 import { createTheme } from '@mui/material/styles';
+
+/** גרדיאנט ראשי: מעבר חלק #0FF0FC → #A64EFF → #FF4D8D */
+export const primaryGradient =
+  'linear-gradient(to right, #0FF0FC 0%, #A64EFF 50%, #FF4D8D 100%)';
+export const primaryGradientHover =
+  'linear-gradient(to right, #07c4cf 0%, #8b3fe0 50%, #e43b78 100%)';
 
 export const theme = createTheme({
   direction: 'rtl',
   palette: {
     mode: 'light',
     primary: {
-      main: '#1976d2',
-      light: '#42a5f5',
-      dark: '#1565c0',
+      // צבע מרכזי מותאם לגרדיאנט החדש
+      main: '#A64EFF',
+      light: '#0FF0FC',
+      dark: '#FF4D8D',
       contrastText: '#fff',
     },
     secondary: {
-      main: '#424242',
-      light: '#6d6d6d',
-      dark: '#1d1d1d',
+      main: '#0d9488',
+      light: '#2dd4bf',
+      dark: '#0f766e',
+      contrastText: '#fff',
     },
     background: {
-      default: '#fafafa',
+      default: '#f8fafc',
       paper: '#ffffff',
     },
     text: {
@@ -31,7 +38,7 @@ export const theme = createTheme({
     action: {
       active: 'rgba(0, 0, 0, 0.54)',
       hover: 'rgba(0, 0, 0, 0.04)',
-      selected: 'rgba(25, 118, 210, 0.08)',
+      selected: 'rgba(99, 102, 241, 0.12)',
       disabled: 'rgba(0, 0, 0, 0.26)',
     },
   },
@@ -89,6 +96,7 @@ export const theme = createTheme({
       fontSize: '0.9375rem',
     },
   },
+  /* 4 = כרטיסים/שדות, 8 = כפתורים/פריטי ניווט */
   shape: {
     borderRadius: 4,
   },
@@ -112,7 +120,7 @@ export const theme = createTheme({
     '0px 16px 32px rgba(0,0,0,0.12), 0px 8px 16px rgba(0,0,0,0.24)',
     '0px 17px 34px rgba(0,0,0,0.12), 0px 9px 18px rgba(0,0,0,0.24)',
     '0px 18px 36px rgba(0,0,0,0.12), 0px 9px 18px rgba(0,0,0,0.24)',
-    '0px 19px 38px rgba(0,0,0,0.12), 0px 10px 20px rgba(0,0,0,00.24)',
+    '0px 19px 38px rgba(0,0,0,0.12), 0px 10px 20px rgba(0,0,0,0.24)',
     '0px 20px 40px rgba(0,0,0,0.12), 0px 10px 20px rgba(0,0,0,0.24)',
     '0px 21px 42px rgba(0,0,0,0.12), 0px 11px 22px rgba(0,0,0,0.24)',
     '0px 22px 44px rgba(0,0,0,0.12), 0px 11px 22px rgba(0,0,0,0.24)',
@@ -143,13 +151,17 @@ export const theme = createTheme({
         root: {
           textTransform: 'none',
           fontWeight: 500,
-          borderRadius: 4,
+          borderRadius: 8,
           padding: '8px 16px',
         },
+        // כל הכפתורים מסוג contained (בכל צבע) יקבלו את הגרדיאנט המרכזי
         contained: {
-          boxShadow: '0px 1px 3px rgba(0,0,0,0.12), 0px 1px 2px rgba(0,0,0,0.24)',
+          background: primaryGradient,
+          color: '#020617',
+          boxShadow: '0 1px 4px rgba(166, 78, 255, 0.35)',
           '&:hover': {
-            boxShadow: '0px 2px 4px rgba(0,0,0,0.12), 0px 1px 2px rgba(0,0,0,0.24)',
+            background: primaryGradientHover,
+            boxShadow: '0 4px 12px rgba(166, 78, 255, 0.45)',
           },
         },
       },
@@ -166,8 +178,59 @@ export const theme = createTheme({
     MuiAppBar: {
       styleOverrides: {
         root: {
-          boxShadow: '0px 1px 3px rgba(0,0,0,0.12), 0px 1px 2px rgba(0,0,0,0.24)',
+          background: primaryGradient,
+          boxShadow: '0 1px 3px rgba(99, 102, 241, 0.25)',
         },
+      },
+    },
+    MuiIconButton: {
+      styleOverrides: {
+        root: {
+          borderRadius: 8,
+        },
+      },
+    },
+    MuiListItemButton: {
+      styleOverrides: {
+        root: ({ theme }) => ({
+          borderRadius: 8,
+          '&:hover': {
+            backgroundColor: theme.palette.action.hover,
+          },
+        }),
+      },
+    },
+    MuiTableRow: {
+      styleOverrides: {
+        root: ({ theme }) => ({
+          '&:hover': {
+            backgroundColor: theme.palette.action.selected,
+          },
+          // No hover effect on header rows
+          'thead &': {
+            '&:hover': {
+              backgroundColor: 'transparent',
+            },
+          },
+        }),
+      },
+    },
+    MuiMenuItem: {
+      styleOverrides: {
+        root: ({ theme }) => ({
+          '&:hover': {
+            backgroundColor: theme.palette.action.selected,
+          },
+        }),
+      },
+    },
+    MuiCardActionArea: {
+      styleOverrides: {
+        root: ({ theme }) => ({
+          '&:hover': {
+            backgroundColor: theme.palette.action.selected,
+          },
+        }),
       },
     },
   },

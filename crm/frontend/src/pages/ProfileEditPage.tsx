@@ -21,6 +21,7 @@ import { authApi, getAvatarUrl } from '../api/auth';
 import type { UserUpdate, PasswordChange } from '../api/auth';
 import { PasswordField } from '../components/PasswordField';
 import { FormErrors } from '../components/FormErrors';
+import { validatePhone } from '../utils/validation';
 
 const ALLOWED = 'image/jpeg,image/png,image/gif,image/webp';
 const MAX_MB = 5;
@@ -70,8 +71,9 @@ const ProfileEditPage: React.FC = () => {
   }, []);
 
   const validatePhoneLive = useCallback((value: string): string | undefined => {
-    if (value && !/^[0-9+\s()-]+$/.test(value)) return 'מספר טלפון לא תקין';
-    return undefined;
+    if (!value || !value.trim()) return undefined;
+    const err = validatePhone(value);
+    return err || undefined;
   }, []);
 
   // Live validation functions for password
@@ -154,8 +156,9 @@ const ProfileEditPage: React.FC = () => {
       newErrors.last_name = 'שם משפחה לא יכול להכיל יותר מ-100 תווים';
     }
 
-    if (formData.phone && !/^[0-9+\s()-]+$/.test(formData.phone)) {
-      newErrors.phone = 'מספר טלפון לא תקין';
+    if (formData.phone && formData.phone.trim()) {
+      const phoneErr = validatePhone(formData.phone);
+      if (phoneErr) newErrors.phone = phoneErr;
     }
 
     setErrors(newErrors);
@@ -255,12 +258,15 @@ const ProfileEditPage: React.FC = () => {
 
   return (
     <Container maxWidth="md" sx={{ mt: 4, mb: 4 }}>
-      <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 2 }}>
-        <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/')}>
+      <Box sx={{ mb: 3 }}>
+        <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/')} sx={{ mb: 1 }}>
           חזרה
         </Button>
-        <Typography variant="h4" component="h1" fontWeight="bold">
+        <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
           עריכת פרופיל
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
+          עדכון פרטים אישיים, תמונת פרופיל וסיסמה
         </Typography>
       </Box>
 

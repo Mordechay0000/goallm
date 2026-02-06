@@ -5,6 +5,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
+  Box,
   Container,
   Paper,
   Typography,
@@ -24,7 +25,6 @@ import {
   DialogActions,
   TableSortLabel,
   TablePagination,
-  Box,
   TextField,
   InputAdornment,
 } from '@mui/material';
@@ -121,17 +121,19 @@ const AdminUsersPage: React.FC = () => {
   const isCurrentUser = (u: AdminUser) => user?.id === u.id;
 
   if (loading && users.length === 0) {
-    return <Container sx={{ mt: 4 }}>טוען...</Container>;
+    return <Container sx={{ mt: 4, mb: 4 }}>טוען...</Container>;
   }
 
   return (
-    <Container maxWidth="lg" sx={{ mt: 4 }}>
-      <Typography variant="h4" gutterBottom>
-        ניהול משתמשים
-      </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        בחר משתמש ולחץ &quot;נהל&quot; כדי לנהל את הפרופילים והכללים שלו. לא ניתן לנהל את עצמך.
-      </Typography>
+    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+      <Box sx={{ mb: 3 }}>
+        <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
+          ניהול משתמשים
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
+          בחר משתמש ולחץ &quot;נהל&quot; כדי לנהל את הפרופילים והכללים שלו. לא ניתן לנהל את עצמך.
+        </Typography>
+      </Box>
       <Paper>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 2, px: 2, pt: 2, pb: 1 }}>
           <TextField

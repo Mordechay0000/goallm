@@ -6,6 +6,7 @@ import React, { useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import {
   Box,
+  Container,
   Paper,
   Typography,
   Button,
@@ -198,18 +199,16 @@ const SchedulesPage: React.FC = () => {
   }
 
   return (
-    <Box>
-      {/* Page Header */}
-      <Box sx={{ mb: 4 }}>
+    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+      <Box sx={{ mb: 3 }}>
         <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
           תזמונים
         </Typography>
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 0 }}>
           ניהול תזמונים לכל הפרופילים
         </Typography>
       </Box>
 
-      {/* Add Schedule Button */}
       <Box sx={{ mb: 3 }}>
         <Button
           variant="contained"
@@ -306,7 +305,7 @@ const SchedulesPage: React.FC = () => {
                 return paginated.map((schedule) => {
                     const days = getDaysList(schedule.days_bitmask);
                     return (
-                      <TableRow key={schedule.id} hover>
+                      <TableRow key={schedule.id} hover sx={{ '&:hover': { bgcolor: 'action.selected' } }}>
                         <TableCell>
                           <Typography variant="body2" sx={{ fontWeight: 500 }}>
                             {schedule.profile_name || `פרופיל ${schedule.profile_id}`}
@@ -446,7 +445,7 @@ const SchedulesPage: React.FC = () => {
           </Button>
         </DialogActions>
       </Dialog>
-    </Box>
+    </Container>
   );
 };
 

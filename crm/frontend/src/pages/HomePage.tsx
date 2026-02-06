@@ -6,6 +6,7 @@ import React, { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box,
+  Container,
   Typography,
   Paper,
   Table,
@@ -84,9 +85,10 @@ const HomePage: React.FC = () => {
   }, [profiles, loadStats]);
 
   return (
-    <Box>
+    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+      <Box>
       {/* Page Header */}
-      <Box sx={{ mb: 4 }}>
+      <Box sx={{ mb: 3 }}>
         <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
           ברוך הבא
         </Typography>
@@ -260,7 +262,7 @@ const HomePage: React.FC = () => {
                     });
                     const paginated = sorted.slice(profilePage * profileRowsPerPage, profilePage * profileRowsPerPage + profileRowsPerPage);
                     return paginated.map((profile) => (
-                      <TableRow key={profile.id} hover>
+                      <TableRow key={profile.id} hover sx={{ '&:hover': { bgcolor: 'action.selected' } }}>
                         <TableCell>{profile.name}</TableCell>
                         <TableCell>
                           <Chip
@@ -319,7 +321,8 @@ const HomePage: React.FC = () => {
           </Box>
         </Paper>
       )}
-    </Box>
+      </Box>
+    </Container>
   );
 };
 

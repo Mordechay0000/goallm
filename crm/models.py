@@ -12,7 +12,7 @@ class UserCreate(BaseModel):
     password: str = Field(..., min_length=8, max_length=128, description="סיסמה חייבת להכיל לפחות 8 תווים, ספרה ואות")
     first_name: str = Field(..., min_length=1, max_length=100)
     last_name: str = Field(..., min_length=1, max_length=100)
-    phone: str = Field(..., min_length=8, max_length=20, pattern="^[0-9\\-\\+\\s\\(\\)]+$")
+    phone: str = Field(..., min_length=10, max_length=20, pattern="^[0-9\\-\\+\\s\\(\\)]+$")
     avatar_url: Optional[str] = Field(None, max_length=500)
 
 
@@ -45,11 +45,11 @@ class UserResponse(BaseModel):
 
 
 class RequestPhoneCode(BaseModel):
-    phone: str = Field(..., min_length=8, max_length=20)
+    phone: str = Field(..., min_length=10, max_length=20)
 
 
 class VerifyPhoneCode(BaseModel):
-    phone: str = Field(..., min_length=8, max_length=20)
+    phone: str = Field(..., min_length=10, max_length=20)
     code: str = Field(..., min_length=6, max_length=6, pattern="^[0-9]+$")
 
 
@@ -288,7 +288,7 @@ class ScheduleResponse(BaseModel):
 
 # Login model (always phone + password)
 class LoginRequest(BaseModel):
-    phone: str = Field(..., min_length=8, max_length=20)
+    phone: str = Field(..., min_length=10, max_length=20)
     password: str
 
 
@@ -342,3 +342,56 @@ class ResolverTestUrlBody(BaseModel):
     """Request body for POST /api/resolver/test-url."""
     url: str = Field(..., min_length=1)
     type: str = Field(default="html", pattern="^(html|image)$")
+
+
+# Support tickets (פניות משתמשים)
+class SupportAttachmentItem(BaseModel):
+    name: str
+    url: str
+
+
+class SupportTicketCreate(BaseModel):
+    subject: str = Field(..., min_length=1, max_length=500)
+    content: str = Field(..., min_length=1)
+    attachments: Optional[List[SupportAttachmentItem]] = None
+
+
+class SupportTicketResponse(BaseModel):
+    id: int
+    user_id: int
+    subject: str
+    content: str
+    created_at: int
+    updated_at: int
+    content_preview: Optional[str] = None  # first ~200 chars for list views
+    user_first_name: Optional[str] = None
+    user_last_name: Optional[str] = None
+    user_phone: Optional[str] = None
+    user_avatar_url: Optional[str] = None
+    replies_count: Optional[int] = None
+    unread_replies_count: Optional[int] = None  # for ticket owner: replies not yet read
+    attachments: Optional[List[SupportAttachmentItem]] = None
+
+    class Config:
+        from_attributes = True
+
+
+class SupportReplyCreate(BaseModel):
+    content: str = Field(default="")
+    attachments: Optional[List[SupportAttachmentItem]] = None
+
+
+class SupportReplyResponse(BaseModel):
+    id: int
+    ticket_id: int
+    author_id: int
+    content: str
+    created_at: int
+    author_first_name: Optional[str] = None
+    author_last_name: Optional[str] = None
+    author_avatar_url: Optional[str] = None
+    is_unread: Optional[bool] = None  # True if ticket owner has not read this reply
+    attachments: Optional[List[SupportAttachmentItem]] = None
+
+    class Config:
+        from_attributes = True

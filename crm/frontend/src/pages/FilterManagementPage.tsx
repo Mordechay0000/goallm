@@ -139,16 +139,14 @@ const FilterManagementPage: React.FC = () => {
   return (
     <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
       {/* Header */}
-      <Box sx={{ mb: 4 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-          <IconButton onClick={() => navigate('/')} color="primary">
-            <ArrowBackIcon />
-          </IconButton>
-          <Typography variant="h4" component="h1" fontWeight="bold">
-            ניהול פילטרים
-          </Typography>
-        </Box>
-        <Typography variant="body1" color="text.secondary">
+      <Box sx={{ mb: 3 }}>
+        <IconButton onClick={() => navigate('/')} color="primary" sx={{ mb: 1, mr: 1 }}>
+          <ArrowBackIcon />
+        </IconButton>
+        <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
+          ניהול פילטרים
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
           הוסף, ערוך ומחק אתרים (חסום/פתוח) לכל פרופיל
         </Typography>
       </Box>
@@ -301,7 +299,7 @@ const FilterManagementPage: React.FC = () => {
                 });
                 const paginated = sorted.slice(tagPage * tagRowsPerPage, tagPage * tagRowsPerPage + tagRowsPerPage);
                 return paginated.map((tr) => (
-                    <TableRow key={tr.id}>
+                    <TableRow key={tr.id} hover sx={{ '&:hover': { bgcolor: 'action.selected' } }}>
                       <TableCell>{tr.tag}</TableCell>
                       <TableCell>
                         <Chip

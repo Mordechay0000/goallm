@@ -26,6 +26,13 @@ import AdminRequestsPage from './pages/AdminRequestsPage';
 import AdminGlobalRulesPage from './pages/AdminGlobalRulesPage';
 import AdminFilterSwitchesPage from './pages/AdminFilterSwitchesPage';
 import MyRequestsPage from './pages/MyRequestsPage';
+import MySupportPage from './pages/MySupportPage';
+import AdminSupportPage from './pages/AdminSupportPage';
+import SupportConversationPage from './pages/SupportConversationPage';
+import SupportNewTicketPage from './pages/SupportNewTicketPage';
+import ToolsPage from './pages/ToolsPage';
+import TrafficRecordingPage from './pages/TrafficRecordingPage';
+import TrafficViewPage from './pages/TrafficViewPage';
 import AdminLayout from './components/AdminLayout';
 
 // Create RTL cache
@@ -88,7 +95,7 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
 };
 
 function App() {
-  const { init, isAuthenticated } = useAuthStore();
+  const { init } = useAuthStore();
 
   useEffect(() => {
     init();
@@ -240,6 +247,80 @@ function App() {
                 </AdminLayout>
               </ProtectedRoute>
             }
+          />
+          <Route
+            path="/support"
+            element={
+              <ProtectedRoute>
+                <AdminLayout>
+                  <MySupportPage />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/support/new"
+            element={
+              <ProtectedRoute>
+                <AdminLayout>
+                  <SupportNewTicketPage />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/support/:ticketId"
+            element={
+              <ProtectedRoute>
+                <AdminLayout>
+                  <SupportConversationPage />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/support"
+            element={
+              <ProtectedRoute>
+                <AdminLayout>
+                  <AdminSupportPage />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/support/:ticketId"
+            element={
+              <ProtectedRoute>
+                <AdminLayout>
+                  <SupportConversationPage isAdmin />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/tools"
+            element={
+              <ProtectedRoute>
+                <AdminLayout>
+                  <ToolsPage />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/tools/traffic"
+            element={
+              <ProtectedRoute>
+                <AdminLayout>
+                  <TrafficRecordingPage />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/tools/traffic/view/:token"
+            element={<TrafficViewPage />}
           />
         </Routes>
       </BrowserRouter>

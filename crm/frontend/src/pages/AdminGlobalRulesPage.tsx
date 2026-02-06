@@ -218,18 +218,20 @@ const AdminGlobalRulesPage: React.FC = () => {
   const paginatedRules = sortedRules.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
 
   return (
-    <Container maxWidth="lg" sx={{ py: 3 }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h5" fontWeight={600}>
-          רשימה גלובלית
-        </Typography>
+    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 2, mb: 3 }}>
+        <Box>
+          <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
+            רשימה גלובלית
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            הרשימה הגלובלית קובעת אילו אתרים בכלל יכולים להיות פתוחים במערכת. רק אדמין יכול לערוך.
+          </Typography>
+        </Box>
         <Button variant="contained" startIcon={<AddIcon />} onClick={openAdd}>
           הוסף כלל
         </Button>
       </Box>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        הרשימה הגלובלית קובעת אילו אתרים בכלל יכולים להיות פתוחים במערכת. רק כתובות ברשימה זו כפופות להגדרות המשתמש (לפתוח או לחסום לפי הפרופיל). רק אדמין יכול לערוך את הרשימה הגלובלית.
-      </Typography>
 
       {/* Resolve URL: which rule applies */}
       <Paper sx={{ p: 2, mb: 2 }}>
@@ -318,7 +320,7 @@ const AdminGlobalRulesPage: React.FC = () => {
                 <TableRow><TableCell colSpan={7}>{rules.length === 0 ? 'אין כללים גלובליים' : 'אין תוצאות לחיפוש או לסינון'}</TableCell></TableRow>
               ) : (
                 paginatedRules.map((r) => (
-                  <TableRow key={r.id}>
+                  <TableRow key={r.id} hover sx={{ '&:hover': { bgcolor: 'action.selected' } }}>
                     <TableCell>{ruleDisplayUrl(r)}</TableCell>
                     <TableCell>{ACTION_LABELS[r.action] || r.action}</TableCell>
                     <TableCell>

@@ -17,6 +17,7 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TableSortLabel,
   Chip,
   Dialog,
   DialogTitle,
@@ -33,8 +34,9 @@ import {
   Tab,
   IconButton,
   TablePagination,
+  InputAdornment,
 } from '@mui/material';
-import { Add as AddIcon, Delete as DeleteIcon } from '@mui/icons-material';
+import { Add as AddIcon, Delete as DeleteIcon, Search as SearchIcon } from '@mui/icons-material';
 import { ruleRequestsApi } from '../api/ruleRequests';
 import type { RuleRequest, RuleRequestCreate } from '../api/ruleRequests';
 import { TagInput } from '../components/TagInput';
@@ -51,6 +53,9 @@ const TYPE_LABELS: Record<string, string> = {
   change: 'בקשה לשינוי',
 };
 
+type SortBy = 'created_at' | 'request_type' | 'status' | 'url';
+type SortOrder = 'asc' | 'desc';
+
 const MyRequestsPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const [requests, setRequests] = useState<RuleRequest[]>([]);
@@ -59,6 +64,11 @@ const MyRequestsPage: React.FC = () => {
   const [tab, setTab] = useState(0);
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(10);
+  const [sortBy, setSortBy] = useState<SortBy>('created_at');
+  const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
+  const [statusFilter, setStatusFilter] = useState<string>('');
+  const [typeFilter, setTypeFilter] = useState<string>('');
+  const [search, setSearch] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [requestType, setRequestType] = useState<'open' | 'change'>('open');
   const [url, setUrl] = useState('');
@@ -76,12 +86,16 @@ const MyRequestsPage: React.FC = () => {
   const loadRequests = async () => {
     setLoading(true);
     try {
-      const { requests: list, total: t } = await ruleRequestsApi.list({
+      const params: Record<string, string | number> = {
         page: page + 1,
         page_size: rowsPerPage,
-        sort_by: 'created_at',
-        sort_order: 'desc',
-      });
+        sort_by: sortBy,
+        sort_order: sortOrder,
+      };
+      if (statusFilter) params.status_filter = statusFilter;
+      if (typeFilter) params.request_type_filter = typeFilter;
+      if (search.trim()) params.search = search.trim();
+      const { requests: list, total: t } = await ruleRequestsApi.list(params);
       setRequests(list);
       setTotal(t);
     } catch (e: unknown) {
@@ -94,7 +108,15 @@ const MyRequestsPage: React.FC = () => {
 
   useEffect(() => {
     loadRequests();
-  }, [page, rowsPerPage]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- loadRequests reads filter/sort/page state
+  }, [page, rowsPerPage, sortBy, sortOrder, statusFilter, typeFilter, search]);
+
+  const handleSort = (col: SortBy) => {
+    const isAsc = sortBy === col && sortOrder === 'asc';
+    setSortOrder(isAsc ? 'desc' : 'asc');
+    setSortBy(col);
+    setPage(0);
+  };
 
   useEffect(() => {
     if (prefilledUrl || prefilledType) {
@@ -175,11 +197,16 @@ const MyRequestsPage: React.FC = () => {
   const canDelete = (r: RuleRequest) => r.status === 'pending';
 
   return (
-    <Container maxWidth="lg" sx={{ mt: 4 }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h4" gutterBottom>
-          הבקשות שלי
-        </Typography>
+    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 2, mb: 3 }}>
+        <Box>
+          <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
+            הבקשות שלי
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            שלח בקשות למנהל לאישור. כאן תוכל לראות את סטטוס הבקשות שלך ולנהל אותן.
+          </Typography>
+        </Box>
         <Box sx={{ display: 'flex', gap: 1 }}>
           <Button variant="outlined" startIcon={<AddIcon />} onClick={() => openAddDialog('open')}>
             בקשה לפתיחת אתר
@@ -190,11 +217,40 @@ const MyRequestsPage: React.FC = () => {
         </Box>
       </Box>
 
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        שלח בקשות למנהל לאישור. כאן תוכל לראות את סטטוס הבקשות שלך ולנהל אותן.
-      </Typography>
-
       <Paper>
+        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center', p: 2, borderBottom: 1, borderColor: 'divider' }}>
+          <TextField
+            size="small"
+            placeholder="חיפוש כתובת"
+            value={search}
+            onChange={(e) => { setSearch(e.target.value); setPage(0); }}
+            sx={{ minWidth: 180 }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon fontSize="small" />
+                </InputAdornment>
+              ),
+            }}
+          />
+          <FormControl size="small" sx={{ minWidth: 120 }}>
+            <InputLabel>סטטוס</InputLabel>
+            <Select value={statusFilter} label="סטטוס" onChange={(e) => { setStatusFilter(e.target.value); setPage(0); }}>
+              <MenuItem value="">הכל</MenuItem>
+              <MenuItem value="pending">ממתין</MenuItem>
+              <MenuItem value="approved">אושר</MenuItem>
+              <MenuItem value="rejected">נדחה</MenuItem>
+            </Select>
+          </FormControl>
+          <FormControl size="small" sx={{ minWidth: 140 }}>
+            <InputLabel>סוג בקשה</InputLabel>
+            <Select value={typeFilter} label="סוג בקשה" onChange={(e) => { setTypeFilter(e.target.value); setPage(0); }}>
+              <MenuItem value="">הכל</MenuItem>
+              <MenuItem value="open">בקשה לפתיחה</MenuItem>
+              <MenuItem value="change">בקשה לשינוי</MenuItem>
+            </Select>
+          </FormControl>
+        </Box>
         <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ borderBottom: 1, borderColor: 'divider' }}>
           <Tab label="כל הבקשות" />
         </Tabs>
@@ -202,9 +258,21 @@ const MyRequestsPage: React.FC = () => {
           <Table size="small">
             <TableHead>
               <TableRow>
-                <TableCell>תאריך</TableCell>
-                <TableCell>סוג</TableCell>
-                <TableCell>סטטוס</TableCell>
+                <TableCell sortDirection={sortBy === 'created_at' ? sortOrder : false}>
+                  <TableSortLabel active={sortBy === 'created_at'} direction={sortBy === 'created_at' ? sortOrder : 'asc'} onClick={() => handleSort('created_at')}>
+                    תאריך
+                  </TableSortLabel>
+                </TableCell>
+                <TableCell sortDirection={sortBy === 'request_type' ? sortOrder : false}>
+                  <TableSortLabel active={sortBy === 'request_type'} direction={sortBy === 'request_type' ? sortOrder : 'asc'} onClick={() => handleSort('request_type')}>
+                    סוג
+                  </TableSortLabel>
+                </TableCell>
+                <TableCell sortDirection={sortBy === 'status' ? sortOrder : false}>
+                  <TableSortLabel active={sortBy === 'status'} direction={sortBy === 'status' ? sortOrder : 'asc'} onClick={() => handleSort('status')}>
+                    סטטוס
+                  </TableSortLabel>
+                </TableCell>
                 <TableCell>כתובת</TableCell>
                 <TableCell>פעולה</TableCell>
                 <TableCell align="left">פעולות</TableCell>
@@ -217,7 +285,7 @@ const MyRequestsPage: React.FC = () => {
                 <TableRow><TableCell colSpan={6}>אין בקשות. הוסף בקשה חדשה למעלה.</TableCell></TableRow>
               ) : (
                 requests.map((r) => (
-                  <TableRow key={r.id}>
+                  <TableRow key={r.id} hover sx={{ '&:hover': { bgcolor: 'action.selected' } }}>
                     <TableCell>{formatDate(r.created_at)}</TableCell>
                     <TableCell>{TYPE_LABELS[r.request_type] || r.request_type}</TableCell>
                     <TableCell>

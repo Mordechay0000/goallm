@@ -25,17 +25,20 @@ apiClient.interceptors.request.use((config) => {
   return config;
 });
 
-// Handle auth errors
+// Handle auth errors – redirect to login on 401 only when token expired (not from login attempt).
+// When login/verify returns 401, don't redirect – let the form show the error.
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      localStorage.removeItem('access_token');
-      localStorage.removeItem('user');
-      const redirect = encodeURIComponent(window.location.pathname + window.location.search);
-      window.location.href = redirect ? `/login?redirect=${redirect}` : '/login';
+      const isAuthRequest = String(error.config?.url || '').includes('/auth/');
+      if (!isAuthRequest) {
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('user');
+        const redirect = encodeURIComponent(window.location.pathname + window.location.search);
+        window.location.href = redirect ? `/login?redirect=${redirect}` : '/login';
+      }
     }
-    // Don't redirect on 422 (validation errors) - let the component handle it
     return Promise.reject(error);
   }
 );

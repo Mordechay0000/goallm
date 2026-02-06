@@ -7,19 +7,50 @@
   color: #213547;
   background-color: #ffffff;
 
+  /* צבע ראשי – מעבר חלק #0FF0FC → #A64EFF → #FF4D8D */
+  --primary-gradient: linear-gradient(to right, #0FF0FC 0%, #A64EFF 50%, #FF4D8D 100%);
+  --primary-main: #A64EFF;
+  --secondary-main: #0d9488;
+
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* גרדיאנט ראשי על כל AppBar (בר עליון) */
+.MuiAppBar-root {
+  background-image: var(--primary-gradient) !important;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  color: #fff !important;
+}
+.MuiAppBar-root .MuiTypography-root,
+.MuiAppBar-root .MuiIconButton-root {
+  color: #fff !important;
+}
+.MuiAppBar-root .MuiTypography-root {
+  text-shadow: 0 0 1px #000, 1px 0 1px #000, -1px 0 1px #000, 0 1px 1px #000, 0 -1px 1px #000;
+}
+
+/* גרדיאנט לכל הכפתורים מסוג contained (כולל primary) – טקסט לבן עם מסגרת */
+.MuiButton-contained,
+.MuiButton-containedPrimary {
+  background-image: var(--primary-gradient) !important;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  border: none;
+  color: #fff !important;
+  text-shadow: 0 0 1px #000, 1px 0 1px #000, -1px 0 1px #000, 0 1px 1px #000, 0 -1px 1px #000;
+}
+
 a {
   font-weight: 500;
-  color: #646cff;
+  color: var(--primary-main);
   text-decoration: inherit;
 }
 a:hover {
-  color: #535bf2;
+  color: #8b3fe0;
 }
 
 body {

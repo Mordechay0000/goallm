@@ -24,17 +24,19 @@ const DashboardPage: React.FC = () => {
   }, [fetchProfiles]);
 
   return (
-    <Container maxWidth="lg" sx={{ mt: 4 }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 4 }}>
-        <Typography variant="h4">לוח בקרה</Typography>
+    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 2, mb: 3 }}>
         <Box>
-          <Typography variant="body2" sx={{ display: 'inline', mr: 2 }}>
+          <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
+            לוח בקרה
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
             {user?.email}
           </Typography>
-          <Button variant="outlined" onClick={logout}>
-            התנתק
-          </Button>
         </Box>
+        <Button variant="outlined" onClick={logout}>
+          התנתק
+        </Button>
       </Box>
 
       <Card sx={{ mb: 3 }}>

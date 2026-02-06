@@ -4,6 +4,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   Box,
+  Container,
   Paper,
   Typography,
   Switch,
@@ -69,20 +70,24 @@ const AdminFilterSwitchesPage: React.FC = () => {
 
   if (loading) {
     return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight={200}>
-        <CircularProgress />
-      </Box>
+      <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+        <Box display="flex" justifyContent="center" alignItems="center" minHeight={200}>
+          <CircularProgress />
+        </Box>
+      </Container>
     );
   }
 
   return (
-    <Box>
-      <Typography variant="h5" component="h1" gutterBottom sx={{ fontWeight: 600 }}>
-        מתגי סינון גלובליים
-      </Typography>
-      <Typography variant="body2" color="text.secondary" paragraph>
-        כל סינון פועל באופן עצמאי. כיבוי סינון אחד לא משפיע על השאר.
-      </Typography>
+    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+      <Box sx={{ mb: 3 }}>
+        <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
+          מתגי סינון גלובליים
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
+          כל סינון פועל באופן עצמאי. כיבוי סינון אחד לא משפיע על השאר.
+        </Typography>
+      </Box>
       {error && (
         <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 2 }}>
           {error}
@@ -129,7 +134,7 @@ const AdminFilterSwitchesPage: React.FC = () => {
           ))}
         </Stack>
       </Paper>
-    </Box>
+    </Container>
   );
 };
 

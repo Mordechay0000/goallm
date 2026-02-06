@@ -19,7 +19,11 @@ from mitmproxy import http
 
 from core.http_processor.http_flow_processor import process_http_response
 from core.logger.logging_config import setup_logging
-from core.policy_processor.policy_database import get_user_id_for_ip
+from core.policy_processor.policy_database import (
+    get_user_id_for_ip,
+    get_active_traffic_session_id,
+    add_traffic_log_entry,
+)
 from core.proxy.utils import format_flow_error, format_response_error
 
 setup_logging()
@@ -133,10 +137,54 @@ class FilterAddon:
                 {"Content-Type": "text/plain"},
             )
 
+        # Traffic recording: if user has active session, log this request
+        user_id = flow.metadata.get("user_id") if getattr(flow, "metadata", None) else None
+        if user_id is not None:
+            session_id = get_active_traffic_session_id(user_id)
+            if session_id is not None:
+                try:
+                    status = flow.metadata.get("traffic_status", "open")
+                    protocol = (flow.request.scheme or "https") if flow.request else ""
+                    content_type = ""
+                    if flow.response and flow.response.headers:
+                        content_type = (flow.response.headers.get("content-type") or "").strip() or ""
+                    add_traffic_log_entry(
+                        session_id=session_id,
+                        user_id=user_id,
+                        url=url,
+                        protocol=protocol,
+                        status=status,
+                        time_sec=0.0,
+                        content_type=content_type or None,
+                    )
+                except Exception as log_err:
+                    logger.debug("Traffic log entry failed: %s", log_err)
+
     def error(self, flow: http.HTTPFlow) -> None:
         """Handle errors during request/response (e.g. SSL, connection)."""
         if not flow.error:
             return
+
+        # Traffic recording: log failed request (e.g. cert error) if user is recording
+        user_id = flow.metadata.get("user_id") if getattr(flow, "metadata", None) else None
+        if user_id is not None:
+            session_id = get_active_traffic_session_id(user_id)
+            if session_id is not None:
+                try:
+                    url = flow.request.pretty_url if flow.request else "Unknown URL"
+                    err_str = str(flow.error)
+                    status = "cert_missing" if "certificate" in err_str.lower() or "ssl" in err_str.lower() else "error"
+                    add_traffic_log_entry(
+                        session_id=session_id,
+                        user_id=user_id,
+                        url=url,
+                        protocol=(flow.request.scheme or "") if flow.request else "",
+                        status=status,
+                        time_sec=0.0,
+                        content_type=None,
+                    )
+                except Exception as log_err:
+                    logger.debug("Traffic log entry (error) failed: %s", log_err)
 
         details = format_flow_error(flow)
         if not details:

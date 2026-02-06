@@ -2,7 +2,7 @@
  * Admin Layout - Minimal, functional design for admin application
  * Sidebar navigation with clear hierarchy
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Box,
@@ -20,7 +20,9 @@ import {
   Avatar,
   Menu,
   MenuItem,
+  Badge,
 } from '@mui/material';
+import { primaryGradient } from '../theme';
 import {
   Menu as MenuIcon,
   Dashboard as DashboardIcon,
@@ -34,9 +36,12 @@ import {
   Assignment as AssignmentIcon,
   Tune as TuneIcon,
   Link as LinkIcon,
+  QuestionAnswer as QuestionAnswerIcon,
+  Build as BuildIcon,
 } from '@mui/icons-material';
 import { useAuthStore } from '../store/authStore';
 import { getAvatarUrl } from '../api/auth';
+import { supportApi } from '../api/support';
 
 const DRAWER_WIDTH = 260;
 
@@ -69,18 +74,40 @@ const navItems: NavItem[] = [
     path: '/requests',
   },
   {
+    label: 'פניות שלי',
+    icon: <QuestionAnswerIcon />,
+    path: '/support',
+  },
+  {
     label: 'המכשירים שלי',
     icon: <LinkIcon />,
     path: '/connections',
+  },
+  {
+    label: 'כלים',
+    icon: <BuildIcon />,
+    path: '/tools',
   },
 ];
 
 const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
+  const [supportStats, setSupportStats] = useState<{ tickets_with_replies: number; admin_tickets_with_replies?: number }>({ tickets_with_replies: 0 });
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuthStore();
+
+  useEffect(() => {
+    if (!user) return;
+    supportApi.getStats().then(setSupportStats).catch(() => {});
+  }, [user]);
+  // Refresh support stats when opening the support list (so badge updates after marking read)
+  const isSupportList = location.pathname === '/support' || location.pathname === '/admin/support';
+  useEffect(() => {
+    if (!user || !isSupportList) return;
+    supportApi.getStats().then(setSupportStats).catch(() => {});
+  }, [user, isSupportList]);
 
   const handleDrawerToggle = () => {
     setMobileOpen(!mobileOpen);
@@ -122,31 +149,45 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       </Toolbar>
       <Divider />
       <List sx={{ pt: 1 }}>
-        {navItems.map((item) => (
-          <ListItem key={item.path} disablePadding>
-            <ListItemButton
-              selected={isActive(item.path)}
-              onClick={() => {
-                navigate(item.path);
-                setMobileOpen(false);
-              }}
-              sx={{
-                minHeight: 48,
-                '&.Mui-selected': {
-                  backgroundColor: 'action.selected',
-                  borderRight: '3px solid',
-                  borderColor: 'primary.main',
-                  '&:hover': {
-                    backgroundColor: 'action.selected',
+        {navItems.map((item) => {
+          const showSupportBadge = item.path === '/support' && (supportStats.tickets_with_replies ?? 0) > 0;
+          return (
+            <ListItem key={item.path} disablePadding>
+              <ListItemButton
+                selected={isActive(item.path)}
+                onClick={() => {
+                  navigate(item.path);
+                  setMobileOpen(false);
+                }}
+                sx={{
+                  minHeight: 48,
+                  '&:hover:not(.Mui-selected)': {
+                    backgroundColor: 'rgba(99, 102, 241, 0.06)',
                   },
-                },
-              }}
-            >
-              <ListItemIcon sx={{ minWidth: 40 }}>{item.icon}</ListItemIcon>
-              <ListItemText primary={item.label} />
-            </ListItemButton>
-          </ListItem>
-        ))}
+                  '&.Mui-selected': {
+                    backgroundColor: 'action.selected',
+                    borderRight: '3px solid',
+                    borderColor: 'primary.main',
+                    '&:hover': {
+                      backgroundColor: 'action.selected',
+                    },
+                  },
+                }}
+              >
+                <ListItemIcon sx={{ minWidth: 40 }}>
+                  {showSupportBadge ? (
+                    <Badge badgeContent={supportStats.tickets_with_replies} color="primary">
+                      {item.icon}
+                    </Badge>
+                  ) : (
+                    item.icon
+                  )}
+                </ListItemIcon>
+                <ListItemText primary={item.label} />
+              </ListItemButton>
+            </ListItem>
+          );
+        })}
         {user?.is_admin && (
           <>
             <ListItem disablePadding>
@@ -158,10 +199,16 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 }}
                 sx={{
                   minHeight: 48,
+                  '&:hover:not(.Mui-selected)': {
+                    backgroundColor: 'rgba(99, 102, 241, 0.06)',
+                  },
                   '&.Mui-selected': {
                     backgroundColor: 'action.selected',
                     borderRight: '3px solid',
                     borderColor: 'primary.main',
+                    '&:hover': {
+                      backgroundColor: 'action.selected',
+                    },
                   },
                 }}
               >
@@ -186,10 +233,16 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 }}
                 sx={{
                   minHeight: 48,
+                  '&:hover:not(.Mui-selected)': {
+                    backgroundColor: 'rgba(99, 102, 241, 0.06)',
+                  },
                   '&.Mui-selected': {
                     backgroundColor: 'action.selected',
                     borderRight: '3px solid',
                     borderColor: 'primary.main',
+                    '&:hover': {
+                      backgroundColor: 'action.selected',
+                    },
                   },
                 }}
               >
@@ -214,10 +267,16 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 }}
                 sx={{
                   minHeight: 48,
+                  '&:hover:not(.Mui-selected)': {
+                    backgroundColor: 'rgba(99, 102, 241, 0.06)',
+                  },
                   '&.Mui-selected': {
                     backgroundColor: 'action.selected',
                     borderRight: '3px solid',
                     borderColor: 'primary.main',
+                    '&:hover': {
+                      backgroundColor: 'action.selected',
+                    },
                   },
                 }}
               >
@@ -242,10 +301,16 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 }}
                 sx={{
                   minHeight: 48,
+                  '&:hover:not(.Mui-selected)': {
+                    backgroundColor: 'rgba(99, 102, 241, 0.06)',
+                  },
                   '&.Mui-selected': {
                     backgroundColor: 'action.selected',
                     borderRight: '3px solid',
                     borderColor: 'primary.main',
+                    '&:hover': {
+                      backgroundColor: 'action.selected',
+                    },
                   },
                 }}
               >
@@ -257,6 +322,46 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   primaryTypographyProps={{
                     fontSize: '0.95rem',
                     fontWeight: isActive('/admin/filter-switches') ? 600 : 400,
+                  }}
+                />
+              </ListItemButton>
+            </ListItem>
+            <ListItem disablePadding>
+              <ListItemButton
+                selected={isActive('/admin/support')}
+                onClick={() => {
+                  navigate('/admin/support');
+                  setMobileOpen(false);
+                }}
+                sx={{
+                  minHeight: 48,
+                  '&:hover:not(.Mui-selected)': {
+                    backgroundColor: 'rgba(99, 102, 241, 0.06)',
+                  },
+                  '&.Mui-selected': {
+                    backgroundColor: 'action.selected',
+                    borderRight: '3px solid',
+                    borderColor: 'primary.main',
+                    '&:hover': {
+                      backgroundColor: 'action.selected',
+                    },
+                  },
+                }}
+              >
+                <ListItemIcon sx={{ minWidth: 40 }}>
+                  {(supportStats.admin_tickets_with_replies ?? 0) > 0 ? (
+                    <Badge badgeContent={supportStats.admin_tickets_with_replies} color="primary">
+                      <QuestionAnswerIcon />
+                    </Badge>
+                  ) : (
+                    <QuestionAnswerIcon />
+                  )}
+                </ListItemIcon>
+                <ListItemText
+                  primary="פניות שהתקבלו (אדמין)"
+                  primaryTypographyProps={{
+                    fontSize: '0.95rem',
+                    fontWeight: isActive('/admin/support') ? 600 : 400,
                   }}
                 />
               </ListItemButton>
@@ -274,11 +379,10 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         sx={{
           width: { sm: `calc(100% - ${DRAWER_WIDTH}px)` },
           ml: { sm: `${DRAWER_WIDTH}px` },
-          backgroundColor: 'background.paper',
-          color: 'text.primary',
-          boxShadow: '0 1px 3px rgba(0,0,0,0.12)',
-          borderBottom: '1px solid',
-          borderColor: 'divider',
+          background: primaryGradient,
+          color: '#fff',
+          boxShadow: '0 1px 3px rgba(99, 102, 241, 0.25)',
+          borderBottom: 'none',
         }}
         elevation={0}
       >

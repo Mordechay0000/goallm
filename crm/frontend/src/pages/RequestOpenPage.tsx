@@ -79,7 +79,7 @@ const RequestOpenPage: React.FC = () => {
 
   if (success) {
     return (
-      <Container maxWidth="sm" sx={{ mt: 4 }}>
+      <Container maxWidth="sm" sx={{ mt: 4, mb: 4 }}>
         <Alert severity="success" sx={{ mb: 2 }}>
           הבקשה נשלחה. מנהל יבדוק ויאשר או ידחה.
         </Alert>
@@ -91,7 +91,7 @@ const RequestOpenPage: React.FC = () => {
   }
 
   return (
-    <Container maxWidth="sm" sx={{ mt: 4 }}>
+    <Container maxWidth="sm" sx={{ mt: 4, mb: 4 }}>
       <Button startIcon={<ArrowBackIcon />} onClick={() => navigate(-1)} sx={{ mb: 2 }}>
         חזרה
       </Button>
@@ -102,7 +102,7 @@ const RequestOpenPage: React.FC = () => {
         מלא את הפרטים והבקשה תישלח למנהל לאישור.
       </Typography>
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-      <Paper sx={{ p: 2 }}>
+      <Paper sx={{ p: 4 }}>
         <form onSubmit={handleSubmit}>
           <TextField
             fullWidth

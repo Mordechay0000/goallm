@@ -2,6 +2,44 @@
  * Shared validation utilities for the CRM
  */
 
+/** Normalize phone: extract digits only */
+export function normalizePhone(s: string): string {
+  return (s || '').replace(/\D/g, '');
+}
+
+/**
+ * Validate phone.
+ * - Israeli (without +): must start with 05 and be exactly 10 digits.
+ * - International (with +): must start with + and contain 8–15 digits in total (after removing separators).
+ * Returns error message or empty string if valid.
+ */
+export function validatePhone(phone: string): string {
+  const raw = (phone || '').trim();
+  const digits = normalizePhone(raw);
+  // ריק – יטופל על ידי שדות חובה במקום אחר
+  if (!raw) return '';
+  if (digits.length === 0) return 'מספר טלפון לא תקין';
+
+  // מספר בינלאומי
+  if (raw.startsWith('+')) {
+    // מאפשר בין 8 ל־15 ספרות (סטייל E.164, אבל גמיש עם רווחים/מקפים)
+    if (digits.length < 8 || digits.length > 15) {
+      return 'מספר בינלאומי לא תקין – יש להזין בין 8 ל־15 ספרות אחרי הקידומת';
+    }
+    return '';
+  }
+
+  // מספר ישראלי: חייב להתחיל ב־05 ולהיות 10 ספרות בדיוק
+  if (!digits.startsWith('05')) {
+    return 'מספר ישראלי חייב להתחיל ב־05';
+  }
+  if (digits.length !== 10) {
+    return 'מספר ישראלי חייב להכיל 10 ספרות בדיוק';
+  }
+
+  return '';
+}
+
 /**
  * Validate domain/URL for rules and requests.
  * Accepts: example.com, *.example.com, example.com/path, localhost, IP addresses.

@@ -154,7 +154,7 @@ const ProfilesPage: React.FC = () => {
   };
 
   return (
-    <Container maxWidth="lg" sx={{ mt: 4 }}>
+    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
       {managedUserId != null && managedUserPhone && (
         <Alert
           severity="info"
@@ -168,9 +168,14 @@ const ProfilesPage: React.FC = () => {
           הפרופילים של {managedUserPhone}
         </Alert>
       )}
-      <Typography variant="h4" gutterBottom>
-        {managedUserId != null && managedUserPhone ? `הפרופילים של ${managedUserPhone}` : 'הפרופילים שלי'}
-      </Typography>
+      <Box sx={{ mb: 3 }}>
+        <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
+          {managedUserId != null && managedUserPhone ? `הפרופילים של ${managedUserPhone}` : 'הפרופילים שלי'}
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
+          ניהול פרופילי סינון – כל פרופיל מגדיר אילו אתרים חסומים או פתוחים.
+        </Typography>
+      </Box>
 
       {/* Tabs */}
       <Paper sx={{ mb: 3 }}>

@@ -54,6 +54,8 @@ def _apply_site_policy_for_html(flow: http.HTTPFlow, user_id: Optional[int] = No
                     body,
                     {"Content-Type": "text/html; charset=utf-8", "Content-Length": str(len(body))},
                 )
+                if getattr(flow, "metadata", None) is not None:
+                    flow.metadata["traffic_status"] = "blocked"
                 logger.info(
                     "Site blocked by policy - URL: %s - rule: %s - reason: %s",
                     url,
@@ -74,6 +76,8 @@ def _apply_site_policy_for_html(flow: http.HTTPFlow, user_id: Optional[int] = No
                         "Expires": "0",
                     },
                 )
+                if getattr(flow, "metadata", None) is not None:
+                    flow.metadata["traffic_status"] = "review"
                 current_mode = get_profile_mode(user_id)
                 logger.info(
                     "Site not in list, showing send-for-review - URL: %s (profile_mode in core: %s)",
@@ -99,6 +103,8 @@ def _apply_site_policy_for_html(flow: http.HTTPFlow, user_id: Optional[int] = No
                 "Expires": "0",
             },
         )
+        if getattr(flow, "metadata", None) is not None:
+            flow.metadata["traffic_status"] = "review"
         logger.info("No policy for site (treat as review), showing send-for-review - URL: %s", url)
         return (True, None)
     except Exception as e:
@@ -120,7 +126,8 @@ def _apply_site_policy_for_html(flow: http.HTTPFlow, user_id: Optional[int] = No
 
 def process_http_response(flow: http.HTTPFlow) -> None:
     """Process HTTP response. Each filter (URL policy, text, image, embedded image) works independently per global switches.
-    When flow.metadata has user_id (from IP binding), that user's profile and rules are used."""
+    When flow.metadata has user_id (from IP binding), that user's profile and rules are used.
+    Sets flow.metadata['traffic_status'] for traffic recording: open, blocked, review, cert_missing."""
     url = flow.request.url
     referer_url = flow.request.headers.get("Referer")
     method = flow.request.method
@@ -128,6 +135,9 @@ def process_http_response(flow: http.HTTPFlow) -> None:
     user_id: Optional[int] = None
     if getattr(flow, "metadata", None) is not None:
         user_id = flow.metadata.get("user_id")
+    if not hasattr(flow, "metadata") or flow.metadata is None:
+        flow.metadata = {}
+    flow.metadata["traffic_status"] = "open"
 
     logger.info("Processing HTTP response - Method: %s, URL: %s (user_id=%s)", method, url, user_id)
     logger.debug(
@@ -186,6 +196,8 @@ def process_http_response(flow: http.HTTPFlow) -> None:
                             body,
                             {"Content-Type": "text/html; charset=utf-8", "Content-Length": str(len(body))},
                         )
+                        if getattr(flow, "metadata", None) is not None:
+                            flow.metadata["traffic_status"] = "blocked"
                         logger.info(
                             "Page blocked by text filter - URL: %s - cause: %s",
                             url,

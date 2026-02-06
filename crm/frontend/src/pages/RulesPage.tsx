@@ -46,21 +46,24 @@ const RulesPage: React.FC = () => {
   }, [profileId]);
 
   if (loading) {
-    return <Container>טוען...</Container>;
+    return <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>טוען...</Container>;
   }
 
   if (!profile) {
-    return <Container>פרופיל לא נמצא</Container>;
+    return <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>פרופיל לא נמצא</Container>;
   }
 
   return (
-    <Container maxWidth="lg" sx={{ mt: 4 }}>
-      <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 2 }}>
-        <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/profiles')}>
+    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+      <Box sx={{ mb: 3 }}>
+        <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/profiles')} sx={{ mb: 1 }}>
           חזרה לפרופילים
         </Button>
-        <Typography variant="h4">
-          חוקים - {profile.name}
+        <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
+          חוקים – {profile.name}
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
+          הוספה, עריכה ומחיקה של כללי חסימה/פתיחה לפרופיל זה.
         </Typography>
       </Box>
 

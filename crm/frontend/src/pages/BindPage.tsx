@@ -68,7 +68,7 @@ const BindPage: React.FC = () => {
   const steps = ['כניסה לחשבון', 'חיבור המכשיר אליך', 'מוכן'];
 
   return (
-    <Container maxWidth="sm" sx={{ py: 4 }}>
+    <Container maxWidth="sm" sx={{ mt: 4, mb: 4 }}>
       <Paper sx={{ p: 3 }}>
         <Typography variant="h5" align="center" gutterBottom sx={{ fontWeight: 600 }}>
           חיבור המכשיר אל החשבון שלך
