@@ -19,6 +19,8 @@ export interface PasswordFieldProps {
   sx?: object;
   autoComplete?: string;
   id?: string;
+  /** שם השדה לטופס – מאפשר לזהות שדה למילוי אוטומטי בדפדפן */
+  name?: string;
   onBlur?: () => void;
 }
 
@@ -35,6 +37,7 @@ export const PasswordField: React.FC<PasswordFieldProps> = ({
   sx,
   autoComplete = 'current-password',
   id,
+  name,
   onBlur,
 }) => {
   const [showPassword, setShowPassword] = useState(false);
@@ -55,7 +58,7 @@ export const PasswordField: React.FC<PasswordFieldProps> = ({
       disabled={disabled}
       autoComplete={autoComplete}
       sx={sx}
-      inputProps={{ 'data-lpignore': 'true' }}
+      inputProps={{ ...(name ? { name } : { 'data-lpignore': 'true' }) }}
       InputProps={{
         endAdornment: (
           <InputAdornment position="end">

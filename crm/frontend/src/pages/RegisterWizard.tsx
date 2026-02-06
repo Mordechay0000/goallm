@@ -19,6 +19,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { PasswordField } from '../components/PasswordField';
 import { FormErrors } from '../components/FormErrors';
 import Stepper from '../components/Stepper';
+import { validatePhone } from '../utils/validation';
 
 const ALLOWED = 'image/jpeg,image/png,image/gif,image/webp';
 const MAX_MB = 5;
@@ -87,11 +88,11 @@ const RegisterWizard: React.FC = () => {
   }, []);
 
   const validatePhoneLive = useCallback((value: string): string | undefined => {
-    const ph = (value || '').replace(/\D/g, '');
-    if (ph.length === 0) return 'נא להזין מספר טלפון (לפחות 9 ספרות)';
-    if (ph.length < 9) return 'נא להזין מספר טלפון מלא (לפחות 9 ספרות)';
-    if (!/^[0-9+\s()-]+$/.test(value)) return 'מספר הטלפון לא נראה תקין';
-    return undefined;
+    if (!(value || '').trim()) {
+      return 'נא להזין מספר טלפון (ישראל: 10 ספרות שמתחילות ב־05, או מספר בינלאומי שמתחיל ב־+)';
+    }
+    const err = validatePhone(value);
+    return err || undefined;
   }, []);
 
   const validateStep = (step: number): boolean => {
@@ -316,6 +317,7 @@ const RegisterWizard: React.FC = () => {
             fullWidth
             label="טלפון"
             required
+            name="phone"
             value={formData.phone}
             onChange={(e) => {
               const v = e.target.value;
@@ -327,6 +329,7 @@ const RegisterWizard: React.FC = () => {
             helperText={errors.phone || 'נכנסים עם הטלפון והסיסמה. לדוגמה: 050-1234567'}
             placeholder="050-1234567"
             sx={{ mb: 2 }}
+            autoComplete="tel"
             inputProps={{ inputMode: 'tel' }}
             InputProps={{
               startAdornment: (
@@ -346,6 +349,7 @@ const RegisterWizard: React.FC = () => {
         <Box>
           <PasswordField
             label="סיסמה"
+            name="new-password"
             value={formData.password}
             onChange={(v) => {
               setFormData({ ...formData, password: v });
@@ -360,9 +364,11 @@ const RegisterWizard: React.FC = () => {
             error={!!errors.password}
             helperText={errors.password || 'לפחות 8 תווים, עם ספרה ואות'}
             sx={{ mb: 2 }}
+            autoComplete="new-password"
           />
           <PasswordField
             label="אימות סיסמה"
+            name="confirm-password"
             value={formData.confirmPassword}
             onChange={(v) => {
               setFormData({ ...formData, confirmPassword: v });
@@ -373,6 +379,7 @@ const RegisterWizard: React.FC = () => {
             error={!!errors.confirmPassword}
             helperText={errors.confirmPassword}
             sx={{ mb: 2 }}
+            autoComplete="new-password"
           />
         </Box>
       ),

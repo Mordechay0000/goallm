@@ -17,12 +17,9 @@ import { authApi } from '../api/auth';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { PasswordField } from '../components/PasswordField';
 import { FormErrors } from '../components/FormErrors';
+import { validatePhone } from '../utils/validation';
 
 type LoginMode = 'phone' | 'password';
-
-function normalizePhone(s: string): string {
-  return (s || '').replace(/\D/g, '');
-}
 
 const LoginPage: React.FC = () => {
   const [phone, setPhone] = useState('');
@@ -40,8 +37,7 @@ const LoginPage: React.FC = () => {
 
   const mode: LoginMode = password.length > 0 ? 'password' : 'phone';
 
-  const ph = normalizePhone(phone);
-  const phoneValid = ph.length >= 9;
+  const phoneValid = validatePhone(phone) === '';
   const passwordValid = password.length > 0;
   const codeValid = code.length === 6 && /^\d+$/.test(code);
 
@@ -52,10 +48,8 @@ const LoginPage: React.FC = () => {
   }, [registrationMessage]);
 
   const validatePhoneLive = useCallback((value: string) => {
-    const n = normalizePhone(value);
-    if (n.length === 0) return undefined;
-    if (n.length < 9) return 'נא להזין מספר טלפון תקין (לפחות 9 ספרות)';
-    return undefined;
+    const err = validatePhone(value);
+    return err || undefined;
   }, []);
 
   const validatePasswordLive = useCallback((value: string) => {
@@ -159,7 +153,7 @@ const LoginPage: React.FC = () => {
   };
 
   return (
-    <Container maxWidth="sm" sx={{ mt: 8, mb: 4 }}>
+    <Container maxWidth="sm" sx={{ mt: 4, mb: 4 }}>
       <Paper sx={{ p: 4 }}>
         <Typography variant="h5" align="center" gutterBottom sx={{ fontWeight: 600, mb: 4 }}>
           כניסה לחשבון שלי
@@ -178,6 +172,7 @@ const LoginPage: React.FC = () => {
             fullWidth
             label="טלפון"
             required
+            name="phone"
             value={phone}
             onChange={(e) => setPhoneAndValidate(e.target.value)}
             onBlur={() => {
@@ -188,6 +183,7 @@ const LoginPage: React.FC = () => {
             helperText={errors.phone || 'נכנסים עם הטלפון והסיסמה (או עם קוד שנשלח לטלפון)'}
             placeholder="050-1234567"
             sx={{ mb: 2 }}
+            autoComplete="tel"
             inputProps={{ inputMode: 'tel' }}
           />
 
@@ -206,18 +202,21 @@ const LoginPage: React.FC = () => {
               helperText={errors.code || 'הקוד בן 6 ספרות שקיבלת בהודעה'}
               placeholder="123456"
               sx={{ mb: 2 }}
+              autoComplete="one-time-code"
               inputProps={{ inputMode: 'numeric', maxLength: 6 }}
             />
           )}
 
           <PasswordField
             label="סיסמה"
+            name="password"
             value={password}
             onChange={(v) => setPasswordAndValidate(v)}
             error={!!errors.password}
             helperText={errors.password || helperText}
             required={false}
             sx={{ mb: 2 }}
+            autoComplete="current-password"
           />
 
           {mode === 'phone' && (

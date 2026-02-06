@@ -19,6 +19,7 @@ import { useAuthStore } from '../store/authStore';
 import { useNavigate } from 'react-router-dom';
 import { PasswordField } from '../components/PasswordField';
 import { FormErrors } from '../components/FormErrors';
+import { validatePhone } from '../utils/validation';
 
 const ALLOWED = 'image/jpeg,image/png,image/gif,image/webp';
 const MAX_MB = 5;
@@ -76,11 +77,11 @@ const RegisterPage: React.FC = () => {
   }, []);
 
   const validatePhoneLive = useCallback((value: string): string | undefined => {
-    const ph = (value || '').replace(/\D/g, '');
-    if (ph.length === 0) return 'מספר טלפון חובה (לפחות 9 ספרות). ההתחברות מתבצעת באמצעות טלפון וסיסמה';
-    if (ph.length < 9) return 'מספר טלפון חובה (לפחות 9 ספרות). ההתחברות מתבצעת באמצעות טלפון וסיסמה';
-    if (!/^[0-9+\s()-]+$/.test(value)) return 'מספר טלפון לא תקין';
-    return undefined;
+    if (!(value || '').trim()) {
+      return 'מספר טלפון חובה (מספר ישראלי: 10 ספרות שמתחילות ב־05, או מספר בינלאומי שמתחיל ב־+)';
+    }
+    const err = validatePhone(value);
+    return err || undefined;
   }, []);
 
   const validateForm = (): boolean => {
@@ -120,11 +121,12 @@ const RegisterPage: React.FC = () => {
       newErrors.last_name = 'שם משפחה לא יכול להכיל יותר מ-100 תווים';
     }
 
-    const ph = (formData.phone || '').replace(/\D/g, '');
-    if (ph.length < 9) {
-      newErrors.phone = 'מספר טלפון חובה (לפחות 9 ספרות). ההתחברות מתבצעת באמצעות טלפון וסיסמה';
-    } else if (!/^[0-9+\s()-]+$/.test(formData.phone)) {
-      newErrors.phone = 'מספר טלפון לא תקין';
+    if (!formData.phone?.trim()) {
+      newErrors.phone =
+        'מספר טלפון חובה (מספר ישראלי: 10 ספרות שמתחילות ב־05, או מספר בינלאומי שמתחיל ב־+)';
+    } else {
+      const phoneErr = validatePhone(formData.phone);
+      if (phoneErr) newErrors.phone = phoneErr;
     }
 
     if (avatarFile && avatarFile.size > MAX_MB * 1024 * 1024) {
@@ -297,6 +299,7 @@ const RegisterPage: React.FC = () => {
             fullWidth
             label="טלפון"
             required
+            name="phone"
             value={formData.phone}
             onChange={(e) => {
               const v = e.target.value;
@@ -313,6 +316,7 @@ const RegisterPage: React.FC = () => {
             helperText={errors.phone || 'ההתחברות מתבצעת באמצעות טלפון וסיסמה. לדוגמה: 050-1234567'}
             placeholder="050-1234567"
             sx={{ mb: 2 }}
+            autoComplete="tel"
             inputProps={{ inputMode: 'tel' }}
             InputProps={{
               startAdornment: (
@@ -324,6 +328,7 @@ const RegisterPage: React.FC = () => {
           />
           <PasswordField
             label="סיסמה"
+            name="new-password"
             value={formData.password}
             onChange={(v) => {
               setFormData({ ...formData, password: v });
@@ -344,9 +349,11 @@ const RegisterPage: React.FC = () => {
             error={!!errors.password}
             helperText={errors.password || 'מינימום 8 תווים, ספרה ואות'}
             sx={{ mb: 2 }}
+            autoComplete="new-password"
           />
           <PasswordField
             label="אימות סיסמה"
+            name="confirm-password"
             value={formData.confirmPassword}
             onChange={(v) => {
               setFormData({ ...formData, confirmPassword: v });
@@ -362,6 +369,7 @@ const RegisterPage: React.FC = () => {
             error={!!errors.confirmPassword}
             helperText={errors.confirmPassword}
             sx={{ mb: 3 }}
+            autoComplete="new-password"
           />
           <Button type="submit" fullWidth variant="contained" size="large" disabled={loading}>
             הירשם
