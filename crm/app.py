@@ -13,7 +13,7 @@ project_root = Path(__file__).resolve().parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from core.policy_processor.policy_database import (
+from core.policy.policy_database import (
     add_policy, update_policy, delete_policy,
     get_policy, get_all_policies, validate_policy
 )

@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.policy_processor.url_policy_resolver import (
+from core.policy.url_policy_resolver import (
     URLPolicyResolver,
     URLPolicyResolverError,
 )

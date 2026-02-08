@@ -43,10 +43,11 @@ from .services import (
     count_my_tickets_with_replies, count_all_tickets_with_replies,
     count_my_tickets_with_unread_replies, count_all_tickets_with_unread_replies,
     mark_support_ticket_read, delete_support_ticket,
-    get_global_rules, get_global_rule, create_global_rule, update_global_rule, delete_global_rule, resolve_global_rule_for_url,
+    get_global_rules, get_global_rule, create_global_rule, update_global_rule, delete_global_rule, resolve_global_rule_for_url, find_and_update_global_rule_to_block, ensure_global_block_rule_for_url,
     list_bindings_for_user, add_ip_binding, remove_ip_binding, sync_ip_bindings_to_core, touch_ip_binding,
 )
 from .auth import create_user_access_token, get_current_user, get_current_admin
+from .security import decode_access_token
 from .database import init_db_schema, db_connection
 from .resolver_integration import get_rules_for_resolver, get_all_enabled_rules_for_resolver
 from .verification import (
@@ -708,7 +709,7 @@ async def create_tag_rule_endpoint(
 ):
     """Create a tag rule (e.g. tag=ממכר -> block)."""
     try:
-        rule = add_tag_rule(data.tag, data.state, data.enabled)
+        rule = add_tag_rule(data.tag, data.state, data.enabled, created_by_user_id=current_user.get("id"))
         sync_crm_rules_to_core(current_user["id"])
         return TagRuleResponse(**rule)
     except ValueError as e:
@@ -728,6 +729,7 @@ async def update_tag_rule_endpoint(
             tag=data.tag,
             state=data.state,
             enabled=data.enabled,
+            updated_by_user_id=current_user.get("id"),
         )
         sync_crm_rules_to_core(current_user["id"])
         return TagRuleResponse(**updated)
@@ -847,7 +849,7 @@ async def delete_schedule_endpoint(
         raise HTTPException(status_code=404, detail="תזמון לא נמצא")
 
 
-# ========== WebSocket Endpoint ==========
+# ========== WebSocket Endpoints ==========
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -860,6 +862,50 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.send_json({"type": "pong", "data": data})
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+
+
+@app.websocket("/ws/traffic")
+async def websocket_traffic(websocket: WebSocket):
+    """WebSocket for live traffic recording log. Client sends ?token=Bearer%20<access_token>. Server pushes new log entries."""
+    token = websocket.query_params.get("token") or ""
+    if token.startswith("Bearer "):
+        token = token[7:].strip()
+    if not token:
+        await websocket.close(code=4001)
+        return
+    payload = decode_access_token(token)
+    if not payload or "sub" not in payload:
+        await websocket.close(code=4001)
+        return
+    try:
+        user_id = int(payload["sub"])
+    except (ValueError, TypeError):
+        await websocket.close(code=4001)
+        return
+    user = get_user_by_id(user_id)
+    if not user:
+        await websocket.close(code=4001)
+        return
+    await websocket.accept()
+    from core.policy.policy_database import get_active_traffic_session_id, get_traffic_log
+    session_id = get_active_traffic_session_id(user_id)
+    if session_id is None:
+        await websocket.send_json({"type": "no_session", "message": "אין הקלטה פעילה"})
+        await websocket.close()
+        return
+    await websocket.send_json({"type": "session", "session_id": session_id})
+    last_count = 0
+    try:
+        while True:
+            await asyncio.sleep(1.2)
+            entries = await asyncio.to_thread(get_traffic_log, session_id, user_id)
+            n = len(entries)
+            if n > last_count:
+                new_entries = entries[last_count:]
+                last_count = n
+                await websocket.send_json({"type": "traffic_log", "entries": new_entries})
+    except WebSocketDisconnect:
+        pass
 
 
 # ========== Resolver Integration Endpoints ==========
@@ -887,7 +933,7 @@ async def get_all_resolver_rules():
 def _get_core_resolver_state(user_id: Optional[int] = None):
     """Read profile mode and DB path from core. When user_id is set, return that user's mode (for bound connections)."""
     try:
-        from core.policy_processor.policy_database import get_profile_mode, get_core_resolver_db_path
+        from core.policy.policy_database import get_profile_mode, get_core_resolver_db_path
         mode = get_profile_mode(user_id) if user_id is not None else get_profile_mode()
         return {"core_mode": mode, "core_db_path": get_core_resolver_db_path()}
     except Exception as e:
@@ -899,7 +945,7 @@ def _get_core_resolver_state(user_id: Optional[int] = None):
 @app.get("/api/admin/filter-switches")
 async def admin_get_filter_switches(admin: dict = Depends(get_current_admin)):
     """Get global filter switches (url_policy, text_filter, image_filter, embedded_image_filter). Admin only."""
-    from core.policy_processor.policy_database import get_filter_switches
+    from core.policy.policy_database import get_filter_switches
     return get_filter_switches()
 
 
@@ -909,16 +955,16 @@ async def admin_update_filter_switches(
     admin: dict = Depends(get_current_admin),
 ):
     """Update global filter switches. Body: { "url_policy": true, "text_filter": false, ... }. Admin only."""
-    from core.policy_processor.policy_database import set_filter_switches, FILTER_SWITCH_KEYS
+    from core.policy.policy_database import set_filter_switches, FILTER_SWITCH_KEYS
     allowed = set(FILTER_SWITCH_KEYS)
     switches = {}
     for k, v in (body or {}).items():
         if k in allowed and isinstance(v, bool):
             switches[k] = v
     if not switches:
-        raise HTTPException(status_code=400, detail="נא לשלוח לפחות מתג אחד (url_policy, text_filter, image_filter, embedded_image_filter)")
-    set_filter_switches(switches)
-    from core.policy_processor.policy_database import get_filter_switches
+        raise HTTPException(status_code=400, detail="נא לשלוח לפחות מתג אחד (url_policy, text_filter, image_filter, embedded_image_filter, file_download_filter)")
+    set_filter_switches(switches, updated_by_user_id=admin.get("id"))
+    from core.policy.policy_database import get_filter_switches
     return get_filter_switches()
 
 
@@ -978,9 +1024,9 @@ async def resolver_test_url(
     Run the same URLPolicyResolver used by the proxy on a given URL.
     Returns state (allow/block/review) and the matching rule if any.
     """
-    from core.policy_processor.policy_loader import get_policy_resolver
-    from core.policy_processor.policy_database import get_profile_mode
-    from core.policy_processor.url_policy_resolver import URLPolicyResolverError
+    from core.policy.policy_loader import get_policy_resolver
+    from core.policy.policy_database import get_profile_mode
+    from core.policy.url_policy_resolver import URLPolicyResolverError
 
     url = body.url.strip()
     if "://" not in url:
@@ -1007,12 +1053,131 @@ async def resolver_test_url(
 CRM_PROXY_SECRET = os.environ.get("CRM_PROXY_SECRET", "dev-secret").strip()
 
 
+def _verify_surf_token(token: str) -> Optional[dict]:
+    """Verify surf widget token (from proxy); return { user_id } or None."""
+    import base64
+    import hashlib
+    import hmac
+    if not token or "." not in token:
+        return None
+    parts = token.split(".", 1)
+    payload_b64_raw = parts[0]
+    sig_got = parts[1]
+    try:
+        payload_b64 = payload_b64_raw
+        padding = 4 - len(payload_b64) % 4
+        if padding != 4:
+            payload_b64 += "=" * padding
+        payload = base64.urlsafe_b64decode(payload_b64).decode()
+    except Exception:
+        return None
+    sig_exp = hmac.new(
+        CRM_PROXY_SECRET.encode(),
+        payload_b64_raw.encode(),
+        digestmod=hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(sig_exp, sig_got):
+        return None
+    # payload is "user_id:expiry"
+    vals = payload.split(":", 1)
+    if len(vals) != 2:
+        return None
+    try:
+        user_id = int(vals[0])
+        expiry = int(vals[1])
+    except ValueError:
+        return None
+    if int(__import__("time").time()) > expiry:
+        return None
+    return {"user_id": user_id}
+
+
+@app.get("/api/surf-widget/context")
+async def surf_widget_context(
+    token: str = Query(..., description="Surf token from injected page"),
+):
+    """Return { is_admin } for the bound user. Used by the injected surf widget (no cookie)."""
+    ctx = _verify_surf_token(token)
+    if not ctx:
+        raise HTTPException(status_code=401, detail="Token invalid or expired")
+    user = get_user_by_id(ctx["user_id"])
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    # Only admins: require explicit True (no truthy confusion)
+    is_admin = user.get("is_admin") is True
+    return {"is_admin": is_admin}
+
+
+@app.post("/api/surf-widget/block")
+async def surf_widget_block(request: Request):
+    """Create a global block rule for the given URL. Admin only (verified via token)."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    token = body.get("token")
+    url = (body.get("url") or "").strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing token")
+    if not url:
+        raise HTTPException(status_code=400, detail="Missing url")
+    ctx = _verify_surf_token(token)
+    if not ctx:
+        raise HTTPException(status_code=401, detail="Token invalid or expired")
+    user = get_user_by_id(ctx["user_id"])
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    if user.get("is_admin") is not True:
+        raise HTTPException(status_code=403, detail="הרשאת מנהל נדרשת לחסימת אתרים")
+    try:
+        rule = ensure_global_block_rule_for_url(
+            url=url,
+            updated_by_user_id=user.get("id"),
+        )
+        sync_crm_rules_to_core(None)
+        return {"success": True, "reload": True}
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/surf-widget/update-rule-to-block")
+async def surf_widget_update_rule_to_block(request: Request):
+    """Find global rule by domain+path and update to block. Admin only (verified via token)."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    token = body.get("token")
+    rule_domain = (body.get("rule_domain") or "").strip()
+    rule_path = (body.get("rule_path") or "/").strip() or "/"
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing token")
+    if not rule_domain:
+        raise HTTPException(status_code=400, detail="Missing rule_domain")
+    ctx = _verify_surf_token(token)
+    if not ctx:
+        raise HTTPException(status_code=401, detail="Token invalid or expired")
+    user = get_user_by_id(ctx["user_id"])
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    if user.get("is_admin") is not True:
+        raise HTTPException(status_code=403, detail="הרשאת מנהל נדרשת לעדכון כלל")
+    try:
+        rule = find_and_update_global_rule_to_block(
+            rule_domain, rule_path, updated_by_user_id=user.get("id")
+        )
+        sync_crm_rules_to_core(None)
+        return {"success": True, "reload": True}
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
+
+
 @app.post("/api/rule-requests", response_model=RuleRequestResponse, status_code=status.HTTP_201_CREATED)
 async def create_rule_request(
     data: RuleRequestCreate,
     current_user: dict = Depends(get_current_user),
 ):
-    """Create a rule request (open or change). Only pending; admin approves later."""
+    """Create a rule request (open, change, or file). Only pending; admin approves later."""
     try:
         req = add_rule_request(
             user_id=current_user["id"],
@@ -1023,6 +1188,8 @@ async def create_rule_request(
             action=data.action,
             include_subdomains=data.include_subdomains,
             tags=data.tags,
+            request_url=getattr(data, "request_url", None),
+            notes=data.notes,
         )
         out = dict(req)
         out["include_subdomains"] = bool(req.get("include_subdomains"))
@@ -1084,6 +1251,9 @@ async def list_rule_requests_endpoint(
             approved_profile_id=r.get("approved_profile_id"),
             is_from_blocked_page=False,
             request_url=r.get("request_url"),
+            notes=r.get("notes"),
+            resolved_by_user_id=r.get("resolved_by_user_id"),
+            resolved_by_name=r.get("resolved_by_name"),
         ))
     return {"requests": out, "total": total}
 
@@ -1119,6 +1289,9 @@ async def get_rule_request_endpoint(
         approved_profile_id=req.get("approved_profile_id"),
         is_from_blocked_page=False,
         request_url=req.get("request_url"),
+        notes=req.get("notes"),
+        resolved_by_user_id=req.get("resolved_by_user_id"),
+        resolved_by_name=req.get("resolved_by_name"),
     )
 
 
@@ -1169,6 +1342,9 @@ async def update_rule_request_endpoint(
             approved_profile_id=updated.get("approved_profile_id"),
             is_from_blocked_page=False,
             request_url=updated.get("request_url"),
+            notes=updated.get("notes"),
+            resolved_by_user_id=updated.get("resolved_by_user_id"),
+            resolved_by_name=updated.get("resolved_by_name"),
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1182,7 +1358,7 @@ async def approve_rule_request_endpoint(
 ):
     """Admin approves a request: create the rule on the given profile."""
     try:
-        req = approve_rule_request(request_id, profile_id=body.profile_id)
+        req = approve_rule_request(request_id, profile_id=body.profile_id, resolved_by_user_id=admin.get("id"))
         return {"status": "approved", "request": RuleRequestResponse(**{**req, "include_subdomains": bool(req.get("include_subdomains"))})}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1195,7 +1371,7 @@ async def reject_rule_request_endpoint(
 ):
     """Admin rejects a request."""
     try:
-        req = reject_rule_request(request_id)
+        req = reject_rule_request(request_id, resolved_by_user_id=admin.get("id"))
         return {"status": "rejected", "request": RuleRequestResponse(**{**req, "include_subdomains": bool(req.get("include_subdomains"))})}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1238,26 +1414,62 @@ async def create_support_ticket_endpoint(
     data: SupportTicketCreate,
     current_user: dict = Depends(get_current_user),
 ):
-    """Create a new support ticket (subject + content, optional attachments)."""
+    """Create a new support ticket (subject + content, optional attachments). Optional attached_request: creates rule request and links to ticket."""
+    if not (data.content or (data.attached_request is not None)):
+        raise HTTPException(status_code=400, detail="נא להזין תוכן או לצרף בקשה לפתיחה")
     try:
         attachments = [{"name": a.name, "url": a.url} for a in (data.attachments or [])]
+        rid = None
+        snapshot_json = None
+        if data.attached_request:
+            req = add_rule_request(
+                user_id=current_user["id"],
+                request_type=data.attached_request.request_type,
+                url=data.attached_request.url,
+                domain_pattern=data.attached_request.domain_pattern,
+                path_pattern=data.attached_request.path_pattern,
+                action=data.attached_request.action,
+                include_subdomains=data.attached_request.include_subdomains or False,
+                tags=data.attached_request.tags,
+                notes=data.attached_request.notes,
+            )
+            rid = req["id"]
+            snapshot_json = json.dumps(data.attached_request.model_dump(), ensure_ascii=False)
         ticket = create_support_ticket(
             user_id=current_user["id"],
             subject=data.subject,
-            content=data.content,
+            content=data.content or "",
             attachments=attachments or None,
+            attached_rule_request_id=rid,
+            request_snapshot_for_client=snapshot_json,
         )
-        return SupportTicketResponse(
-            id=ticket["id"],
-            user_id=ticket["user_id"],
-            subject=ticket["subject"],
-            content=ticket["content"],
-            created_at=ticket["created_at"],
-            updated_at=ticket["updated_at"],
-            attachments=ticket.get("attachments"),
-        )
+        return _support_ticket_to_response(ticket)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+def _support_ticket_to_response(ticket: dict, user: Optional[dict] = None) -> SupportTicketResponse:
+    """Build SupportTicketResponse from ticket dict. If user not provided, fetches by ticket['user_id']."""
+    u = user if user is not None else get_user_by_id(ticket["user_id"])
+    return SupportTicketResponse(
+        id=ticket["id"],
+        user_id=ticket["user_id"],
+        subject=ticket["subject"],
+        content=ticket.get("content", ""),
+        created_at=ticket["created_at"],
+        updated_at=ticket["updated_at"],
+        content_preview=ticket.get("content_preview"),
+        user_first_name=u.get("first_name") if u else None,
+        user_last_name=u.get("last_name") if u else None,
+        user_phone=u.get("phone") if u else None,
+        user_avatar_url=u.get("avatar_url") if u else None,
+        replies_count=ticket.get("replies_count"),
+        unread_replies_count=ticket.get("unread_replies_count"),
+        attachments=ticket.get("attachments"),
+        attached_rule_request_id=ticket.get("attached_rule_request_id"),
+        request_snapshot_for_client=ticket.get("request_snapshot_for_client"),
+        attached_request_status=ticket.get("attached_request_status"),
+    )
 
 
 @app.get("/api/support/tickets")
@@ -1276,7 +1488,7 @@ async def list_support_tickets_endpoint(
         )
     elif current_user.get("is_admin"):
         rows, total = list_all_support_tickets(
-            page=page, page_size=page_size, sort_order=sort_order, search=search
+            page=page, page_size=page_size, sort_order=sort_order, search=search, viewer_id=current_user["id"]
         )
     else:
         rows, total = list_my_support_tickets(
@@ -1295,6 +1507,9 @@ async def list_support_tickets_endpoint(
             user_phone=r.get("user_phone"),
             replies_count=r.get("replies_count", 0),
             unread_replies_count=r.get("unread_replies_count", 0),
+            attached_rule_request_id=r.get("attached_rule_request_id"),
+            request_snapshot_for_client=r.get("request_snapshot_for_client"),
+            attached_request_status=r.get("attached_request_status"),
         )
         for r in rows
     ]
@@ -1307,7 +1522,7 @@ async def support_stats_endpoint(current_user: dict = Depends(get_current_user))
     tickets_with_replies = count_my_tickets_with_unread_replies(current_user["id"])
     out = {"tickets_with_replies": tickets_with_replies}
     if current_user.get("is_admin"):
-        out["admin_tickets_with_replies"] = count_all_tickets_with_unread_replies()
+        out["admin_tickets_with_replies"] = count_all_tickets_with_unread_replies(admin_viewer_id=current_user["id"])
     return out
 
 
@@ -1322,20 +1537,7 @@ async def get_support_ticket_endpoint(
         raise HTTPException(status_code=404, detail="פנייה לא נמצאה")
     if ticket["user_id"] != current_user["id"] and not current_user.get("is_admin"):
         raise HTTPException(status_code=404, detail="פנייה לא נמצאה")
-    user = get_user_by_id(ticket["user_id"])
-    return SupportTicketResponse(
-        id=ticket["id"],
-        user_id=ticket["user_id"],
-        subject=ticket["subject"],
-        content=ticket["content"],
-        created_at=ticket["created_at"],
-        updated_at=ticket["updated_at"],
-        user_first_name=user.get("first_name") if user else None,
-        user_last_name=user.get("last_name") if user else None,
-        user_phone=user.get("phone") if user else None,
-        user_avatar_url=user.get("avatar_url") if user else None,
-        attachments=ticket.get("attachments"),
-    )
+    return _support_ticket_to_response(ticket)
 
 
 @app.get("/api/support/tickets/{ticket_id}/replies", response_model=List[SupportReplyResponse])
@@ -1363,6 +1565,7 @@ async def list_support_replies_endpoint(
             author_avatar_url=r.get("author_avatar_url"),
             is_unread=r.get("is_unread", False),
             attachments=r.get("attachments"),
+            attached_request_snapshot=r.get("attached_request_snapshot"),
         )
         for r in replies
     ]
@@ -1380,13 +1583,16 @@ async def create_support_reply_endpoint(
         raise HTTPException(status_code=404, detail="פנייה לא נמצאה")
     if ticket["user_id"] != current_user["id"] and not current_user.get("is_admin"):
         raise HTTPException(status_code=403, detail="אין הרשאה להגיב על פנייה זו")
+    if not (data.content or (data.attachments and len(data.attachments) > 0) or ((data.attached_request_snapshot or "").strip())):
+        raise HTTPException(status_code=400, detail="נא להזין תוכן, לצרף קובץ או לצרף עותק ערוך של הבקשה")
     try:
         attachments = [{"name": a.name, "url": a.url} for a in (data.attachments or [])]
         reply = add_support_reply(
             ticket_id=ticket_id,
             author_id=current_user["id"],
-            content=data.content,
+            content=data.content or "",
             attachments=attachments or None,
+            attached_request_snapshot=data.attached_request_snapshot.strip() if data.attached_request_snapshot else None,
         )
         return SupportReplyResponse(
             id=reply["id"],
@@ -1399,6 +1605,7 @@ async def create_support_reply_endpoint(
             author_avatar_url=reply.get("author_avatar_url"),
             is_unread=False,
             attachments=reply.get("attachments"),
+            attached_request_snapshot=reply.get("attached_request_snapshot"),
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1462,6 +1669,7 @@ async def admin_create_global_rule(
             text_filter_enabled=tf,
             image_filter_enabled=imgf,
             file_filter_enabled=filef,
+            created_by_user_id=admin.get("id"),
         )
         sync_crm_rules_to_core(None)
         return GlobalRuleResponse(**rule)
@@ -1508,6 +1716,7 @@ async def admin_update_global_rule(
             text_filter_enabled=tf,
             image_filter_enabled=imgf,
             file_filter_enabled=filef,
+            updated_by_user_id=admin.get("id"),
         )
         sync_crm_rules_to_core(None)
         return GlobalRuleResponse(**updated)
@@ -1529,6 +1738,30 @@ async def admin_delete_global_rule(
         sync_crm_rules_to_core(None)
     else:
         raise HTTPException(status_code=404, detail="כלל גלובלי לא נמצא")
+
+
+@app.post("/api/admin/surf-update-rule-to-block")
+async def admin_surf_update_rule_to_block(
+    request: Request,
+    admin: dict = Depends(get_current_admin),
+):
+    """Find global rule by domain_pattern and path_pattern, update to block. Admin only (session)."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    rule_domain = (body.get("rule_domain") or "").strip()
+    rule_path = (body.get("rule_path") or "/").strip() or "/"
+    if not rule_domain:
+        raise HTTPException(status_code=400, detail="חסר rule_domain")
+    try:
+        rule = find_and_update_global_rule_to_block(
+            rule_domain, rule_path, updated_by_user_id=admin.get("id")
+        )
+        sync_crm_rules_to_core(None)
+        return {"success": True, "rule": GlobalRuleResponse(**rule)}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @app.get("/api/admin/users")
@@ -1692,7 +1925,7 @@ async def delete_my_binding(
 @app.post("/api/traffic/start", status_code=status.HTTP_201_CREATED)
 async def traffic_start(current_user: dict = Depends(get_current_user)):
     """Start traffic recording for the current user. Proxy will log requests until stop."""
-    from core.policy_processor.policy_database import start_traffic_session, get_active_traffic_session_id
+    from core.policy.policy_database import start_traffic_session, get_active_traffic_session_id
     if get_active_traffic_session_id(current_user["id"]) is not None:
         raise HTTPException(status_code=400, detail="הקלטה כבר פעילה. סיים הקלטה קיימת לפני התחלה חדשה.")
     session_id = start_traffic_session(current_user["id"])
@@ -1702,7 +1935,7 @@ async def traffic_start(current_user: dict = Depends(get_current_user)):
 @app.post("/api/traffic/stop")
 async def traffic_stop(current_user: dict = Depends(get_current_user)):
     """Stop traffic recording and return session_id and share_token (link for anyone to view)."""
-    from core.policy_processor.policy_database import stop_traffic_session
+    from core.policy.policy_database import stop_traffic_session
     result = stop_traffic_session(current_user["id"])
     if result is None:
         raise HTTPException(status_code=400, detail="אין הקלטה פעילה.")
@@ -1713,7 +1946,7 @@ async def traffic_stop(current_user: dict = Depends(get_current_user)):
 @app.get("/api/traffic/status")
 async def traffic_status(current_user: dict = Depends(get_current_user)):
     """Return whether the user is currently recording and active session_id if any."""
-    from core.policy_processor.policy_database import get_active_traffic_session_id
+    from core.policy.policy_database import get_active_traffic_session_id
     session_id = get_active_traffic_session_id(current_user["id"])
     return {"recording": session_id is not None, "session_id": session_id}
 
@@ -1721,7 +1954,7 @@ async def traffic_status(current_user: dict = Depends(get_current_user)):
 @app.get("/api/traffic/sessions")
 async def traffic_sessions(current_user: dict = Depends(get_current_user)):
     """List traffic recording sessions for the current user."""
-    from core.policy_processor.policy_database import get_traffic_sessions
+    from core.policy.policy_database import get_traffic_sessions
     sessions = get_traffic_sessions(current_user["id"])
     return {"sessions": sessions}
 
@@ -1732,18 +1965,23 @@ async def traffic_log(
     current_user: dict = Depends(get_current_user),
 ):
     """Get traffic log entries for a recording session. Session must belong to current user."""
-    from core.policy_processor.policy_database import get_traffic_log
+    from core.policy.policy_database import get_traffic_log
     entries = get_traffic_log(session_id, current_user["id"])
     return {"session_id": session_id, "entries": entries}
 
 
 @app.get("/api/traffic/view/{token}")
-async def traffic_view_by_token(token: str):
-    """Public: view a recording by share token. Anyone with the link can see the full log."""
-    from core.policy_processor.policy_database import get_traffic_session_by_token, get_traffic_log_by_session_id
+async def traffic_view_by_token(
+    token: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """צפייה בהקלטה לפי קישור – דורש התחברות. כל משתמש מחובר יכול לצפות. הצפייה נרשמת ללוג אבטחה."""
+    from core.policy.policy_database import get_traffic_session_by_token, get_traffic_log_by_session_id
+    from crm.database import log_traffic_recording_view
     session = get_traffic_session_by_token(token)
     if not session:
         raise HTTPException(status_code=404, detail="הקלטה לא נמצאה או שהקישור לא תקין.")
+    log_traffic_recording_view(session["id"], current_user["id"])
     entries = get_traffic_log_by_session_id(session["id"])
     return {
         "session_id": session["id"],
@@ -1752,6 +1990,17 @@ async def traffic_view_by_token(token: str):
         "share_token": session["share_token"],
         "entries": entries,
     }
+
+
+@app.get("/api/admin/traffic-recording-views")
+async def admin_list_traffic_recording_views(
+    session_id: Optional[int] = None,
+    admin: dict = Depends(get_current_admin),
+):
+    """לוג אבטחה: רשימת משתמשים שצפו בהקלטות תעבורה, עם זמני צפייה. אפשר לסנן לפי session_id."""
+    from crm.database import get_traffic_recording_views
+    rows = get_traffic_recording_views(session_id=session_id)
+    return {"views": rows}
 
 
 @app.post("/api/internal/touch-ip")

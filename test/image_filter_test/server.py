@@ -6,8 +6,8 @@ import uuid
 import magic
 import requests
 
-from core.image_processing.llm_image_analyzer import LLMImageAnalyzer
-from core.image_processing.image_processing_queue import ImageProcessingQueue, TaskStatus
+from core.filters.image.llm_image_analyzer import LLMImageAnalyzer
+from core.filters.image.image_processing_queue import ImageProcessingQueue, TaskStatus
 
 app = FastAPI()
 

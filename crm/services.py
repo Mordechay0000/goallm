@@ -741,6 +741,7 @@ def create_global_rule(
     text_filter_enabled: bool = True,
     image_filter_enabled: bool = True,
     file_filter_enabled: bool = True,
+    created_by_user_id: Optional[int] = None,
 ) -> Dict:
     """Create a global rule (admin only). Raises if exact duplicate exists."""
     url = _normalize_url(url)
@@ -759,9 +760,9 @@ def create_global_rule(
     try:
         cursor = db_connection.execute("""
             INSERT INTO global_rules
-            (domain_pattern, path_pattern, action, include_subdomains, tags, text_filter_enabled, image_filter_enabled, file_filter_enabled, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (domain_pattern, path_val, action, 1 if include_subdomains else 0, tags_str, 1 if text_filter_enabled else 0, 1 if image_filter_enabled else 0, 1 if file_filter_enabled else 0, now, now))
+            (domain_pattern, path_pattern, action, include_subdomains, tags, text_filter_enabled, image_filter_enabled, file_filter_enabled, created_at, updated_at, created_by_user_id, updated_by_user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (domain_pattern, path_val, action, 1 if include_subdomains else 0, tags_str, 1 if text_filter_enabled else 0, 1 if image_filter_enabled else 0, 1 if file_filter_enabled else 0, now, now, created_by_user_id, created_by_user_id))
         rule_id = cursor.lastrowid
         db_connection.commit()
         return get_global_rule(rule_id)
@@ -779,6 +780,7 @@ def update_global_rule(
     text_filter_enabled: Optional[bool] = None,
     image_filter_enabled: Optional[bool] = None,
     file_filter_enabled: Optional[bool] = None,
+    updated_by_user_id: Optional[int] = None,
 ) -> Dict:
     """Update a global rule. Raises if change would create duplicate."""
     rule = get_global_rule(rule_id)
@@ -811,11 +813,67 @@ def update_global_rule(
     db_connection.execute("""
         UPDATE global_rules
         SET domain_pattern = ?, path_pattern = ?, action = ?,
-            include_subdomains = ?, tags = ?, text_filter_enabled = ?, image_filter_enabled = ?, file_filter_enabled = ?, updated_at = ?
+            include_subdomains = ?, tags = ?, text_filter_enabled = ?, image_filter_enabled = ?, file_filter_enabled = ?, updated_at = ?, updated_by_user_id = ?
         WHERE id = ?
-    """, (domain_pattern, path, new_action, 1 if include_subdomains else 0, new_tags_str, 1 if new_text_filter else 0, 1 if new_image_filter else 0, 1 if new_file_filter else 0, now, rule_id))
+    """, (domain_pattern, path, new_action, 1 if include_subdomains else 0, new_tags_str, 1 if new_text_filter else 0, 1 if new_image_filter else 0, 1 if new_file_filter else 0, now, updated_by_user_id, rule_id))
     db_connection.commit()
     return get_global_rule(rule_id)
+
+
+def ensure_global_block_rule_for_url(
+    url: str,
+    updated_by_user_id: Optional[int] = None,
+) -> Dict:
+    """
+    Ensure the exact URL (domain + path, no subdomains) is blocked.
+    If a global rule already exists for this exact (domain, path, include_subdomains=False),
+    update it to block. Otherwise create a new rule with action=block, include_subdomains=False.
+    """
+    url = _normalize_url(url)
+    if not url.startswith("http"):
+        url = "https://" + url
+    domain, path, _ = parse_url(url)
+    if not domain:
+        raise ValueError("לא ניתן לפרש את הכתובת")
+    path = path or "/"
+    # Exact match only (no *. prefix)
+    rule_id = _global_rule_exists(domain, path, include_subdomains=False)
+    if rule_id:
+        return update_global_rule(
+            rule_id,
+            action="block",
+            updated_by_user_id=updated_by_user_id,
+        )
+    return create_global_rule(
+        url=url,
+        action="block",
+        include_subdomains=False,
+        created_by_user_id=updated_by_user_id,
+    )
+
+
+def find_and_update_global_rule_to_block(
+    domain_pattern: str,
+    path_pattern: Optional[str],
+    updated_by_user_id: Optional[int] = None,
+) -> Dict:
+    """
+    Find a global rule by domain_pattern and path_pattern (exact match), update to block.
+    Tries with include_subdomains True and False. Raises ValueError if not found.
+    """
+    domain_pattern = (domain_pattern or "").strip()
+    path_pattern = (path_pattern or "/").strip() or "/"
+    for inc in (True, False):
+        rule_id = _global_rule_exists(domain_pattern, path_pattern, inc)
+        if rule_id:
+            return update_global_rule(
+                rule_id,
+                action="block",
+                updated_by_user_id=updated_by_user_id,
+            )
+    raise ValueError(
+        "הכלל לא נמצא ברשימה הגלובלית – אי אפשר לעדכן. השתמש ב׳חסום את האתר׳ ליצירת כלל חדש."
+    )
 
 
 def delete_global_rule(rule_id: int) -> bool:
@@ -918,7 +976,7 @@ def sync_ip_bindings_to_core() -> None:
         root = Path(__file__).resolve().parent.parent
         if str(root) not in sys.path:
             sys.path.insert(0, str(root))
-        from core.policy_processor.policy_database import set_ip_bindings
+        from core.policy.policy_database import set_ip_bindings
         bindings = get_all_ip_bindings()
         set_ip_bindings([(b["ip"], b["user_id"]) for b in bindings])
     except Exception as e:
@@ -936,8 +994,8 @@ def get_tag_rules(enabled_only: bool = False) -> List[Dict]:
     return [dict(row) for row in cursor.fetchall()]
 
 
-def add_tag_rule(tag: str, state: str = "block", enabled: bool = True) -> Dict:
-    """Add a tag rule."""
+def add_tag_rule(tag: str, state: str = "block", enabled: bool = True, created_by_user_id: Optional[int] = None) -> Dict:
+    """Add a tag rule. created_by_user_id stored for audit only (not displayed in API)."""
     tag = (tag or "").strip()
     if not tag:
         raise ValueError("נא להזין תגית.")
@@ -946,9 +1004,9 @@ def add_tag_rule(tag: str, state: str = "block", enabled: bool = True) -> Dict:
     now = int(datetime.now().timestamp())
     try:
         cursor = db_connection.execute("""
-            INSERT INTO tag_rules (tag, state, enabled, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-        """, (tag, state, 1 if enabled else 0, now, now))
+            INSERT INTO tag_rules (tag, state, enabled, created_at, updated_at, created_by_user_id, updated_by_user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (tag, state, 1 if enabled else 0, now, now, created_by_user_id, created_by_user_id))
         db_connection.commit()
         rid = cursor.lastrowid
         row = db_connection.execute("SELECT id, tag, state, enabled, created_at, updated_at FROM tag_rules WHERE id = ?", (rid,)).fetchone()
@@ -957,8 +1015,8 @@ def add_tag_rule(tag: str, state: str = "block", enabled: bool = True) -> Dict:
         raise ValueError(f"כלל לתגית '{tag}' כבר קיים")
 
 
-def update_tag_rule(rule_id: int, tag: Optional[str] = None, state: Optional[str] = None, enabled: Optional[bool] = None) -> Dict:
-    """Update a tag rule."""
+def update_tag_rule(rule_id: int, tag: Optional[str] = None, state: Optional[str] = None, enabled: Optional[bool] = None, updated_by_user_id: Optional[int] = None) -> Dict:
+    """Update a tag rule. updated_by_user_id stored for audit only (not displayed in API)."""
     cursor = db_connection.execute("SELECT * FROM tag_rules WHERE id = ?", (rule_id,))
     row = cursor.fetchone()
     if not row:
@@ -971,8 +1029,8 @@ def update_tag_rule(rule_id: int, tag: Optional[str] = None, state: Optional[str
         raise ValueError("סטטוס לא חוקי")
     now = int(datetime.now().timestamp())
     db_connection.execute("""
-        UPDATE tag_rules SET tag = ?, state = ?, enabled = ?, updated_at = ? WHERE id = ?
-    """, (new_tag, new_state, 1 if new_enabled else 0, now, rule_id))
+        UPDATE tag_rules SET tag = ?, state = ?, enabled = ?, updated_at = ?, updated_by_user_id = ? WHERE id = ?
+    """, (new_tag, new_state, 1 if new_enabled else 0, now, updated_by_user_id, rule_id))
     db_connection.commit()
     row = db_connection.execute("SELECT id, tag, state, enabled, created_at, updated_at FROM tag_rules WHERE id = ?", (rule_id,)).fetchone()
     return dict(row)
@@ -1005,7 +1063,7 @@ def sync_crm_rules_to_core(user_id: Optional[int] = None, set_default: bool = Tr
         if str(root) not in sys.path:
             sys.path.insert(0, str(root))
         from .resolver_integration import get_system_active_profile_and_rules
-        from core.policy_processor.policy_database import (
+        from core.policy.policy_database import (
             get_all_policies,
             add_policy as core_add_policy,
             update_policy as core_update_policy,
@@ -1318,41 +1376,51 @@ def add_rule_request(
     include_subdomains: bool = False,
     tags: Optional[List[str]] = None,
     request_url: Optional[str] = None,
+    notes: Optional[str] = None,
 ) -> Dict:
-    """Create a rule request (open or change). status=pending. If url given, parse to domain/path if missing. request_url = full URL user tried to access (read-only display)."""
-    if request_type not in ("open", "change"):
+    """Create a rule request (open, change, or file). status=pending. If url given, parse to domain/path if missing (for open/change). request_url = full URL (e.g. file URL). notes = for file requests: user description."""
+    if request_type not in ("open", "change", "file"):
         raise ValueError("סוג בקשה לא חוקי")
-    if url:
+    if url and request_type != "file":
         url = _normalize_url(url)
-    if url and (not domain_pattern and not path_pattern):
+    if url and request_type != "file" and (not domain_pattern and not path_pattern):
         parsed_domain, parsed_path, _ = parse_url(url)
         domain_pattern = parsed_domain or ""
         path_pattern = parsed_path or "/"
     now = int(datetime.now().timestamp())
     tags_str = _tags_to_str(tags)
     req_url = (request_url or "").strip() or None
+    notes_val = (notes or "").strip() or None
+    if request_type == "file" and req_url is None and (url or "").strip():
+        req_url = (url or "").strip()
     cursor = db_connection.execute("""
         INSERT INTO rule_requests
-        (user_id, request_type, url, domain_pattern, path_pattern, action, type, include_subdomains, tags, status, created_at, updated_at, request_url)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
-    """, (user_id, request_type, url or "", domain_pattern or "", path_pattern or "", action or "allow", "*", 1 if include_subdomains else 0, tags_str, now, now, req_url))
+        (user_id, request_type, url, domain_pattern, path_pattern, action, type, include_subdomains, tags, status, created_at, updated_at, request_url, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
+    """, (user_id, request_type, url or "", domain_pattern or "", path_pattern or "", action or "allow", "*", 1 if include_subdomains else 0, tags_str, now, now, req_url, notes_val))
     rid = cursor.lastrowid
     db_connection.commit()
     return get_rule_request(rid)
 
 
 def get_rule_request(request_id: int) -> Optional[Dict]:
-    """Get a single rule request."""
+    """Get a single rule request. Includes resolved_by_user_id and resolved_by_name (from users)."""
     cursor = db_connection.execute("""
-        SELECT id, user_id, request_type, url, domain_pattern, path_pattern, action, type, include_subdomains, tags, status, created_at, updated_at,
-               approved_rule_id, approved_profile_id, request_url
-        FROM rule_requests WHERE id = ?
+        SELECT r.id, r.user_id, r.request_type, r.url, r.domain_pattern, r.path_pattern, r.action, r.type, r.include_subdomains, r.tags, r.status, r.created_at, r.updated_at,
+               r.approved_rule_id, r.approved_profile_id, r.request_url, r.notes, r.resolved_by_user_id
+        FROM rule_requests r WHERE r.id = ?
     """, (request_id,))
     row = cursor.fetchone()
     if not row:
         return None
     d = dict(row)
     d["tags"] = _parse_tags(d.get("tags"))
+    d["resolved_by_name"] = None
+    if d.get("resolved_by_user_id"):
+        u = get_user_by_id(d["resolved_by_user_id"])
+        if u:
+            name = ((u.get("first_name") or "") + " " + (u.get("last_name") or "")).strip()
+            d["resolved_by_name"] = name or u.get("phone") or "—"
     return d
 
 
@@ -1396,7 +1464,7 @@ def list_rule_requests(
     cursor = db_connection.execute(
         f"""
         SELECT id, user_id, request_type, url, domain_pattern, path_pattern, action, type, include_subdomains, tags, status, created_at, updated_at,
-               approved_rule_id, approved_profile_id, request_url
+               approved_rule_id, approved_profile_id, request_url, notes, resolved_by_user_id
         FROM rule_requests {where}
         ORDER BY {order_col} {direction}
         LIMIT ? OFFSET ?
@@ -1408,17 +1476,31 @@ def list_rule_requests(
     for row in rows:
         d = dict(row)
         d["tags"] = _parse_tags(d.get("tags"))
+        d["resolved_by_name"] = None
+        if d.get("resolved_by_user_id"):
+            u = get_user_by_id(d["resolved_by_user_id"])
+            if u:
+                name = ((u.get("first_name") or "") + " " + (u.get("last_name") or "")).strip()
+                d["resolved_by_name"] = name or u.get("phone") or "—"
         out.append(d)
     return out, total
 
 
-def approve_rule_request(request_id: int, profile_id: Optional[int] = None) -> Dict:
-    """Admin approves a request: add or update rule in global list. If same rule exists, update it."""
+def approve_rule_request(request_id: int, profile_id: Optional[int] = None, resolved_by_user_id: Optional[int] = None) -> Dict:
+    """Admin approves a request: add or update rule in global list. For file requests, only mark as approved (no rule)."""
     req = get_rule_request(request_id)
     if not req:
         raise ValueError("בקשה לא נמצאה")
     if req["status"] == "approved":
         raise ValueError("הבקשה כבר אושרה")
+    now = int(datetime.now().timestamp())
+    if req.get("request_type") == "file":
+        db_connection.execute(
+            "UPDATE rule_requests SET status = 'approved', updated_at = ?, approved_rule_id = ?, approved_profile_id = ?, resolved_by_user_id = ? WHERE id = ?",
+            (now, None, None, resolved_by_user_id, request_id),
+        )
+        db_connection.commit()
+        return get_rule_request(request_id)
     url_raw = (req.get("url") or "").strip()
     if url_raw:
         url_for_rule = _normalize_url(url_raw)
@@ -1456,10 +1538,9 @@ def approve_rule_request(request_id: int, profile_id: Optional[int] = None) -> D
             file_filter_enabled=filef,
         )
         rule_id = created["id"]
-    now = int(datetime.now().timestamp())
     db_connection.execute(
-        "UPDATE rule_requests SET status = 'approved', updated_at = ?, approved_rule_id = ?, approved_profile_id = ? WHERE id = ?",
-        (now, rule_id, None, request_id),
+        "UPDATE rule_requests SET status = 'approved', updated_at = ?, approved_rule_id = ?, approved_profile_id = ?, resolved_by_user_id = ? WHERE id = ?",
+        (now, rule_id, None, resolved_by_user_id, request_id),
     )
     db_connection.commit()
     sync_crm_rules_to_core(None)
@@ -1496,7 +1577,7 @@ def update_rule_request(
     return get_rule_request(request_id)
 
 
-def reject_rule_request(request_id: int) -> Dict:
+def reject_rule_request(request_id: int, resolved_by_user_id: Optional[int] = None) -> Dict:
     """Admin rejects a request."""
     req = get_rule_request(request_id)
     if not req:
@@ -1505,8 +1586,8 @@ def reject_rule_request(request_id: int) -> Dict:
         raise ValueError("הבקשה כבר טופלה")
     now = int(datetime.now().timestamp())
     db_connection.execute(
-        "UPDATE rule_requests SET status = 'rejected', updated_at = ? WHERE id = ?",
-        (now, request_id),
+        "UPDATE rule_requests SET status = 'rejected', updated_at = ?, resolved_by_user_id = ? WHERE id = ?",
+        (now, resolved_by_user_id, request_id),
     )
     db_connection.commit()
     return get_rule_request(request_id)
@@ -1558,19 +1639,23 @@ def create_support_ticket(
     subject: str,
     content: str,
     attachments: Optional[List[Dict]] = None,
+    attached_rule_request_id: Optional[int] = None,
+    request_snapshot_for_client: Optional[str] = None,
 ) -> Dict:
-    """Create a new support ticket. attachments = list of {name, url}."""
+    """Create a new support ticket. attachments = list of {name, url}. Optional: attached_rule_request_id + request_snapshot_for_client (JSON) for בקשה לפתיחה."""
     subject = (subject or "").strip()
     content = (content or "").strip()
     if not subject:
         raise ValueError("נא להזין נושא")
-    if not content:
-        raise ValueError("נא להזין תוכן")
+    if not content and not attached_rule_request_id:
+        raise ValueError("נא להזין תוכן או לצרף בקשה")
     now = int(datetime.now().timestamp())
     att_json = _support_attachments_json(attachments)
+    snapshot = (request_snapshot_for_client or "").strip() or None
+    rid = attached_rule_request_id
     cursor = db_connection.execute(
-        "INSERT INTO support_tickets (user_id, subject, content, created_at, updated_at, attachments) VALUES (?, ?, ?, ?, ?, ?)",
-        (user_id, subject, content, now, now, att_json),
+        "INSERT INTO support_tickets (user_id, subject, content, created_at, updated_at, attachments, attached_rule_request_id, request_snapshot_for_client) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (user_id, subject, content or "", now, now, att_json, rid, snapshot),
     )
     tid = cursor.lastrowid
     db_connection.commit()
@@ -1578,9 +1663,9 @@ def create_support_ticket(
 
 
 def get_support_ticket(ticket_id: int) -> Optional[Dict]:
-    """Get a single support ticket."""
+    """Get a single support ticket. If attached_rule_request_id set, includes request_snapshot_for_client and attached_request_status (from rule_requests)."""
     cursor = db_connection.execute(
-        "SELECT id, user_id, subject, content, created_at, updated_at, attachments FROM support_tickets WHERE id = ?",
+        "SELECT id, user_id, subject, content, created_at, updated_at, attachments, attached_rule_request_id, request_snapshot_for_client FROM support_tickets WHERE id = ?",
         (ticket_id,),
     )
     row = cursor.fetchone()
@@ -1588,6 +1673,10 @@ def get_support_ticket(ticket_id: int) -> Optional[Dict]:
         return None
     d = dict(row)
     d["attachments"] = _support_attachments_parse(d.get("attachments"))
+    rid = d.get("attached_rule_request_id")
+    if rid:
+        req = get_rule_request(rid)
+        d["attached_request_status"] = req["status"] if req else None
     return d
 
 
@@ -1642,6 +1731,7 @@ def list_my_support_tickets(
     cursor = db_connection.execute(
         f"""
         SELECT t.id, t.user_id, t.subject, t.content, t.created_at, t.updated_at,
+               t.attached_rule_request_id, t.request_snapshot_for_client,
                (SELECT COUNT(*) FROM support_replies r WHERE r.ticket_id = t.id) AS replies_count
         FROM support_tickets t
         WHERE t.user_id = ?
@@ -1660,6 +1750,11 @@ def list_my_support_tickets(
             (r["id"], user_id, last_read),
         )
         r["unread_replies_count"] = cursor2.fetchone()[0] or 0
+        if r.get("attached_rule_request_id"):
+            req = get_rule_request(r["attached_rule_request_id"])
+            r["attached_request_status"] = req["status"] if req else None
+        else:
+            r["attached_request_status"] = None
     return rows, total
 
 
@@ -1668,8 +1763,9 @@ def list_all_support_tickets(
     page_size: int = 25,
     sort_order: str = "desc",
     search: Optional[str] = None,
+    viewer_id: Optional[int] = None,
 ) -> tuple[List[Dict], int]:
-    """List all support tickets (admin). Returns (list, total). Includes replies_count. Optional search by subject/content/user."""
+    """List all support tickets (admin). Returns (list, total). When viewer_id is set, unread_replies_count is from that viewer's perspective (so admin sees 0 after reading)."""
     page = max(1, page)
     page_size = max(1, min(100, page_size))
     offset = (page - 1) * page_size
@@ -1693,6 +1789,7 @@ def list_all_support_tickets(
     cursor = db_connection.execute(
         f"""
         SELECT t.id, t.user_id, t.subject, t.content, t.created_at, t.updated_at,
+               t.attached_rule_request_id, t.request_snapshot_for_client,
                (SELECT COUNT(*) FROM support_replies r WHERE r.ticket_id = t.id) AS replies_count
         FROM support_tickets t
         LEFT JOIN users u ON u.id = t.user_id
@@ -1706,17 +1803,30 @@ def list_all_support_tickets(
     for r in rows:
         r["content_preview"] = _content_preview(r.get("content") or "")
         r["replies_count"] = r.get("replies_count") or 0
-        # unread_replies_count = replies from others not yet read by ticket owner
-        owner_id = r["user_id"]
-        last_read = _get_ticket_last_read_at(r["id"], owner_id)
-        cursor2 = db_connection.execute(
-            "SELECT COUNT(*) FROM support_replies WHERE ticket_id = ? AND author_id != ? AND created_at > ?",
-            (r["id"], owner_id, last_read),
-        )
-        r["unread_replies_count"] = cursor2.fetchone()[0] or 0
+        # unread_replies_count: when viewer_id (admin) is set, count replies after viewer's last read; else owner's unread
+        if viewer_id is not None:
+            last_read = _get_ticket_last_read_at(r["id"], viewer_id)
+            cursor2 = db_connection.execute(
+                "SELECT COUNT(*) FROM support_replies WHERE ticket_id = ? AND created_at > ?",
+                (r["id"], last_read),
+            )
+            r["unread_replies_count"] = cursor2.fetchone()[0] or 0
+        else:
+            owner_id = r["user_id"]
+            last_read = _get_ticket_last_read_at(r["id"], owner_id)
+            cursor2 = db_connection.execute(
+                "SELECT COUNT(*) FROM support_replies WHERE ticket_id = ? AND author_id != ? AND created_at > ?",
+                (r["id"], owner_id, last_read),
+            )
+            r["unread_replies_count"] = cursor2.fetchone()[0] or 0
         user = get_user_by_id(r["user_id"])
         r["user_first_name"] = (user or {}).get("first_name")
         r["user_phone"] = (user or {}).get("phone")
+        if r.get("attached_rule_request_id"):
+            req = get_rule_request(r["attached_rule_request_id"])
+            r["attached_request_status"] = req["status"] if req else None
+        else:
+            r["attached_request_status"] = None
     return rows, total
 
 
@@ -1758,8 +1868,19 @@ def count_all_tickets_with_replies() -> int:
     return cursor.fetchone()[0] or 0
 
 
-def count_all_tickets_with_unread_replies() -> int:
-    """Count tickets where the owner has at least one unread reply (admin badge)."""
+def count_all_tickets_with_unread_replies(admin_viewer_id: Optional[int] = None) -> int:
+    """Count tickets with unread replies. When admin_viewer_id is set, count from admin's perspective (replies after admin's last read). Else owner's unread."""
+    if admin_viewer_id is not None:
+        cursor = db_connection.execute(
+            """
+            SELECT COUNT(DISTINCT t.id) FROM support_tickets t
+            JOIN support_replies r ON r.ticket_id = t.id
+            LEFT JOIN support_ticket_views v ON v.ticket_id = t.id AND v.user_id = ?
+            WHERE r.created_at > COALESCE(v.last_read_at, 0)
+            """,
+            (admin_viewer_id,),
+        )
+        return cursor.fetchone()[0] or 0
     cursor = db_connection.execute(
         """
         SELECT COUNT(DISTINCT t.id) FROM support_tickets t
@@ -1776,19 +1897,21 @@ def add_support_reply(
     author_id: int,
     content: str,
     attachments: Optional[List[Dict]] = None,
+    attached_request_snapshot: Optional[str] = None,
 ) -> Dict:
-    """Add a reply to a ticket (admin or ticket owner). attachments = list of {name, url}."""
+    """Add a reply to a ticket (admin or ticket owner). attachments = list of {name, url}. attached_request_snapshot = JSON when user sends edited copy of request."""
     ticket = get_support_ticket(ticket_id)
     if not ticket:
         raise ValueError("פנייה לא נמצאה")
     content = (content or "").strip()
-    if not content and not attachments:
-        raise ValueError("נא להזין תוכן תגובה או לצרף קובץ")
+    snapshot = (attached_request_snapshot or "").strip() or None
+    if not content and not attachments and not snapshot:
+        raise ValueError("נא להזין תוכן תגובה, לצרף קובץ או לצרף עותק ערוך של הבקשה")
     now = int(datetime.now().timestamp())
     att_json = _support_attachments_json(attachments)
     cursor = db_connection.execute(
-        "INSERT INTO support_replies (ticket_id, author_id, content, created_at, attachments) VALUES (?, ?, ?, ?, ?)",
-        (ticket_id, author_id, content or "", now, att_json),
+        "INSERT INTO support_replies (ticket_id, author_id, content, created_at, attachments, attached_request_snapshot) VALUES (?, ?, ?, ?, ?, ?)",
+        (ticket_id, author_id, content or "", now, att_json, snapshot),
     )
     rid = cursor.lastrowid
     db_connection.execute(
@@ -1799,9 +1922,9 @@ def add_support_reply(
 
 
 def get_support_reply(reply_id: int) -> Optional[Dict]:
-    """Get a single support reply with author profile (first_name, last_name, avatar_url) and attachments."""
+    """Get a single support reply with author profile (first_name, last_name, avatar_url), attachments, and optional attached_request_snapshot."""
     cursor = db_connection.execute(
-        "SELECT id, ticket_id, author_id, content, created_at, attachments FROM support_replies WHERE id = ?",
+        "SELECT id, ticket_id, author_id, content, created_at, attachments, attached_request_snapshot FROM support_replies WHERE id = ?",
         (reply_id,),
     )
     row = cursor.fetchone()
@@ -1830,7 +1953,7 @@ def list_support_replies(ticket_id: int, viewer_id: Optional[int] = None) -> Lis
     ticket_owner_id = ticket["user_id"]
     cursor = db_connection.execute(
         """
-        SELECT id, ticket_id, author_id, content, created_at, attachments
+        SELECT id, ticket_id, author_id, content, created_at, attachments, attached_request_snapshot
         FROM support_replies WHERE ticket_id = ?
         ORDER BY created_at ASC
         """,

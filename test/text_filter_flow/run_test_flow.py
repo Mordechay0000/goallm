@@ -20,11 +20,11 @@ if str(ROOT) not in sys.path:
 
 # טעינת text_filter בלי mitmproxy (בלי core.http_processor.__init__)
 def _load_text_filter():
-    base = ROOT / "core" / "http_processor"
+    base = ROOT / "core" / "filters" / "text"
     spec_c = importlib.util.spec_from_file_location("tfc", base / "text_filter_config.py")
     tfc = importlib.util.module_from_spec(spec_c)
     spec_c.loader.exec_module(tfc)
-    sys.modules["core.http_processor.text_filter_config"] = tfc
+    sys.modules["core.filters.text.text_filter_config"] = tfc
     spec_t = importlib.util.spec_from_file_location("tf", base / "text_filter.py")
     tf = importlib.util.module_from_spec(spec_t)
     spec_t.loader.exec_module(tf)
@@ -50,7 +50,7 @@ def main():
 
     # 1. Policy resolver
     def get_resolver():
-        from core.policy_processor.policy_loader import get_policy_resolver
+        from core.policy.policy_loader import get_policy_resolver
         r = get_policy_resolver()
         return "resolver loaded"
 
@@ -58,7 +58,7 @@ def main():
 
     # 2. Resolve URL (html)
     def resolve():
-        from core.policy_processor.policy_loader import get_policy_resolver
+        from core.policy.policy_loader import get_policy_resolver
         r = get_policy_resolver()
         rule = r.resolve(test_url, "html")
         if rule is None:

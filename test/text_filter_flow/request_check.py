@@ -34,11 +34,11 @@ if str(ROOT) not in sys.path:
 
 def _load_text_filter():
     """Load text_filter without pulling in mitmproxy (avoid core.http_processor.__init__)."""
-    base = ROOT / "core" / "http_processor"
+    base = ROOT / "core" / "filters" / "text"
     spec_c = importlib.util.spec_from_file_location("tfc", base / "text_filter_config.py")
     tfc = importlib.util.module_from_spec(spec_c)
     spec_c.loader.exec_module(tfc)
-    sys.modules["core.http_processor.text_filter_config"] = tfc
+    sys.modules["core.filters.text.text_filter_config"] = tfc
     spec_t = importlib.util.spec_from_file_location("tf", base / "text_filter.py")
     tf = importlib.util.module_from_spec(spec_t)
     spec_t.loader.exec_module(tf)
@@ -83,7 +83,7 @@ def main():
     # ---- 1. Policy resolver ----
     print("--- 1. Policy (resolver.resolve(url, 'html')) ---")
     try:
-        from core.policy_processor.policy_loader import get_policy_resolver
+        from core.policy.policy_loader import get_policy_resolver
 
         resolver = get_policy_resolver()
         rule = resolver.resolve(url, "html")

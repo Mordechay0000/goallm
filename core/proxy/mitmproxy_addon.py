@@ -1,6 +1,8 @@
 """
 mitmproxy addon: intercepts HTTP traffic and processes responses (e.g. image filtering).
-When FILTER_BIND_BASE_URL is set, requests from IPs not bound to a user are redirected to the bind flow.
+Traffic recording and filtering apply only to IPs bound to a registered user.
+- When FILTER_BIND_BASE_URL is set: unbound IPs are redirected to the bind page.
+- When FILTER_BIND_BASE_URL is not set: unbound IPs get a 403 error page (connection not filtered by us).
 """
 from pathlib import Path
 import sys
@@ -13,13 +15,14 @@ if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
 import logging
+import time
 import traceback
 
 from mitmproxy import http
 
-from core.http_processor.http_flow_processor import process_http_response
+from core.flow.http_flow_processor import process_http_response
 from core.logger.logging_config import setup_logging
-from core.policy_processor.policy_database import (
+from core.policy.policy_database import (
     get_user_id_for_ip,
     get_active_traffic_session_id,
     add_traffic_log_entry,
@@ -36,6 +39,47 @@ FILTER_BIND_BASE_URL = None if _raw.lower() in ("off", "0", "false", "") else _r
 
 # Same secret as CRM for internal touch endpoint (last_used_at).
 CRM_PROXY_SECRET = os.environ.get("CRM_PROXY_SECRET", "dev-secret").strip()
+
+
+# Error page shown when client IP is not bound to any user (no recording/filtering for unregistered).
+UNBOUND_IP_HTML = """<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>חיבור לא מאושר</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; text-align: center; }
+    h1 { color: #c00; }
+    p { max-width: 32em; margin: 1rem auto; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <h1>חיבור לא מאושר</h1>
+  <p>החיבור שלך לא מסונן על ידי המערכת. שירות הסינון וההקלטה זמין רק למשתמשים רשומים שמשויכים לחשבון.</p>
+  <p>כדי להשתמש בשירות, יש לשייך את המכשיר (כתובת ה-IP) לחשבון במערכת.</p>
+</body>
+</html>"""
+
+
+def _client_ip_from_flow(flow: http.HTTPFlow) -> str | None:
+    """IP of the surfer: from X-Forwarded-For / X-Real-IP (when proxy is behind another proxy), else connection peername."""
+    if flow.request and flow.request.headers:
+        forwarded = flow.request.headers.get("x-forwarded-for")
+        if forwarded:
+            # First IP in the list is the original client (surfer)
+            ip = forwarded.split(",")[0].strip()
+            if ip:
+                return ip
+        real = flow.request.headers.get("x-real-ip")
+        if real and real.strip():
+            return real.strip()
+    if flow.client_conn and getattr(flow.client_conn, "peername", None):
+        try:
+            return flow.client_conn.peername[0]
+        except (IndexError, TypeError):
+            pass
+    return None
 
 
 def _is_request_to_bind_host(flow: http.HTTPFlow) -> bool:
@@ -59,45 +103,52 @@ class FilterAddon:
     async def request(self, flow: http.HTTPFlow) -> None:
         if not hasattr(flow, "metadata"):
             flow.metadata = {}
-        client_ip = None
-        if flow.client_conn and getattr(flow.client_conn, "peername", None):
-            try:
-                client_ip = flow.client_conn.peername[0]
-            except (IndexError, TypeError):
-                pass
-        # Redirect before any filtering: every request from an unbound IP goes to bind (except requests to the bind host itself).
-        if FILTER_BIND_BASE_URL is not None and client_ip and not _is_request_to_bind_host(flow):
+        # For traffic recording: measure real request duration (request → response)
+        flow.metadata["request_start_time"] = time.perf_counter()
+        # IP of the surfer (real client): from X-Forwarded-For / X-Real-IP when behind proxy, else connection peername
+        client_ip = _client_ip_from_flow(flow)
+        # Security: traffic recording and filtering only for IPs bound to a user. Unbound IPs get redirect or error.
+        if client_ip and not _is_request_to_bind_host(flow):
             user_id = get_user_id_for_ip(client_ip)
             if user_id is None:
-                return_url = flow.request.pretty_url if flow.request else ""
-                bind_url = f"{FILTER_BIND_BASE_URL}/bind?return_url={quote(return_url, safe='')}"
-                logger.info("Unbound IP %s → redirect to bind: %s", client_ip, bind_url)
+                if FILTER_BIND_BASE_URL is not None:
+                    return_url = flow.request.pretty_url if flow.request else ""
+                    bind_url = f"{FILTER_BIND_BASE_URL}/bind?return_url={quote(return_url, safe='')}"
+                    logger.info("Unbound IP %s → redirect to bind: %s", client_ip, bind_url)
+                    flow.response = http.Response.make(
+                        302,
+                        b"",
+                        {"Location": bind_url, "Content-Type": "text/html; charset=utf-8"},
+                    )
+                    flow.metadata["redirected_to_bind"] = True  # so response() skips processing and does not overwrite
+                    return
+                # No bind URL: show error – connection not filtered/recorded for unregistered IPs
+                logger.warning("Unbound IP %s → blocking (connection not filtered by us)", client_ip)
                 flow.response = http.Response.make(
-                    302,
-                    b"",
-                    {"Location": bind_url, "Content-Type": "text/html; charset=utf-8"},
+                    403,
+                    UNBOUND_IP_HTML.encode("utf-8"),
+                    {"Content-Type": "text/html; charset=utf-8", "Content-Length": str(len(UNBOUND_IP_HTML.encode("utf-8")))},
                 )
-                flow.metadata["redirected_to_bind"] = True  # so response() skips processing and does not overwrite
+                flow.metadata["redirected_to_bind"] = True  # skip response() processing
                 return
             flow.metadata["user_id"] = user_id
             logger.info("Bound connection: IP=%s -> user_id=%s (filter settings apply to this user)", client_ip, user_id)
             # Update last_used_at for this binding (fire-and-forget to CRM).
-            try:
-                import urllib.request
-                import json
-                req = urllib.request.Request(
-                    f"{FILTER_BIND_BASE_URL}/api/internal/touch-ip",
-                    data=json.dumps({"ip": client_ip, "secret": CRM_PROXY_SECRET}).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
-                )
-                urllib.request.urlopen(req, timeout=2)
-            except Exception as e:
-                logger.debug("Touch IP failed (non-fatal): %s", e)
+            if FILTER_BIND_BASE_URL is not None:
+                try:
+                    import urllib.request
+                    import json
+                    req = urllib.request.Request(
+                        f"{FILTER_BIND_BASE_URL}/api/internal/touch-ip",
+                        data=json.dumps({"ip": client_ip, "secret": CRM_PROXY_SECRET}).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    urllib.request.urlopen(req, timeout=2)
+                except Exception as e:
+                    logger.debug("Touch IP failed (non-fatal): %s", e)
         else:
             flow.metadata["user_id"] = get_user_id_for_ip(client_ip) if client_ip else None
-            if client_ip and flow.metadata.get("user_id") is None:
-                logger.debug("Unbound IP %s (no user_id); redirect or default rules will apply", client_ip)
 
         logger.debug(
             "HTTP Request - Method: %s, URL: %s",
@@ -137,12 +188,14 @@ class FilterAddon:
                 {"Content-Type": "text/plain"},
             )
 
-        # Traffic recording: if user has active session, log this request
+        # Traffic recording: if user has active session, log this request with real duration
         user_id = flow.metadata.get("user_id") if getattr(flow, "metadata", None) else None
         if user_id is not None:
             session_id = get_active_traffic_session_id(user_id)
             if session_id is not None:
                 try:
+                    t0 = flow.metadata.get("request_start_time")
+                    time_sec = (time.perf_counter() - t0) if isinstance(t0, (int, float)) else 0.0
                     status = flow.metadata.get("traffic_status", "open")
                     protocol = (flow.request.scheme or "https") if flow.request else ""
                     content_type = ""
@@ -154,7 +207,7 @@ class FilterAddon:
                         url=url,
                         protocol=protocol,
                         status=status,
-                        time_sec=0.0,
+                        time_sec=time_sec,
                         content_type=content_type or None,
                     )
                 except Exception as log_err:
@@ -165,12 +218,14 @@ class FilterAddon:
         if not flow.error:
             return
 
-        # Traffic recording: log failed request (e.g. cert error) if user is recording
+        # Traffic recording: log failed request (e.g. cert error) with real time until error
         user_id = flow.metadata.get("user_id") if getattr(flow, "metadata", None) else None
         if user_id is not None:
             session_id = get_active_traffic_session_id(user_id)
             if session_id is not None:
                 try:
+                    t0 = flow.metadata.get("request_start_time")
+                    time_sec = (time.perf_counter() - t0) if isinstance(t0, (int, float)) else 0.0
                     url = flow.request.pretty_url if flow.request else "Unknown URL"
                     err_str = str(flow.error)
                     status = "cert_missing" if "certificate" in err_str.lower() or "ssl" in err_str.lower() else "error"
@@ -180,7 +235,7 @@ class FilterAddon:
                         url=url,
                         protocol=(flow.request.scheme or "") if flow.request else "",
                         status=status,
-                        time_sec=0.0,
+                        time_sec=time_sec,
                         content_type=None,
                     )
                 except Exception as log_err:
