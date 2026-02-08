@@ -243,9 +243,9 @@ const TrafficRecordingPage: React.FC = () => {
     setError('');
     setLoading(true);
     setViewLink(null);
-    setActiveSessionId(null);
     try {
       const { session_id, share_token } = await trafficApi.stop();
+      setActiveSessionId(null);
       setRecording(false);
       recordingRef.current = false;
       setStatusPolling(false);
@@ -253,7 +253,12 @@ const TrafficRecordingPage: React.FC = () => {
       await fetchLog(session_id);
     } catch (e: unknown) {
       const ax = e as { response?: { data?: { detail?: string } } };
-      setError(ax?.response?.data?.detail || 'סיום ההקלטה נכשל');
+      const detail = ax?.response?.data?.detail ?? 'סיום ההקלטה נכשל';
+      setError(detail);
+      setActiveSessionId(null);
+      setRecording(false);
+      recordingRef.current = false;
+      setStatusPolling(false);
     } finally {
       setLoading(false);
     }

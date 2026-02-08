@@ -768,8 +768,25 @@ def start_traffic_session(user_id: int) -> int:
     return cursor.lastrowid
 
 
-def stop_traffic_session(user_id: int) -> Optional[Tuple[int, str]]:
-    """End the active traffic session for user. Returns (session_id, share_token) if one was active."""
+def get_traffic_log_entry_count(session_id: int, user_id: int) -> int:
+    """Return number of log entries for the session. Session must belong to user_id."""
+    cursor = db_connection.execute(
+        "SELECT id FROM traffic_recording_sessions WHERE id = ? AND user_id = ?",
+        (session_id, user_id),
+    )
+    if not cursor.fetchone():
+        return 0
+    cursor = db_connection.execute(
+        "SELECT COUNT(*) FROM traffic_log WHERE session_id = ?",
+        (session_id,),
+    )
+    return cursor.fetchone()[0] or 0
+
+
+def stop_traffic_session(user_id: int) -> Optional[Tuple[int, Optional[str]]]:
+    """End the active traffic session for user. Always closes the session (sets ended_at).
+    Returns (session_id, share_token). share_token is None if no traffic was captured —
+    then caller should return error and not expose a link."""
     now = int(datetime.now().timestamp())
     cursor = db_connection.execute(
         "SELECT id FROM traffic_recording_sessions WHERE user_id = ? AND ended_at IS NULL LIMIT 1",
@@ -779,6 +796,14 @@ def stop_traffic_session(user_id: int) -> Optional[Tuple[int, str]]:
     if not row:
         return None
     session_id = row[0]
+    entry_count = get_traffic_log_entry_count(session_id, user_id)
+    if entry_count == 0:
+        db_connection.execute(
+            "UPDATE traffic_recording_sessions SET ended_at = ? WHERE id = ?",
+            (now, session_id),
+        )
+        db_connection.commit()
+        return (session_id, None)
     share_token = secrets.token_urlsafe(32)
     db_connection.execute(
         "UPDATE traffic_recording_sessions SET ended_at = ?, share_token = ? WHERE id = ?",

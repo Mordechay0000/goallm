@@ -1934,12 +1934,15 @@ async def traffic_start(current_user: dict = Depends(get_current_user)):
 
 @app.post("/api/traffic/stop")
 async def traffic_stop(current_user: dict = Depends(get_current_user)):
-    """Stop traffic recording and return session_id and share_token (link for anyone to view)."""
+    """Stop traffic recording and return session_id and share_token (link for anyone to view).
+    If no traffic was captured, returns 400 and does not close the session."""
     from core.policy.policy_database import stop_traffic_session
     result = stop_traffic_session(current_user["id"])
     if result is None:
         raise HTTPException(status_code=400, detail="אין הקלטה פעילה.")
     session_id, share_token = result
+    if share_token is None:
+        raise HTTPException(status_code=400, detail="לא נקלטה תעבורה.")
     return {"session_id": session_id, "share_token": share_token, "message": "ההקלטה הסתיימה."}
 
 

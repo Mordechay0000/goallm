@@ -123,8 +123,12 @@ export const SupportAttachBar: React.FC<SupportAttachBarProps> = ({
         setTrafficRecording(true);
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'שגיאה בהקלטת תעבורה. נסה שוב.';
+      const ax = err as { response?: { data?: { detail?: string } }; message?: string };
+      const msg = ax?.response?.data?.detail ?? (err instanceof Error ? err.message : 'שגיאה בהקלטת תעבורה. נסה שוב.');
       setError(msg);
+      if (trafficRecording) {
+        setTrafficRecording(false);
+      }
     } finally {
       setTrafficLoading(false);
     }
