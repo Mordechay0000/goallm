@@ -1,138 +1,209 @@
 /**
- * MUI Theme - עיצוב כללי: צבע ראשי Blue–Violet (סגנון AI), צבע משני תואם
+ * MUI Theme - שפה עיצובית: Google-Clean + SaaS Enterprise + AI עדין
+ * Header: רקע בהיר #eef2f8 כמו שאר האתר, טקסט כהה | Accent: #2F6CFF
  */
 import { createTheme } from '@mui/material/styles';
 
-/** גרדיאנט ראשי: מעבר חלק #0FF0FC → #A64EFF → #FF4D8D */
-export const primaryGradient =
-  'linear-gradient(to right, #0FF0FC 0%, #A64EFF 50%, #FF4D8D 100%)';
-export const primaryGradientHover =
-  'linear-gradient(to right, #07c4cf 0%, #8b3fe0 50%, #e43b78 100%)';
+/** גרדיאנט עדין לשימוש רק בקווים דקים, גבולות והדגשות — Blue → Pink → Orange → Yellow → Green */
+export const aiSpectrumGradient =
+  'linear-gradient(to right, #4A90FF 0%, #FF7ABD 25%, #FFA15E 50%, #F9E67A 75%, #45E68B 100%)';
+
+/** צל עדין מאוד לפי השפה העיצובית */
+const cardShadow = '0 4px 18px rgba(0, 0, 0, 0.05)';
 
 export const theme = createTheme({
   direction: 'rtl',
   palette: {
     mode: 'light',
     primary: {
-      // צבע מרכזי מותאם לגרדיאנט החדש
-      main: '#A64EFF',
-      light: '#0FF0FC',
-      dark: '#FF4D8D',
-      contrastText: '#fff',
+      main: '#0D1A3B',
+      light: '#1a2d5c',
+      dark: '#080f1f',
+      contrastText: '#ffffff',
     },
     secondary: {
-      main: '#0d9488',
-      light: '#2dd4bf',
-      dark: '#0f766e',
-      contrastText: '#fff',
+      main: '#2F6CFF',
+      light: '#5a8aff',
+      dark: '#2555d9',
+      contrastText: '#ffffff',
     },
     background: {
-      default: '#f8fafc',
-      paper: '#ffffff',
+      default: '#F7F8FA',
+      paper: '#FFFFFF',
     },
     text: {
-      primary: 'rgba(0, 0, 0, 0.87)',
-      secondary: 'rgba(0, 0, 0, 0.6)',
+      primary: '#1A1A1A',
+      secondary: 'rgba(26, 26, 26, 0.55)',
     },
-    divider: 'rgba(0, 0, 0, 0.12)',
+    divider: '#E4E7EC',
     action: {
-      active: 'rgba(0, 0, 0, 0.54)',
-      hover: 'rgba(0, 0, 0, 0.04)',
-      selected: 'rgba(99, 102, 241, 0.12)',
-      disabled: 'rgba(0, 0, 0, 0.26)',
+      active: '#2F6CFF',
+      hover: 'rgba(47, 108, 255, 0.06)',
+      selected: 'rgba(47, 108, 255, 0.1)',
+      disabled: 'rgba(26, 26, 26, 0.35)',
     },
   },
   typography: {
-    fontFamily: [
-      '-apple-system',
-      'BlinkMacSystemFont',
-      '"Segoe UI"',
-      'Roboto',
-      '"Helvetica Neue"',
-      'Arial',
-      'sans-serif',
-    ].join(','),
+    fontFamily: '"Heebo", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
     h1: {
-      fontSize: '2rem',
+      fontFamily: '"Heebo", sans-serif',
       fontWeight: 600,
+      color: '#0D1A3B',
+      fontSize: '2rem',
       lineHeight: 1.2,
     },
     h2: {
-      fontSize: '1.75rem',
+      fontFamily: '"Heebo", sans-serif',
       fontWeight: 600,
+      color: '#0D1A3B',
+      fontSize: '1.75rem',
       lineHeight: 1.3,
     },
     h3: {
-      fontSize: '1.5rem',
+      fontFamily: '"Heebo", sans-serif',
       fontWeight: 600,
+      color: '#0D1A3B',
+      fontSize: '1.5rem',
       lineHeight: 1.4,
     },
     h4: {
-      fontSize: '1.25rem',
+      fontFamily: '"Heebo", sans-serif',
       fontWeight: 600,
+      color: '#0D1A3B',
+      fontSize: '1.25rem',
       lineHeight: 1.4,
     },
     h5: {
-      fontSize: '1.125rem',
+      fontFamily: '"Heebo", sans-serif',
       fontWeight: 600,
+      color: '#0D1A3B',
+      fontSize: '1.125rem',
       lineHeight: 1.5,
     },
     h6: {
-      fontSize: '1rem',
+      fontFamily: '"Heebo", sans-serif',
       fontWeight: 600,
+      color: '#0D1A3B',
+      fontSize: '1rem',
       lineHeight: 1.5,
     },
     body1: {
-      fontSize: '0.9375rem',
-      lineHeight: 1.5,
+      fontFamily: '"Heebo", sans-serif',
+      fontWeight: 400,
+      fontSize: '1rem',
+      lineHeight: 1.6,
+      color: '#1A1A1A',
     },
     body2: {
-      fontSize: '0.875rem',
-      lineHeight: 1.5,
+      fontFamily: '"Heebo", sans-serif',
+      fontWeight: 400,
+      fontSize: '0.9375rem',
+      lineHeight: 1.6,
+      color: '#1A1A1A',
     },
     button: {
+      fontFamily: '"Heebo", sans-serif',
       textTransform: 'none',
       fontWeight: 500,
-      fontSize: '0.9375rem',
+      fontSize: '1rem',
+    },
+    caption: {
+      fontFamily: '"Assistant", "Heebo", sans-serif',
+      fontSize: '0.875rem',
     },
   },
-  /* 4 = כרטיסים/שדות, 8 = כפתורים/פריטי ניווט */
   shape: {
-    borderRadius: 4,
+    borderRadius: 24,
   },
   shadows: [
     'none',
-    '0px 1px 3px rgba(0,0,0,0.12), 0px 1px 2px rgba(0,0,0,0.24)',
-    '0px 2px 4px rgba(0,0,0,0.12), 0px 1px 2px rgba(0,0,0,0.24)',
-    '0px 3px 6px rgba(0,0,0,0.12), 0px 2px 4px rgba(0,0,0,0.24)',
-    '0px 4px 8px rgba(0,0,0,0.12), 0px 2px 4px rgba(0,0,0,0.24)',
-    '0px 5px 10px rgba(0,0,0,0.12), 0px 3px 6px rgba(0,0,0,0.24)',
-    '0px 6px 12px rgba(0,0,0,0.12), 0px 3px 6px rgba(0,0,0,0.24)',
-    '0px 7px 14px rgba(0,0,0,0.12), 0px 4px 8px rgba(0,0,0,0.24)',
-    '0px 8px 16px rgba(0,0,0,0.12), 0px 4px 8px rgba(0,0,0,0.24)',
-    '0px 9px 18px rgba(0,0,0,0.12), 0px 5px 10px rgba(0,0,0,0.24)',
-    '0px 10px 20px rgba(0,0,0,0.12), 0px 5px 10px rgba(0,0,0,0.24)',
-    '0px 11px 22px rgba(0,0,0,0.12), 0px 6px 12px rgba(0,0,0,0.24)',
-    '0px 12px 24px rgba(0,0,0,0.12), 0px 6px 12px rgba(0,0,0,0.24)',
-    '0px 13px 26px rgba(0,0,0,0.12), 0px 7px 14px rgba(0,0,0,0.24)',
-    '0px 14px 28px rgba(0,0,0,0.12), 0px 7px 14px rgba(0,0,0,0.24)',
-    '0px 15px 30px rgba(0,0,0,0.12), 0px 8px 16px rgba(0,0,0,0.24)',
-    '0px 16px 32px rgba(0,0,0,0.12), 0px 8px 16px rgba(0,0,0,0.24)',
-    '0px 17px 34px rgba(0,0,0,0.12), 0px 9px 18px rgba(0,0,0,0.24)',
-    '0px 18px 36px rgba(0,0,0,0.12), 0px 9px 18px rgba(0,0,0,0.24)',
-    '0px 19px 38px rgba(0,0,0,0.12), 0px 10px 20px rgba(0,0,0,0.24)',
-    '0px 20px 40px rgba(0,0,0,0.12), 0px 10px 20px rgba(0,0,0,0.24)',
-    '0px 21px 42px rgba(0,0,0,0.12), 0px 11px 22px rgba(0,0,0,0.24)',
-    '0px 22px 44px rgba(0,0,0,0.12), 0px 11px 22px rgba(0,0,0,0.24)',
-    '0px 23px 46px rgba(0,0,0,0.12), 0px 12px 24px rgba(0,0,0,0.24)',
-    '0px 24px 48px rgba(0,0,0,0.12), 0px 12px 24px rgba(0,0,0,0.24)',
+    cardShadow,
+    cardShadow,
+    cardShadow,
+    cardShadow,
+    cardShadow,
+    cardShadow,
+    cardShadow,
+    cardShadow,
+    cardShadow,
+    cardShadow,
+    cardShadow,
+    cardShadow,
+    cardShadow,
+    cardShadow,
+    cardShadow,
+    cardShadow,
+    cardShadow,
+    cardShadow,
+    cardShadow,
+    cardShadow,
+    cardShadow,
+    cardShadow,
+    cardShadow,
+    cardShadow,
   ],
   components: {
+    MuiCssBaseline: {
+      styleOverrides: {
+        body: {
+          fontFamily: '"Heebo", sans-serif',
+          color: '#1A1A1A',
+        },
+        /* גלילה ברירת מחדל – אפור (סיידבר, דפים כלליים) */
+        '*': {
+          scrollbarWidth: 'thin',
+          scrollbarColor: '#A8B4C8 #E4E7EC',
+        },
+        '*::-webkit-scrollbar': {
+          width: 10,
+          height: 10,
+        },
+        '*::-webkit-scrollbar-track': {
+          background: '#E4E7EC',
+          borderRadius: 10,
+        },
+        '*::-webkit-scrollbar-thumb': {
+          background: '#A8B4C8',
+          borderRadius: 10,
+          border: '2px solid #E4E7EC',
+          minHeight: 40,
+          minWidth: 40,
+        },
+        '*::-webkit-scrollbar-thumb:hover': {
+          background: '#8A96A8',
+        },
+        '*::-webkit-scrollbar-corner': {
+          background: '#E4E7EC',
+          borderRadius: 10,
+        },
+      },
+    },
+    /* טבלאות ואזורי תוכן – גלילה בכחול הראשי */
+    MuiTableContainer: {
+      styleOverrides: {
+        root: {
+          scrollbarColor: '#2F6CFF #E4E7EC',
+          '&::-webkit-scrollbar': { width: 10, height: 10 },
+          '&::-webkit-scrollbar-track': { background: '#E4E7EC', borderRadius: 10 },
+          '&::-webkit-scrollbar-thumb': {
+            background: '#2F6CFF',
+            borderRadius: 10,
+            border: '2px solid #E4E7EC',
+            minHeight: 40,
+            minWidth: 40,
+          },
+          '&::-webkit-scrollbar-thumb:hover': { background: '#2555d9' },
+          '&::-webkit-scrollbar-corner': { background: '#E4E7EC', borderRadius: 10 },
+        },
+      },
+    },
     MuiCard: {
       styleOverrides: {
         root: {
-          boxShadow: '0px 1px 3px rgba(0,0,0,0.12), 0px 1px 2px rgba(0,0,0,0.24)',
-          borderRadius: 4,
+          boxShadow: cardShadow,
+          borderRadius: 24,
+          border: '1px solid #E4E7EC',
+          overflow: 'hidden',
         },
       },
     },
@@ -140,9 +211,12 @@ export const theme = createTheme({
       styleOverrides: {
         root: {
           backgroundImage: 'none',
+          borderRadius: 24,
+          border: '1px solid #E4E7EC',
+          boxShadow: cardShadow,
         },
         elevation1: {
-          boxShadow: '0px 1px 3px rgba(0,0,0,0.12), 0px 1px 2px rgba(0,0,0,0.24)',
+          boxShadow: cardShadow,
         },
       },
     },
@@ -151,17 +225,25 @@ export const theme = createTheme({
         root: {
           textTransform: 'none',
           fontWeight: 500,
-          borderRadius: 8,
-          padding: '8px 16px',
+          borderRadius: 24,
+          padding: '10px 20px',
+          transition: 'background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease',
         },
-        // כל הכפתורים מסוג contained (בכל צבע) יקבלו את הגרדיאנט המרכזי
         contained: {
-          background: primaryGradient,
-          color: '#020617',
-          boxShadow: '0 1px 4px rgba(166, 78, 255, 0.35)',
+          backgroundColor: '#2F6CFF',
+          color: '#ffffff',
+          boxShadow: '0 3px 10px rgba(0, 0, 0, 0.06)',
           '&:hover': {
-            background: primaryGradientHover,
-            boxShadow: '0 4px 12px rgba(166, 78, 255, 0.45)',
+            backgroundColor: '#2555d9',
+            boxShadow: '0 4px 14px rgba(47, 108, 255, 0.22)',
+          },
+        },
+        outlined: {
+          borderColor: '#E4E7EC',
+          color: '#0D1A3B',
+          '&:hover': {
+            borderColor: '#2F6CFF',
+            backgroundColor: 'rgba(47, 108, 255, 0.06)',
           },
         },
       },
@@ -170,7 +252,28 @@ export const theme = createTheme({
       styleOverrides: {
         root: {
           '& .MuiOutlinedInput-root': {
-            borderRadius: 4,
+            borderRadius: 20,
+            backgroundColor: '#FFFFFF',
+            '& fieldset': {
+              borderColor: '#E4E7EC',
+            },
+            '&:hover fieldset': {
+              borderColor: '#2F6CFF',
+            },
+            '&.Mui-focused fieldset': {
+              borderWidth: '2px',
+              borderColor: '#2F6CFF',
+            },
+          },
+        },
+      },
+    },
+    MuiOutlinedInput: {
+      styleOverrides: {
+        root: {
+          borderRadius: 20,
+          '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+            borderColor: '#2F6CFF',
           },
         },
       },
@@ -178,59 +281,143 @@ export const theme = createTheme({
     MuiAppBar: {
       styleOverrides: {
         root: {
-          background: primaryGradient,
-          boxShadow: '0 1px 3px rgba(99, 102, 241, 0.25)',
+          backgroundColor: '#eef2f8',
+          color: '#0D1A3B',
+          boxShadow: cardShadow,
         },
       },
     },
     MuiIconButton: {
       styleOverrides: {
         root: {
-          borderRadius: 8,
+          color: '#2F6CFF',
+          borderRadius: 20,
+          '&:hover': {
+            backgroundColor: 'rgba(47, 108, 255, 0.08)',
+          },
         },
       },
     },
     MuiListItemButton: {
       styleOverrides: {
-        root: ({ theme }) => ({
-          borderRadius: 8,
+        root: {
+          borderRadius: 20,
           '&:hover': {
-            backgroundColor: theme.palette.action.hover,
+            backgroundColor: 'rgba(47, 108, 255, 0.06)',
           },
-        }),
+          '&.Mui-selected': {
+            backgroundColor: 'rgba(47, 108, 255, 0.1)',
+            '& .MuiListItemIcon-root': {
+              color: '#2F6CFF',
+            },
+            '&:hover': {
+              backgroundColor: 'rgba(47, 108, 255, 0.12)',
+            },
+          },
+        },
+      },
+    },
+    MuiListItemIcon: {
+      styleOverrides: {
+        root: {
+          color: '#2F6CFF',
+          minWidth: 44,
+        },
       },
     },
     MuiTableRow: {
       styleOverrides: {
-        root: ({ theme }) => ({
+        root: {
           '&:hover': {
-            backgroundColor: theme.palette.action.selected,
+            backgroundColor: '#F4F7FF',
           },
-          // No hover effect on header rows
           'thead &': {
             '&:hover': {
               backgroundColor: 'transparent',
             },
           },
-        }),
+        },
+      },
+    },
+    MuiTableCell: {
+      styleOverrides: {
+        root: {
+          fontFamily: '"Assistant", "Heebo", sans-serif',
+          borderBottom: '1px solid #E4E7EC',
+        },
+        head: {
+          fontFamily: '"Heebo", sans-serif',
+          fontWeight: 600,
+          color: '#080f1f',
+        },
       },
     },
     MuiMenuItem: {
       styleOverrides: {
-        root: ({ theme }) => ({
+        root: {
+          borderRadius: 12,
           '&:hover': {
-            backgroundColor: theme.palette.action.selected,
+            backgroundColor: 'rgba(47, 108, 255, 0.08)',
           },
-        }),
+        },
       },
     },
     MuiCardActionArea: {
       styleOverrides: {
-        root: ({ theme }) => ({
+        root: {
           '&:hover': {
-            backgroundColor: theme.palette.action.selected,
+            backgroundColor: 'rgba(47, 108, 255, 0.06)',
           },
-        }),
+        },
+      },
+    },
+    MuiDivider: {
+      styleOverrides: {
+        root: {
+          borderColor: '#E4E7EC',
+        },
+      },
+    },
+    MuiChip: {
+      styleOverrides: {
+        root: {
+          borderRadius: 16,
+          fontFamily: '"Heebo", sans-serif',
+        },
+      },
+    },
+    MuiBadge: {
+      styleOverrides: {
+        colorPrimary: {
+          backgroundColor: '#2F6CFF',
+        },
+      },
+    },
+    MuiLink: {
+      styleOverrides: {
+        root: {
+          color: '#2F6CFF',
+          '&:hover': {
+            color: '#2555d9',
+          },
+        },
+      },
+    },
+    MuiDialog: {
+      styleOverrides: {
+        paper: {
+          borderRadius: 24,
+          boxShadow: cardShadow,
+          border: '1px solid #E4E7EC',
+        },
+      },
+    },
+    MuiAlert: {
+      styleOverrides: {
+        root: {
+          borderRadius: 20,
+          fontFamily: '"Heebo", sans-serif',
+        },
       },
     },
   },

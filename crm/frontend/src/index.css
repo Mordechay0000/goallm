@@ -1,16 +1,23 @@
+/* Design language: ניקיון עסקי, טאצ' מודרני עדין, UX ברור */
 :root {
-  font-family: Arial, Helvetica, sans-serif;
-  line-height: 1.5;
+  font-family: 'Heebo', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  line-height: 1.6;
   font-weight: 400;
-
   color-scheme: light;
-  color: #213547;
-  background-color: #ffffff;
+  color: #1A1A1A;
+  background-color: #F7F8FA;
 
-  /* צבע ראשי – מעבר חלק #0FF0FC → #A64EFF → #FF4D8D */
-  --primary-gradient: linear-gradient(to right, #0FF0FC 0%, #A64EFF 50%, #FF4D8D 100%);
-  --primary-main: #A64EFF;
-  --secondary-main: #0d9488;
+  /* פלטת צבעים */
+  --primary: #0D1A3B;
+  --accent: #2F6CFF;
+  --background: #FFFFFF;
+  --background-subtle: #F7F8FA;
+  --border: #E4E7EC;
+  --text-heading: #0D1A3B;
+  --text-body: #1A1A1A;
+
+  /* גרדיאנט AI: 40–50% רוחב, fade רך בשני הצדדים — קו הפרדה/header דק בלבד */
+  --ai-spectrum: linear-gradient(to right, transparent 0%, #4A90FF 22%, #FF7ABD 38%, #FFA15E 52%, #F9E67A 65%, #45E68B 78%, transparent 100%);
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -18,39 +25,21 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* גרדיאנט ראשי על כל AppBar (בר עליון) */
-.MuiAppBar-root {
-  background-image: var(--primary-gradient) !important;
-  background-size: 100% 100%;
-  background-repeat: no-repeat;
-  color: #fff !important;
+/* כותרת כרטיס עם קו AI דק (40–50% רוחב, fade בשני הצדדים) */
+.card-header-accent {
+  position: relative;
+  padding-bottom: 12px;
+  margin-bottom: 12px;
 }
-.MuiAppBar-root .MuiTypography-root,
-.MuiAppBar-root .MuiIconButton-root {
-  color: #fff !important;
-}
-.MuiAppBar-root .MuiTypography-root {
-  text-shadow: 0 0 1px #000, 1px 0 1px #000, -1px 0 1px #000, 0 1px 1px #000, 0 -1px 1px #000;
-}
-
-/* גרדיאנט לכל הכפתורים מסוג contained (כולל primary) – טקסט לבן עם מסגרת */
-.MuiButton-contained,
-.MuiButton-containedPrimary {
-  background-image: var(--primary-gradient) !important;
-  background-size: 100% 100%;
-  background-repeat: no-repeat;
-  border: none;
-  color: #fff !important;
-  text-shadow: 0 0 1px #000, 1px 0 1px #000, -1px 0 1px #000, 0 1px 1px #000, 0 -1px 1px #000;
-}
-
-a {
-  font-weight: 500;
-  color: var(--primary-main);
-  text-decoration: inherit;
-}
-a:hover {
-  color: #8b3fe0;
+.card-header-accent::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  right: 25%;
+  left: 25%;
+  height: 2px;
+  background: var(--ai-spectrum);
+  border-radius: 1px;
 }
 
 body {
@@ -61,39 +50,40 @@ body {
   text-align: right;
 }
 
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
-}
-
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
+a {
   font-weight: 500;
-  font-family: inherit;
-  background-color: #1a1a1a;
-  cursor: pointer;
-  transition: border-color 0.25s;
+  color: var(--accent);
+  text-decoration: none;
 }
-button:hover {
-  border-color: #646cff;
-}
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
+a:hover {
+  color: #2555d9;
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
-  }
-  a:hover {
-    color: #747bff;
-  }
-  button {
-    background-color: #f9f9f9;
-  }
+/* AppBar — רקע בהיר כמו שאר האתר, טקסט ואייקונים כהים */
+.MuiAppBar-root {
+  background-color: #eef2f8 !important;
+  color: #0D1A3B !important;
+  border-bottom: 1px solid #E4E7EC !important;
 }
+.MuiAppBar-root .MuiTypography-root,
+.MuiAppBar-root .MuiIconButton-root {
+  color: #0D1A3B !important;
+}
+.MuiAppBar-root .MuiIconButton-root:hover {
+  background-color: rgba(47, 108, 255, 0.08) !important;
+}
+
+/* כפתורי פעולה עליונים — עומק: צל רך + כחול חשמלי */
+.MuiButton-contained,
+.MuiButton-containedPrimary {
+  background-color: var(--accent) !important;
+  color: #fff !important;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.06) !important;
+}
+.MuiButton-contained:hover,
+.MuiButton-containedPrimary:hover {
+  background-color: #2555d9 !important;
+  box-shadow: 0 4px 14px rgba(47, 108, 255, 0.22) !important;
+}
+
+/* אייקונים — outline בגוון חשמלי (מטופל ב-theme) */
