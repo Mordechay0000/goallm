@@ -1,0 +1,63 @@
+# Severity 3 – severe: explicit sexual content, explicit romance, LGBTQ+, blasphemy
+# One occurrence = block page. Removed innocent: body, breast, relationship, bed (medical/family context).
+
+# Explicit sexual content
+sex
+sexual
+intercourse
+orgasm
+masturbation
+pornography
+porn
+nude
+naked
+nudity
+lust
+lustful
+arousal
+aroused
+butt
+buttocks
+genitals
+genital
+penis
+vagina
+# Explicit romance / seduction / adultery
+affair
+lover
+mistress
+adultery
+adulterous
+seduction
+seduce
+seductive
+temptation
+tempt
+tempting
+intimacy
+intimate
+# LGBTQ+
+gay
+lesbian
+homosexual
+homosexuality
+transgender
+# trans removed: too short, false positives (transaction, translate, transform on tech sites)
+queer
+lgbt
+lgbtq
+bisexual
+# Blasphemy / heresy / apostasy
+blasphemy
+blasphemous
+blaspheme
+heresy
+heretic
+apostate
+apostasy
+secular
+godless
+# Promiscuity
+promiscuous
+promiscuity
+# normalize, legitimate, acceptable removed: common in legitimate contexts (normalize data, legitimate use, acceptable answer)
