@@ -206,6 +206,9 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
       </Box>
       {/* Add Rule Form */}
       <Paper sx={{ p: 2, mb: 2 }} style={rulesLocked ? { opacity: 0.7, pointerEvents: 'none' } : undefined}>
+        <Box className="card-header-accent" sx={{ mb: 2 }}>
+          <Typography variant="h6" sx={{ fontWeight: 600 }}>הוספת כלל</Typography>
+        </Box>
         <form onSubmit={handleFormSubmit}>
           <Box sx={{ mb: 2 }}>
             <TextField
@@ -269,7 +272,7 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
           <Button
             type="submit"
             variant="contained"
-            color="primary"
+            color="secondary"
             disabled={!newUrl.trim() || !!urlError}
           >
             הוסף כלל
@@ -281,6 +284,9 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
 
       {/* Rules Table */}
       <Paper>
+        <Box className="card-header-accent" sx={{ px: 2, pt: 2, pb: 1 }}>
+          <Typography variant="h6" sx={{ fontWeight: 600 }}>כללי הסינון</Typography>
+        </Box>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, px: 2, pt: 2, pb: 1 }}>
           <TextField
             size="small"
@@ -302,7 +308,7 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
                 <>
                   <Typography variant="body2" color="text.secondary">הכלל החל:</Typography>
                   <Chip size="small" label={(checkResult.rule.domain || '') + (checkResult.rule.path || '')} sx={{ fontFamily: 'monospace' }} />
-                  <Chip size="small" label={ACTION_LABELS[checkResult.rule.state as 'allow' | 'block'] ?? checkResult.rule.state} color={checkResult.rule.state === 'block' ? 'error' : 'success'} />
+                  <Chip size="small" variant="outlined" label={ACTION_LABELS[checkResult.rule.state as 'allow' | 'block'] ?? checkResult.rule.state} color={checkResult.rule.state === 'block' ? 'default' : 'secondary'} />
                 </>
               ) : (
                 <>
@@ -374,7 +380,19 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
                 const paginated = sorted.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
                 return paginated.map((rule) => (
                 <TableRow key={rule.id} hover sx={{ '&:hover': { bgcolor: 'action.selected' } }}>
-                  <TableCell>
+                  <TableCell
+                    sx={{
+                      maxWidth: 400,
+                      overflowX: 'auto',
+                      whiteSpace: 'nowrap',
+                      scrollbarWidth: 'thin',
+                      scrollbarColor: '#2F6CFF #E4E7EC',
+                      '&::-webkit-scrollbar': { height: 8 },
+                      '&::-webkit-scrollbar-track': { background: '#E4E7EC', borderRadius: 8 },
+                      '&::-webkit-scrollbar-thumb': { background: '#2F6CFF', borderRadius: 8, border: '2px solid #E4E7EC' },
+                      '&::-webkit-scrollbar-thumb:hover': { background: '#2555d9' },
+                    }}
+                  >
                     <code>{formatRuleDisplay(rule)}</code>
                   </TableCell>
                   <TableCell>

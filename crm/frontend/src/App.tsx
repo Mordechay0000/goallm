@@ -26,6 +26,7 @@ import AdminRequestsPage from './pages/AdminRequestsPage';
 import AdminGlobalRulesPage from './pages/AdminGlobalRulesPage';
 import AdminFilterSwitchesPage from './pages/AdminFilterSwitchesPage';
 import MyRequestsPage from './pages/MyRequestsPage';
+import RequestFilePage from './pages/RequestFilePage';
 import MySupportPage from './pages/MySupportPage';
 import AdminSupportPage from './pages/AdminSupportPage';
 import SupportConversationPage from './pages/SupportConversationPage';
@@ -33,6 +34,9 @@ import SupportNewTicketPage from './pages/SupportNewTicketPage';
 import ToolsPage from './pages/ToolsPage';
 import TrafficRecordingPage from './pages/TrafficRecordingPage';
 import TrafficViewPage from './pages/TrafficViewPage';
+import SurfAdminCheckPage from './pages/SurfAdminCheckPage';
+import SurfBlockPage from './pages/SurfBlockPage';
+import SurfUpdateRulePage from './pages/SurfUpdateRulePage';
 import AdminLayout from './components/AdminLayout';
 
 // Create RTL cache
@@ -73,14 +77,14 @@ const RegisterRoute: React.FC = () => {
   return <RegisterWizard />;
 };
 
-// Redirect /request-open and /request-change to /requests with params
-const RequestRedirect: React.FC<{ to: string; requestType: 'open' | 'change' }> = ({ to, requestType }) => {
+// Redirect /request-open and /request-change to מערכת הפניות (support/new) with attach type and url
+const RequestRedirect: React.FC<{ requestType: 'open' | 'change' }> = ({ requestType }) => {
   const [searchParams] = useSearchParams();
   const url = searchParams.get('url') || '';
   const params = new URLSearchParams();
+  params.set('attach', requestType);
   if (url) params.set('url', url);
-  params.set('request_type', requestType);
-  return <Navigate to={`${to}?${params.toString()}`} replace />;
+  return <Navigate to={`/support/new?${params.toString()}`} replace />;
 };
 
 // Protected Route component - redirect to login with return URL
@@ -107,6 +111,7 @@ function App() {
         <CssBaseline />
         <BrowserRouter>
         <Routes>
+          <Route path="/surf-admin-check" element={<SurfAdminCheckPage />} />
           <Route path="/login" element={<LoginRoute />} />
           <Route path="/register" element={<RegisterRoute />} />
           <Route path="/bind" element={<BindPage />} />
@@ -231,12 +236,42 @@ function App() {
             }
           />
           <Route
+            path="/admin/surf-block"
+            element={
+              <ProtectedRoute>
+                <AdminLayout>
+                  <SurfBlockPage />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/surf-update-rule"
+            element={
+              <ProtectedRoute>
+                <AdminLayout>
+                  <SurfUpdateRulePage />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
             path="/request-open"
-            element={<RequestRedirect to="/requests" requestType="open" />}
+            element={<RequestRedirect requestType="open" />}
           />
           <Route
             path="/request-change"
-            element={<RequestRedirect to="/requests" requestType="change" />}
+            element={<RequestRedirect requestType="change" />}
+          />
+          <Route
+            path="/request-file"
+            element={
+              <ProtectedRoute>
+                <AdminLayout>
+                  <RequestFilePage />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
           />
           <Route
             path="/requests"
@@ -320,7 +355,13 @@ function App() {
           />
           <Route
             path="/tools/traffic/view/:token"
-            element={<TrafficViewPage />}
+            element={
+              <ProtectedRoute>
+                <AdminLayout>
+                  <TrafficViewPage />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
           />
         </Routes>
       </BrowserRouter>

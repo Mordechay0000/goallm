@@ -30,7 +30,7 @@ import { useProfilesStore } from '../store/profilesStore';
 import { useManagedUserStore } from '../store/managedUserStore';
 import { useAuthStore } from '../store/authStore';
 import { RulesTable } from '../components/RulesTable';
-import { rulesApi, resolverApi } from '../api/rules';
+import { rulesApi } from '../api/rules';
 import { adminApi } from '../api/admin';
 import type { Rule } from '../api/rules';
 import { Lock as LockIcon } from '@mui/icons-material';
@@ -50,13 +50,9 @@ const ProfilesPage: React.FC = () => {
   const [editMode, setEditMode] = useState<'whitelist' | 'blacklist'>('whitelist');
   const [rules, setRules] = useState<Rule[]>([]);
   const [lockedSettings, setLockedSettings] = useState<string[]>([]);
-  const [coreMode, setCoreMode] = useState<string | null>(null);
 
   const selectedProfile = profiles[activeTab];
 
-  const loadCoreMode = () => {
-    resolverApi.getCoreMode().then((r) => setCoreMode(r.core_mode ?? null)).catch(() => setCoreMode(null));
-  };
 
   const loadRules = async () => {
     if (!selectedProfile) return;
@@ -86,10 +82,6 @@ const ProfilesPage: React.FC = () => {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProfile]);
-
-  useEffect(() => {
-    loadCoreMode();
-  }, []);
 
   useEffect(() => {
     if (profiles.length > 0) {
@@ -220,6 +212,9 @@ const ProfilesPage: React.FC = () => {
         {/* Profile Details */}
         {selectedProfile && (
           <Box sx={{ p: 3 }}>
+            <Box className="card-header-accent" sx={{ mb: 2 }}>
+              <Typography variant="h6" sx={{ fontWeight: 600 }}>פרטי פרופיל</Typography>
+            </Box>
             <Box sx={{ mb: 2 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
                 <TextField
@@ -263,13 +258,13 @@ const ProfilesPage: React.FC = () => {
                 <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 0.5 }}>
                   <Chip
                     label={selectedProfile.mode === 'whitelist' ? 'הכל חסום – אוסיף פתיחות' : 'הכל פתוח – אוסיף חסימות'}
-                    color={selectedProfile.mode === 'whitelist' ? 'default' : 'success'}
+                    color={selectedProfile.mode === 'whitelist' ? 'default' : 'secondary'}
+                    variant="outlined"
                     size="small"
                     onClick={lockedSettings.includes('profile_mode') ? undefined : async () => {
                       const newMode = selectedProfile.mode === 'whitelist' ? 'blacklist' : 'whitelist';
                       try {
                         await updateProfile(selectedProfile.id, undefined, newMode, managedUserId ?? undefined);
-                        loadCoreMode();
                       } catch (error: unknown) {
                         alert(`שגיאה: ${error instanceof Error ? error.message : String(error)}`);
                       }
@@ -282,9 +277,6 @@ const ProfilesPage: React.FC = () => {
                   <Typography variant="caption" color="text.secondary">
                     {lockedSettings.includes('profile_mode') ? 'נחסם על ידי ההנהלה' : 'לחץ לשינוי מצב'}
                   </Typography>
-                  {coreMode != null && (
-                    <Typography variant="caption" color="text.secondary">(מצב בפרוקסי: {coreMode})</Typography>
-                  )}
                 </Box>
               </Box>
               {editingProfile === selectedProfile.id && (
@@ -303,9 +295,11 @@ const ProfilesPage: React.FC = () => {
             
             {/* Rules Section - Integrated */}
             <Box sx={{ mb: 3 }}>
-              <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>
-                כללי סינון
-              </Typography>
+              <Box className="card-header-accent" sx={{ mb: 2 }}>
+                <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                  כללי סינון
+                </Typography>
+              </Box>
               <Paper sx={{ p: 2, mb: 2, bgcolor: 'background.default' }}>
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
                   {selectedProfile.mode === 'whitelist' ? (

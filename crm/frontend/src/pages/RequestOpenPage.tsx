@@ -83,7 +83,7 @@ const RequestOpenPage: React.FC = () => {
         <Alert severity="success" sx={{ mb: 2 }}>
           הבקשה נשלחה. מנהל יבדוק ויאשר או ידחה.
         </Alert>
-        <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/profiles')}>
+        <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/profiles')} color="secondary" variant="outlined">
           חזרה לפרופילים
         </Button>
       </Container>
@@ -92,7 +92,7 @@ const RequestOpenPage: React.FC = () => {
 
   return (
     <Container maxWidth="sm" sx={{ mt: 4, mb: 4 }}>
-      <Button startIcon={<ArrowBackIcon />} onClick={() => navigate(-1)} sx={{ mb: 2 }}>
+      <Button startIcon={<ArrowBackIcon />} onClick={() => navigate(-1)} color="secondary" variant="outlined" sx={{ mb: 2 }}>
         חזרה
       </Button>
       <Typography variant="h5" gutterBottom>
@@ -103,6 +103,9 @@ const RequestOpenPage: React.FC = () => {
       </Typography>
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
       <Paper sx={{ p: 4 }}>
+        <Box className="card-header-accent" sx={{ mb: 3 }}>
+          <Typography variant="h6">פרטי הבקשה</Typography>
+        </Box>
         <form onSubmit={handleSubmit}>
           <TextField
             fullWidth
@@ -133,7 +136,7 @@ const RequestOpenPage: React.FC = () => {
               helperText=""
             />
           </Box>
-          <Button type="submit" variant="contained" fullWidth disabled={loading}>
+          <Button type="submit" variant="contained" color="secondary" fullWidth disabled={loading}>
             {loading ? 'שולח...' : 'שלח בקשה'}
           </Button>
         </form>

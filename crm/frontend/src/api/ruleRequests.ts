@@ -6,7 +6,7 @@ import apiClient from './client';
 export interface RuleRequest {
   id: number;
   user_id: number;
-  request_type: 'open' | 'change';
+  request_type: 'open' | 'change' | 'file';
   url?: string;
   domain_pattern?: string;
   path_pattern?: string;
@@ -22,6 +22,11 @@ export interface RuleRequest {
   is_from_blocked_page?: boolean;
   /** Full URL user tried to access (read-only display) */
   request_url?: string;
+  /** For file requests: user description of the file */
+  notes?: string;
+  resolved_by_user_id?: number;
+  /** Display name of admin who last approved/rejected */
+  resolved_by_name?: string | null;
 }
 
 export interface RuleRequestUpdate {
@@ -32,13 +37,16 @@ export interface RuleRequestUpdate {
 }
 
 export interface RuleRequestCreate {
-  request_type: 'open' | 'change';
+  request_type: 'open' | 'change' | 'file';
   url?: string;
   domain_pattern?: string;
   path_pattern?: string;
   action?: string;
   include_subdomains?: boolean;
   tags?: string[];
+  notes?: string;
+  /** Full URL user tried to access (e.g. from surf widget) */
+  request_url?: string;
 }
 
 export const ruleRequestsApi = {

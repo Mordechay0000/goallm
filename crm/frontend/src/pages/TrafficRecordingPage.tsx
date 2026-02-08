@@ -23,6 +23,10 @@ import {
   Chip,
   Button,
   Alert,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
 } from '@mui/material';
 import {
   Search as SearchIcon,
@@ -36,6 +40,27 @@ import {
   OpenInNew as OpenInNewIcon,
 } from '@mui/icons-material';
 import { trafficApi, stopTrafficOnPageUnload, type TrafficLogEntry } from '../api/traffic';
+import { useAuthStore } from '../store/authStore';
+import { adminApi, type GlobalRule } from '../api/admin';
+import { Add as AddIcon, Public as PublicIcon } from '@mui/icons-material';
+
+function ruleDisplayUrl(rule: GlobalRule): string {
+  return rule.display_url || `${rule.domain_pattern}${rule.path_pattern || ''}`;
+}
+
+function actionLabel(action: string): string {
+  return action === 'allow' ? 'פתיחה' : action === 'block' ? 'חסימה' : action;
+}
+
+/** מחזיר כתובת של הדומיין בלבד (ללא נתיב) – למשל https://docs.google.com */
+function getDomainOnlyUrl(url: string): string {
+  try {
+    const u = new URL(url.startsWith('http') ? url : 'https://' + url);
+    return u.origin;
+  } catch {
+    return url;
+  }
+}
 
 const STATUS_LABELS: Record<string, string> = {
   open: 'פתוח',
@@ -68,27 +93,65 @@ function statusIcon(status: string) {
 }
 
 const TrafficRecordingPage: React.FC = () => {
+  const { user } = useAuthStore();
+  const isAdmin = Boolean(user?.is_admin);
   const [recording, setRecording] = useState(false);
+  const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
   const [entries, setEntries] = useState<TrafficLogEntry[]>([]);
   const [viewLink, setViewLink] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [statusPolling, setStatusPolling] = useState(false);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
-  const [advancedView, setAdvancedView] = useState(true);
+  const [advancedView, setAdvancedView] = useState(false);
   const [showUnblocked, setShowUnblocked] = useState(true);
   const [showBlockedOnly, setShowBlockedOnly] = useState(false);
   const [orderBy, setOrderBy] = useState<'url' | 'status' | 'time'>('url');
   const [order, setOrder] = useState<'asc' | 'desc'>('asc');
+  const [addRuleLoading, setAddRuleLoading] = useState<string | null>(null);
+  const [addRuleError, setAddRuleError] = useState('');
+  const [lastAddedRule, setLastAddedRule] = useState<GlobalRule | null>(null);
+  const [addRuleDialog, setAddRuleDialog] = useState<{ url: string; isDomain: boolean } | null>(null);
   const recordingRef = useRef(false);
+
+  const openAddExactDialog = useCallback((url: string) => {
+    setAddRuleError('');
+    setLastAddedRule(null);
+    setAddRuleDialog({ url, isDomain: false });
+  }, []);
+
+  const openAddDomainDialog = useCallback((url: string) => {
+    setAddRuleError('');
+    setLastAddedRule(null);
+    setAddRuleDialog({ url: getDomainOnlyUrl(url), isDomain: true });
+  }, []);
+
+  const closeAddRuleDialog = useCallback(() => setAddRuleDialog(null), []);
+
+  const confirmAddRule = useCallback(async () => {
+    if (!addRuleDialog) return;
+    const { url } = addRuleDialog;
+    setAddRuleLoading(url);
+    try {
+      const rule = await adminApi.createGlobalRule({ url, action: 'allow' });
+      setLastAddedRule(rule);
+      setAddRuleDialog(null);
+      setAddRuleLoading(null);
+    } catch (e: unknown) {
+      const ax = e as { response?: { data?: { detail?: string } } };
+      setAddRuleError(ax?.response?.data?.detail || 'הוספת הכלל נכשלה');
+      setAddRuleLoading(null);
+    }
+  }, [addRuleDialog]);
 
   const fetchStatus = useCallback(async () => {
     try {
-      const { recording: rec } = await trafficApi.status();
+      const { recording: rec, session_id: sid } = await trafficApi.status();
       setRecording(rec);
+      setActiveSessionId(sid ?? null);
       recordingRef.current = rec;
     } catch (e) {
-      setError('לא ניתן לטעון סטטוס הקלטה');
+      setError('לא ניתן לטעון סטטוס ההקלטה');
     }
   }, []);
 
@@ -131,9 +194,37 @@ const TrafficRecordingPage: React.FC = () => {
     return () => clearInterval(t);
   }, [statusPolling, recording, fetchStatus]);
 
+  useEffect(() => {
+    if (!recording || activeSessionId == null) return;
+    setEntries([]);
+    let closed = false;
+    trafficApi
+      .log(activeSessionId)
+      .then(({ entries: list }) => {
+        if (!closed) setEntries(list);
+      })
+      .catch(() => {
+        if (!closed) setError('לא ניתן לטעון לוג ההקלטה');
+      });
+    const closeWs = trafficApi.connectTrafficLive(
+      (newEntries) => {
+        if (!closed) setEntries((prev) => [...prev, ...newEntries]);
+      },
+      (msg) => {
+        if (!closed) setError(msg);
+      }
+    );
+    return () => {
+      closed = true;
+      closeWs();
+    };
+  }, [recording, activeSessionId]);
+
   const handleStart = async () => {
     setError('');
     setLoading(true);
+    setEntries([]);
+    setActiveSessionId(null);
     try {
       await trafficApi.start();
       setRecording(true);
@@ -152,6 +243,7 @@ const TrafficRecordingPage: React.FC = () => {
     setError('');
     setLoading(true);
     setViewLink(null);
+    setActiveSessionId(null);
     try {
       const { session_id, share_token } = await trafficApi.stop();
       setRecording(false);
@@ -258,7 +350,7 @@ const TrafficRecordingPage: React.FC = () => {
         </Paper>
       )}
 
-      {(entries.length > 0 || loading) && (
+      {(recording || entries.length > 0 || loading) && (
         <Paper>
           <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 2 }}>
             <FormControlLabel
@@ -292,10 +384,30 @@ const TrafficRecordingPage: React.FC = () => {
             </Typography>
           </Box>
 
+          {addRuleError && (
+            <Alert severity="error" onClose={() => setAddRuleError('')} sx={{ mb: 1 }}>
+              {addRuleError}
+            </Alert>
+          )}
+
+          {lastAddedRule && (
+            <Alert severity="success" onClose={() => setLastAddedRule(null)} sx={{ mb: 1 }}>
+              <Typography variant="body2" component="span" sx={{ fontWeight: 600 }}>
+                נוסף כלל לרשימה הגלובלית:
+              </Typography>
+              <Typography variant="body2" component="span" sx={{ fontFamily: 'monospace', display: 'block', mt: 0.5 }}>
+                {ruleDisplayUrl(lastAddedRule)}
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                מצב: {actionLabel(lastAddedRule.action)}
+              </Typography>
+            </Alert>
+          )}
+
           {loading && entries.length === 0 ? (
             <Box sx={{ p: 4, textAlign: 'center' }}>טוען...</Box>
           ) : (
-            <TableContainer sx={{ maxHeight: '70vh' }}>
+            <TableContainer sx={{ maxHeight: '70vh', overflow: 'auto', scrollBehavior: 'smooth' }}>
               <Table size="small" stickyHeader>
                 <TableHead>
                   <TableRow>
@@ -314,21 +426,28 @@ const TrafficRecordingPage: React.FC = () => {
                         מצב / סיבת חסימה
                       </TableSortLabel>
                     </TableCell>
-                    <TableCell sx={{ fontWeight: 600, width: 90 }} sortDirection={orderBy === 'time' ? order : false}>
-                      <TableSortLabel active={orderBy === 'time'} direction={orderBy === 'time' ? order : 'asc'} onClick={() => { setOrderBy('time'); setOrder(orderBy === 'time' && order === 'asc' ? 'desc' : 'asc'); }}>
-                        זמן
-                      </TableSortLabel>
-                    </TableCell>
+                    {advancedView && (
+                      <TableCell sx={{ fontWeight: 600, width: 100 }} sortDirection={orderBy === 'time' ? order : false}>
+                        <TableSortLabel active={orderBy === 'time'} direction={orderBy === 'time' ? order : 'asc'} onClick={() => { setOrderBy('time'); setOrder(orderBy === 'time' && order === 'asc' ? 'desc' : 'asc'); }}>
+                          משך הבקשה
+                        </TableSortLabel>
+                      </TableCell>
+                    )}
                     {advancedView && (
                       <TableCell sx={{ fontWeight: 600, minWidth: 140 }}>סוג תוכן</TableCell>
                     )}
-                    <TableCell sx={{ width: 40 }} />
+                    {isAdmin && (
+                      <TableCell sx={{ fontWeight: 600, minWidth: 180 }}>הוספה לרשימה הגלובלית</TableCell>
+                    )}
+                    {advancedView && (
+                      <TableCell sx={{ width: 40 }} />
+                    )}
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {filteredRows.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={advancedView ? 7 : 5} align="center" sx={{ py: 4 }}>
+                      <TableCell colSpan={4 + (advancedView ? 4 : 0) + (isAdmin ? 1 : 0)} align="center" sx={{ py: 4 }}>
                         {entries.length === 0 ? 'אין רשומות בהקלטה הזו' : 'לא נמצאו שורות לפי הסינון.'}
                       </TableCell>
                     </TableRow>
@@ -342,7 +461,20 @@ const TrafficRecordingPage: React.FC = () => {
                             <Chip label={row.protocol || '—'} size="small" variant="outlined" sx={{ fontFamily: 'monospace' }} />
                           </TableCell>
                         )}
-                        <TableCell sx={{ maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis' }} title={row.url}>
+                        <TableCell
+                          title={row.url}
+                          sx={{
+                            maxWidth: 400,
+                            overflowX: 'auto',
+                            whiteSpace: 'nowrap',
+                            scrollbarWidth: 'thin',
+                            scrollbarColor: '#2F6CFF #E4E7EC',
+                            '&::-webkit-scrollbar': { height: 8 },
+                            '&::-webkit-scrollbar-track': { background: '#E4E7EC', borderRadius: 8 },
+                            '&::-webkit-scrollbar-thumb': { background: '#2F6CFF', borderRadius: 8, border: '2px solid #E4E7EC' },
+                            '&::-webkit-scrollbar-thumb:hover': { background: '#2555d9' },
+                          }}
+                        >
                           {row.url}
                         </TableCell>
                         <TableCell>
@@ -353,19 +485,54 @@ const TrafficRecordingPage: React.FC = () => {
                             variant="outlined"
                           />
                         </TableCell>
-                        <TableCell>
-                          {row.time_sec != null && row.time_sec >= 0 ? `${row.time_sec.toFixed(3)} s` : '—'}
-                        </TableCell>
+                        {advancedView && (
+                          <TableCell>
+                            {row.time_sec != null && row.time_sec >= 0 ? `${row.time_sec.toFixed(3)} s` : '—'}
+                          </TableCell>
+                        )}
                         {advancedView && (
                           <TableCell sx={{ color: 'text.secondary', fontSize: '0.8rem' }}>{row.content_type || '—'}</TableCell>
                         )}
-                        <TableCell>
-                          <Tooltip title="פרטים">
-                            <IconButton size="small">
-                              <InfoIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        </TableCell>
+                        {isAdmin && (
+                          <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                            <Tooltip title="הוסף פתיחה – הכתובת המדויקת (הקישור כמו שהוא)">
+                              <span>
+                                <Button
+                                  size="small"
+                                  variant="outlined"
+                                  startIcon={<AddIcon />}
+                                  disabled={addRuleLoading !== null}
+                                  onClick={() => openAddExactDialog(row.url)}
+                                >
+                                  כתובת מדויקת
+                                </Button>
+                              </span>
+                            </Tooltip>
+                            <Tooltip title="הוסף פתיחה – כל הדומיין (בלי נתיב)">
+                              <span>
+                                <Button
+                                  size="small"
+                                  variant="outlined"
+                                  startIcon={<PublicIcon />}
+                                  disabled={addRuleLoading !== null}
+                                  onClick={() => openAddDomainDialog(row.url)}
+                                  sx={{ ml: 0.5 }}
+                                >
+                                  כל הדומיין
+                                </Button>
+                              </span>
+                            </Tooltip>
+                          </TableCell>
+                        )}
+                        {advancedView && (
+                          <TableCell>
+                            <Tooltip title="פרטים">
+                              <IconButton size="small">
+                                <InfoIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          </TableCell>
+                        )}
                       </TableRow>
                     ))
                   )}
@@ -373,6 +540,31 @@ const TrafficRecordingPage: React.FC = () => {
               </Table>
             </TableContainer>
           )}
+
+          <Dialog open={Boolean(addRuleDialog)} onClose={closeAddRuleDialog} maxWidth="sm" fullWidth>
+            <DialogTitle>הוספת כלל לרשימה הגלובלית</DialogTitle>
+            <DialogContent>
+              {addRuleDialog && (
+                <>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                    הכלל שייווסף:
+                  </Typography>
+                  <Typography variant="body1" sx={{ fontFamily: 'monospace', wordBreak: 'break-all', mb: 1 }}>
+                    {addRuleDialog.url}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    מצב: פתיחה
+                  </Typography>
+                </>
+              )}
+            </DialogContent>
+            <DialogActions sx={{ px: 3, pb: 2 }}>
+              <Button onClick={closeAddRuleDialog}>ביטול</Button>
+              <Button variant="contained" onClick={confirmAddRule} disabled={addRuleLoading !== null}>
+                {addRuleLoading !== null ? 'מוסיף...' : 'אישור'}
+              </Button>
+            </DialogActions>
+          </Dialog>
         </Paper>
       )}
 

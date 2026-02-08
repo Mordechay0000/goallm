@@ -101,7 +101,7 @@ const HomePage: React.FC = () => {
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, 1fr)' }, gap: 2, mb: 4 }}>
         <Paper sx={{ p: 3 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <FilterIcon color="primary" />
+            <FilterIcon color="secondary" />
             <Box>
               <Typography variant="h4" sx={{ fontWeight: 600 }}>
                 {stats.totalRules}
@@ -115,7 +115,7 @@ const HomePage: React.FC = () => {
 
         <Paper sx={{ p: 3 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <ScheduleIcon color="primary" />
+            <ScheduleIcon color="secondary" />
             <Box>
               <Typography variant="h4" sx={{ fontWeight: 600 }}>
                 {stats.totalSchedules}
@@ -129,7 +129,7 @@ const HomePage: React.FC = () => {
 
         <Paper sx={{ p: 3 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <SecurityIcon color="primary" />
+            <SecurityIcon color="secondary" />
             <Box>
               <Typography variant="h4" sx={{ fontWeight: 600 }}>
                 {profiles.length}
@@ -145,9 +145,11 @@ const HomePage: React.FC = () => {
       {/* Active Profile */}
       <Paper sx={{ mb: 4 }}>
         <Box sx={{ p: 3 }}>
-          <Typography variant="h6" sx={{ fontWeight: 600, mb: 3 }}>
-            הפרופיל שפעיל כרגע
-          </Typography>
+          <Box className="card-header-accent" sx={{ mb: 3 }}>
+            <Typography variant="h6" sx={{ fontWeight: 600 }}>
+              הפרופיל שפעיל כרגע
+            </Typography>
+          </Box>
           <Divider sx={{ mb: 3 }} />
           {currentProfile ? (
             <Box>
@@ -157,8 +159,9 @@ const HomePage: React.FC = () => {
                 </Typography>
                 <Chip
                   label={currentProfile.mode === 'whitelist' ? 'הכל חסום – אוסיף פתיחות' : 'הכל פתוח – אוסיף חסימות'}
-                  color={currentProfile.mode === 'whitelist' ? 'default' : 'success'}
+                  color={currentProfile.mode === 'whitelist' ? 'default' : 'secondary'}
                   size="small"
+                  variant="outlined"
                 />
               </Box>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
@@ -203,9 +206,11 @@ const HomePage: React.FC = () => {
       {profiles.length > 0 && (
         <Paper>
           <Box sx={{ p: 3 }}>
-            <Typography variant="h6" sx={{ fontWeight: 600, mb: 3 }}>
-              כל הפרופילים שלך
-            </Typography>
+            <Box className="card-header-accent" sx={{ mb: 3 }}>
+              <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                כל הפרופילים שלך
+              </Typography>
+            </Box>
             <Divider sx={{ mb: 3 }} />
             <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 2, mb: 2 }}>
               <TextField
@@ -267,8 +272,9 @@ const HomePage: React.FC = () => {
                         <TableCell>
                           <Chip
                             label={profile.is_default ? 'פעיל' : 'לא פעיל'}
-                            color={profile.is_default ? 'primary' : 'default'}
+                            color={profile.is_default ? 'secondary' : 'default'}
                             size="small"
+                            variant={profile.is_default ? 'filled' : 'outlined'}
                           />
                         </TableCell>
                         <TableCell>

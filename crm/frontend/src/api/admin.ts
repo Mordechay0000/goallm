@@ -73,6 +73,14 @@ export const adminApi = {
     });
     return response.data;
   },
+  /** Update existing global rule (by domain+path) to block. Admin only. */
+  surfUpdateRuleToBlock: async (ruleDomain: string, rulePath: string): Promise<{ success: boolean; rule: GlobalRule }> => {
+    const response = await apiClient.post<{ success: boolean; rule: GlobalRule }>('/api/admin/surf-update-rule-to-block', {
+      rule_domain: ruleDomain,
+      rule_path: rulePath || '/',
+    });
+    return response.data;
+  },
 
   // Filter switches (הפעלה/כיבוי סינונים – אדמין)
   getFilterSwitches: async (): Promise<FilterSwitches> => {
@@ -83,6 +91,12 @@ export const adminApi = {
     const response = await apiClient.put<FilterSwitches>('/api/admin/filter-switches', switches);
     return response.data;
   },
+
+  /** לוג אבטחה: רשימת צפיות בהקלטות תעבורה (משתמש + זמן). session_id אופציונלי לסינון. */
+  listTrafficRecordingViews: async (params?: { session_id?: number }): Promise<{ views: TrafficRecordingViewLogEntry[] }> => {
+    const response = await apiClient.get<{ views: TrafficRecordingViewLogEntry[] }>('/api/admin/traffic-recording-views', { params: params?.session_id != null ? { session_id: params.session_id } : undefined });
+    return response.data;
+  },
 };
 
 export interface FilterSwitches {
@@ -90,6 +104,7 @@ export interface FilterSwitches {
   text_filter: boolean;
   image_filter: boolean;
   embedded_image_filter: boolean;
+  file_download_filter: boolean;
 }
 
 export interface GlobalRule {
@@ -125,4 +140,15 @@ export interface GlobalRuleUpdate {
   text_filter_enabled?: boolean;
   image_filter_enabled?: boolean;
   file_filter_enabled?: boolean;
+}
+
+/** רשומה בלוג אבטחה – צפייה בהקלטת תעבורה */
+export interface TrafficRecordingViewLogEntry {
+  id: number;
+  traffic_session_id: number;
+  user_id: number;
+  viewed_at: number;
+  email?: string;
+  first_name?: string;
+  last_name?: string;
 }

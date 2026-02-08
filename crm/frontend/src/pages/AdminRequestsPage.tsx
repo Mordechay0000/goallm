@@ -51,6 +51,7 @@ const STATUS_LABELS: Record<string, string> = {
 const TYPE_LABELS: Record<string, string> = {
   open: 'בקשה לפתיחה',
   change: 'בקשה לשינוי',
+  file: 'פתיחת קובץ',
 };
 
 type RequestOrder = 'asc' | 'desc';
@@ -194,7 +195,8 @@ const AdminRequestsPage: React.FC = () => {
 
   const handleRowClick = (req: RuleRequest) => {
     if (req.status === 'approved') {
-      if (req.approved_profile_id) navigate(`/profiles/${req.approved_profile_id}/rules`);
+      if (req.approved_rule_id) navigate(`/admin/global-rules?edit=${req.approved_rule_id}`);
+      else if (req.approved_profile_id) navigate(`/profiles/${req.approved_profile_id}/rules`);
       else navigate('/admin/global-rules');
       return;
     }
@@ -299,6 +301,7 @@ const AdminRequestsPage: React.FC = () => {
               <MenuItem value="">הכל</MenuItem>
               <MenuItem value="open">בקשה לפתיחה</MenuItem>
               <MenuItem value="change">בקשה לשינוי</MenuItem>
+              <MenuItem value="file">פתיחת קובץ</MenuItem>
             </Select>
           </FormControl>
           <FormControl size="small" sx={{ minWidth: 120 }}>
@@ -317,6 +320,9 @@ const AdminRequestsPage: React.FC = () => {
         <Typography>טוען...</Typography>
       ) : (
         <Paper>
+          <Box className="card-header-accent" sx={{ px: 2, pt: 2, pb: 1 }}>
+            <Typography variant="h6" sx={{ fontWeight: 600 }}>בקשות שהתקבלו</Typography>
+          </Box>
           <TableContainer>
             <Table size="small">
               <TableHead>
@@ -359,31 +365,46 @@ const AdminRequestsPage: React.FC = () => {
                     <Chip
                       label={STATUS_LABELS[r.status] || r.status}
                       size="small"
-                      color={r.status === 'approved' ? 'success' : r.status === 'rejected' ? 'error' : 'default'}
+                      variant="outlined"
+                      color={r.status === 'approved' ? 'secondary' : r.status === 'rejected' ? 'error' : 'default'}
                     />
                   </TableCell>
                   <TableCell>{r.user_phone ?? (r.user_id ? '—' : 'מעמוד חסום')}</TableCell>
-                  <TableCell>{r.url || (r.domain_pattern || '') + (r.path_pattern || '') || '—'}</TableCell>
+                  <TableCell
+                    sx={{
+                      maxWidth: 400,
+                      overflowX: 'auto',
+                      whiteSpace: 'nowrap',
+                      scrollbarWidth: 'thin',
+                      scrollbarColor: '#2F6CFF #E4E7EC',
+                      '&::-webkit-scrollbar': { height: 8 },
+                      '&::-webkit-scrollbar-track': { background: '#E4E7EC', borderRadius: 8 },
+                      '&::-webkit-scrollbar-thumb': { background: '#2F6CFF', borderRadius: 8, border: '2px solid #E4E7EC' },
+                      '&::-webkit-scrollbar-thumb:hover': { background: '#2555d9' },
+                    }}
+                  >
+                    {r.url || (r.domain_pattern || '') + (r.path_pattern || '') || '—'}
+                  </TableCell>
                   <TableCell>{r.action || '—'}</TableCell>
                   <TableCell align="left" onClick={(e) => e.stopPropagation()}>
                     {r.status === 'pending' && (
                       <>
-                        <Button size="small" color="primary" startIcon={<CheckIcon />} onClick={() => handleApproveClick(r)}>אשר</Button>
+                        <Button size="small" color="secondary" startIcon={<CheckIcon />} onClick={() => handleApproveClick(r)}>אשר</Button>
                         <Button size="small" color="error" startIcon={<CloseIcon />} onClick={() => handleReject(r)}>דחה</Button>
-                        <Button size="small" startIcon={<EditIcon />} onClick={() => openEditDialog(r)}>עריכה</Button>
+                        <Button size="small" color="secondary" variant="outlined" startIcon={<EditIcon />} onClick={() => openEditDialog(r)}>עריכה</Button>
                         <IconButton size="small" onClick={(e) => handleDelete(r, e)} title="מחק"><DeleteIcon /></IconButton>
                       </>
                     )}
                     {r.status === 'rejected' && (
                       <>
-                        <Button size="small" color="primary" startIcon={<CheckIcon />} onClick={() => handleApproveClick(r)}>אשר</Button>
-                        <Button size="small" startIcon={<EditIcon />} onClick={() => openEditDialog(r)}>עריכה</Button>
+                        <Button size="small" color="secondary" startIcon={<CheckIcon />} onClick={() => handleApproveClick(r)}>אשר</Button>
+                        <Button size="small" color="secondary" variant="outlined" startIcon={<EditIcon />} onClick={() => openEditDialog(r)}>עריכה</Button>
                         <IconButton size="small" onClick={(e) => handleDelete(r, e)} title="מחק"><DeleteIcon /></IconButton>
                       </>
                     )}
                     {r.status === 'approved' && (
                       <>
-                        <Button size="small" startIcon={<EditIcon />} onClick={() => r.approved_profile_id ? navigate(`/profiles/${r.approved_profile_id}/rules`) : navigate('/admin/global-rules')}>לכלל</Button>
+                        <Button size="small" color="secondary" variant="outlined" startIcon={<EditIcon />} onClick={(e) => { e.stopPropagation(); if (r.approved_rule_id) navigate(`/admin/global-rules?edit=${r.approved_rule_id}`); else if (r.approved_profile_id) navigate(`/profiles/${r.approved_profile_id}/rules`); else navigate('/admin/global-rules'); }}>לכלל</Button>
                         <IconButton size="small" onClick={(e) => handleDelete(r, e)} title="מחק"><DeleteIcon /></IconButton>
                       </>
                     )}
@@ -425,12 +446,16 @@ const AdminRequestsPage: React.FC = () => {
         </Paper>
       )}
 
-      {/* Approve: adds rule to global list only */}
+      {/* Approve: adds rule to global list (or for file requests just marks as approved) */}
       <Dialog open={!!approveDialog} onClose={() => setApproveDialog(null)}>
-        <DialogTitle>אישור בקשה – הכלל יווסף לרשימה הגלובלית</DialogTitle>
+        <DialogTitle>
+          {approveDialog?.request_type === 'file' ? 'אישור בקשת פתיחת קובץ' : 'אישור בקשה – הכלל יווסף לרשימה הגלובלית'}
+        </DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-            אישור הבקשה יוסיף את הכלל לרשימה הגלובלית (רשימה לבנה בסיסית). רק אדמין יכול לערוך את הרשימה הגלובלית.
+            {approveDialog?.request_type === 'file'
+              ? 'אישור הבקשה יסומן כ־אושר. לא נוצר כלל ברשימה.'
+              : 'אישור הבקשה יוסיף את הכלל לרשימה הגלובלית (רשימה לבנה בסיסית). רק אדמין יכול לערוך את הרשימה הגלובלית.'}
           </Typography>
         </DialogContent>
         <DialogActions>
@@ -445,14 +470,41 @@ const AdminRequestsPage: React.FC = () => {
         <DialogContent>
           {editDialog && (
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 1 }}>
+              {(editDialog.status === 'approved' || editDialog.status === 'rejected') && (editDialog.resolved_by_name != null || editDialog.updated_at != null) && (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, pb: 1, borderBottom: 1, borderColor: 'divider' }}>
+                  {editDialog.resolved_by_name != null && (
+                    <Typography variant="body2" color="text.secondary">
+                      {editDialog.status === 'approved' ? 'אושר על ידי:' : 'נדחה על ידי:'} {editDialog.resolved_by_name}
+                    </Typography>
+                  )}
+                  {editDialog.updated_at != null && (
+                    <Typography variant="body2" color="text.secondary">
+                      עדכון אחרון: {formatDate(editDialog.updated_at)}
+                    </Typography>
+                  )}
+                </Box>
+              )}
               <TextField
                 fullWidth
-                label="כתובת מלאה (לא לעריכה)"
+                label={editDialog.request_type === 'file' ? 'קישור לקובץ' : 'כתובת מלאה (לא לעריכה)'}
                 value={editDialog.request_url || editDialog.url || (editDialog.domain_pattern || '') + (editDialog.path_pattern || '') || '—'}
                 InputProps={{ readOnly: true }}
                 sx={{ '& .MuiInputBase-input': { color: 'text.secondary', bgcolor: 'action.hover' } }}
                 size="small"
               />
+              {editDialog.request_type === 'file' && editDialog.notes && (
+                <TextField
+                  fullWidth
+                  label="תיאור הקובץ (מהמשתמש)"
+                  value={editDialog.notes}
+                  InputProps={{ readOnly: true }}
+                  multiline
+                  minRows={2}
+                  size="small"
+                />
+              )}
+              {editDialog.request_type !== 'file' && (
+              <>
               <TextField
                 fullWidth
                 label="כתובת אתר"
@@ -476,17 +528,28 @@ const AdminRequestsPage: React.FC = () => {
               </FormControl>
               <FormControlLabel control={<Checkbox checked={editIncludeSubdomains} onChange={(e) => setEditIncludeSubdomains(e.target.checked)} />} label="כולל סאב-דומיינים" />
               <TagInput value={editTags} onChange={setEditTags} label="תגיות" helperText="" />
+              </>
+              )}
             </Box>
           )}
         </DialogContent>
         <DialogActions sx={{ justifyContent: 'space-between', px: 2, pb: 1.5 }}>
           <Button onClick={() => setEditDialog(null)}>ביטול</Button>
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+            {editDialog?.request_type === 'file' && editDialog?.status === 'pending' && (
+              <Button variant="contained" color="primary" onClick={() => { setApproveDialog(editDialog); setEditDialog(null); }}>
+                אישור
+              </Button>
+            )}
+            {editDialog?.request_type !== 'file' && (
+              <>
             <Button variant="outlined" onClick={handleSaveEdit} disabled={saving || !!editUrlError}>{saving ? 'שומר...' : 'שמור'}</Button>
             {(editDialog?.status === 'pending' || editDialog?.status === 'rejected') && (
               <Button variant="contained" color="primary" onClick={saveEditThenOpenApprove} disabled={saving || !!editUrlError}>
                 {editDialog?.status === 'pending' ? 'שמור ואשר' : 'שמור ואשר בקשה'}
               </Button>
+            )}
+            </>
             )}
             {(editDialog?.status === 'pending' || editDialog?.status === 'rejected') && (
               <>

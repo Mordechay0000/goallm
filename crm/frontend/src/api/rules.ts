@@ -146,18 +146,12 @@ export interface ResolverActiveState {
 export const resolverApi = {
   sync: async (managedUserId?: number): Promise<{ status: string; message: string } & ResolverCoreState> => {
     const params = managedUserId != null ? { managed_user_id: managedUserId } : {};
-    const response = await apiClient.post<{ status: string; message: string; core_mode?: string; core_db_path?: string }>(
+    const response = await apiClient.post<{ status: string; message: string }>(
       '/api/resolver/sync',
       null,
       { params },
     );
     return response.data as { status: string; message: string } & ResolverCoreState;
-  },
-
-  /** Get profile mode currently stored in core (what the proxy uses). Use to verify sync. */
-  getCoreMode: async (): Promise<ResolverCoreState> => {
-    const response = await apiClient.get<ResolverCoreState>('/api/resolver/core-mode');
-    return response.data;
   },
 
   /** Get currently active profile and its mode for the current user (with schedule). */

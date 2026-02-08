@@ -32,11 +32,13 @@ const RequestChangePage: React.FC = () => {
   const actionFromQuery = searchParams.get('action') || 'block';
   const includeSubdomainsFromQuery = searchParams.get('include_subdomains') || '';
   const tagsFromQuery = searchParams.get('tags') || '';
+  const requestUrlFromQuery = searchParams.get('request_url') || '';
 
   const [url, setUrl] = useState('');
   const [action, setAction] = useState<'allow' | 'block'>('block');
   const [includeSubdomains, setIncludeSubdomains] = useState(false);
   const [tags, setTags] = useState<string[]>([]);
+  const [requestUrl, setRequestUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState<string>('');
@@ -55,7 +57,8 @@ const RequestChangePage: React.FC = () => {
     if ((domainFromQuery || '').startsWith('*.')) setIncludeSubdomains(true);
     else if (includeSubdomainsFromQuery === '1' || includeSubdomainsFromQuery.toLowerCase() === 'true') setIncludeSubdomains(true);
     if (tagsFromQuery) setTags(tagsFromQuery.split(',').map((t) => t.trim()).filter(Boolean));
-  }, [urlFromQuery, domainFromQuery, pathFromQuery, actionFromQuery, includeSubdomainsFromQuery, tagsFromQuery]);
+    if (requestUrlFromQuery) setRequestUrl(requestUrlFromQuery);
+  }, [urlFromQuery, domainFromQuery, pathFromQuery, actionFromQuery, includeSubdomainsFromQuery, tagsFromQuery, requestUrlFromQuery]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -72,6 +75,7 @@ const RequestChangePage: React.FC = () => {
         action,
         include_subdomains: includeSubdomains,
         tags: tags.length > 0 ? tags : undefined,
+        request_url: requestUrl.trim() || undefined,
       });
       setSuccess(true);
     } catch (err: unknown) {
@@ -88,7 +92,7 @@ const RequestChangePage: React.FC = () => {
         <Alert severity="success" sx={{ mb: 2 }}>
           בקשה לשינוי נשלחה. מנהל יבדוק ויאשר או ידחה.
         </Alert>
-        <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/profiles')}>
+        <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/profiles')} color="secondary" variant="outlined">
           חזרה לפרופילים
         </Button>
       </Container>
@@ -97,7 +101,7 @@ const RequestChangePage: React.FC = () => {
 
   return (
     <Container maxWidth="sm" sx={{ mt: 4, mb: 4 }}>
-      <Button startIcon={<ArrowBackIcon />} onClick={() => navigate(-1)} sx={{ mb: 2 }}>
+      <Button startIcon={<ArrowBackIcon />} onClick={() => navigate(-1)} color="secondary" variant="outlined" sx={{ mb: 2 }}>
         חזרה
       </Button>
       <Typography variant="h5" gutterBottom>
@@ -108,6 +112,9 @@ const RequestChangePage: React.FC = () => {
       </Typography>
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
       <Paper sx={{ p: 4 }}>
+        <Box className="card-header-accent" sx={{ mb: 3 }}>
+          <Typography variant="h6">פרטי הבקשה</Typography>
+        </Box>
         <form onSubmit={handleSubmit}>
           <TextField
             fullWidth
@@ -138,7 +145,7 @@ const RequestChangePage: React.FC = () => {
               helperText=""
             />
           </Box>
-          <Button type="submit" variant="contained" fullWidth disabled={loading}>
+          <Button type="submit" variant="contained" color="secondary" fullWidth disabled={loading}>
             {loading ? 'שולח...' : 'שלח בקשה לשינוי'}
           </Button>
         </form>

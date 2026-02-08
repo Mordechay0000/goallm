@@ -2,6 +2,7 @@
  * Admin: manage global rules (base whitelist). Admin only.
  */
 import React, { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Container,
   Paper,
@@ -33,6 +34,7 @@ import {
   TableSortLabel,
   TablePagination,
   InputAdornment,
+  Alert,
 } from '@mui/material';
 import { Add as AddIcon, Delete as DeleteIcon, Edit as EditIcon, ExpandMore as ExpandMoreIcon, Search as SearchIcon } from '@mui/icons-material';
 import { adminApi, type GlobalRule, type GlobalRuleCreate, type GlobalRuleUpdate } from '../api/admin';
@@ -83,6 +85,9 @@ const AdminGlobalRulesPage: React.FC = () => {
   const [resolveError, setResolveError] = useState<string | null>(null);
   const [resolveDone, setResolveDone] = useState(false);
 
+  const [editRuleIdError, setEditRuleIdError] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+
   const loadRules = async () => {
     setLoading(true);
     try {
@@ -98,6 +103,42 @@ const AdminGlobalRulesPage: React.FC = () => {
   useEffect(() => {
     loadRules();
   }, []);
+
+  // Open edit dialog when navigating from "בקשות שהתקבלו" with ?edit=ruleId
+  useEffect(() => {
+    const editId = searchParams.get('edit');
+    if (!editId) return;
+    const id = parseInt(editId, 10);
+    if (Number.isNaN(id)) {
+      setSearchParams((p) => {
+        const next = new URLSearchParams(p);
+        next.delete('edit');
+        return next;
+      }, { replace: true });
+      return;
+    }
+    setEditRuleIdError(null);
+    adminApi
+      .getGlobalRule(id)
+      .then((rule) => {
+        setSearchParams((p) => {
+          const next = new URLSearchParams(p);
+          next.delete('edit');
+          return next;
+        }, { replace: true });
+        openEdit(rule);
+      })
+      .catch((e: unknown) => {
+        const status = e && typeof e === 'object' && 'response' in e && (e as { response?: { status?: number } }).response?.status;
+        setEditRuleIdError(status === 404 ? 'הכלל לא קיים' : 'שגיאה בטעינת הכלל');
+        setSearchParams((p) => {
+          const next = new URLSearchParams(p);
+          next.delete('edit');
+          return next;
+        }, { replace: true });
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams.get('edit')]);
 
   const openAdd = () => {
     setEditingId(null);
@@ -219,6 +260,11 @@ const AdminGlobalRulesPage: React.FC = () => {
 
   return (
     <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+      {editRuleIdError && (
+        <Alert severity="error" onClose={() => setEditRuleIdError(null)} sx={{ mb: 2 }}>
+          {editRuleIdError}
+        </Alert>
+      )}
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 2, mb: 3 }}>
         <Box>
           <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
@@ -228,14 +274,16 @@ const AdminGlobalRulesPage: React.FC = () => {
             הרשימה הגלובלית קובעת אילו אתרים בכלל יכולים להיות פתוחים במערכת. רק אדמין יכול לערוך.
           </Typography>
         </Box>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={openAdd}>
+        <Button variant="contained" color="secondary" startIcon={<AddIcon />} onClick={openAdd}>
           הוסף כלל
         </Button>
       </Box>
 
       {/* Resolve URL: which rule applies */}
       <Paper sx={{ p: 2, mb: 2 }}>
-        <Typography variant="subtitle2" sx={{ mb: 1 }}>בדיקת קישור – איזה כלל גלובלי חל?</Typography>
+        <Box className="card-header-accent" sx={{ mb: 2 }}>
+          <Typography variant="h6">בדיקת קישור – איזה כלל גלובלי חל?</Typography>
+        </Box>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}>
           <TextField
             size="small"
@@ -257,7 +305,7 @@ const AdminGlobalRulesPage: React.FC = () => {
                 <>
                   <Typography variant="body2" color="text.secondary">הכלל החל:</Typography>
                   <Chip size="small" label={ruleDisplayUrl(resolveResult)} sx={{ fontFamily: 'monospace' }} />
-                  <Chip size="small" label={ACTION_LABELS[resolveResult.action] ?? resolveResult.action} color={resolveResult.action === 'block' ? 'error' : 'success'} />
+                  <Chip size="small" variant="outlined" label={ACTION_LABELS[resolveResult.action] ?? resolveResult.action} color={resolveResult.action === 'block' ? 'default' : 'secondary'} />
                 </>
               ) : (
                 <Typography variant="body2" color="text.secondary">אין כלל גלובלי מתאים לכתובת זו</Typography>
@@ -268,6 +316,9 @@ const AdminGlobalRulesPage: React.FC = () => {
       </Paper>
 
       <Paper>
+        <Box className="card-header-accent" sx={{ px: 2, pt: 2, pb: 1 }}>
+          <Typography variant="h6" sx={{ fontWeight: 600 }}>רשימת כללים גלובליים</Typography>
+        </Box>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, px: 2, pt: 2, pb: 1 }}>
           <TextField
             size="small"
@@ -321,7 +372,21 @@ const AdminGlobalRulesPage: React.FC = () => {
               ) : (
                 paginatedRules.map((r) => (
                   <TableRow key={r.id} hover sx={{ '&:hover': { bgcolor: 'action.selected' } }}>
-                    <TableCell>{ruleDisplayUrl(r)}</TableCell>
+                    <TableCell
+                      sx={{
+                        maxWidth: 400,
+                        overflowX: 'auto',
+                        whiteSpace: 'nowrap',
+                        scrollbarWidth: 'thin',
+                        scrollbarColor: '#2F6CFF #E4E7EC',
+                        '&::-webkit-scrollbar': { height: 8 },
+                        '&::-webkit-scrollbar-track': { background: '#E4E7EC', borderRadius: 8 },
+                        '&::-webkit-scrollbar-thumb': { background: '#2F6CFF', borderRadius: 8, border: '2px solid #E4E7EC' },
+                        '&::-webkit-scrollbar-thumb:hover': { background: '#2555d9' },
+                      }}
+                    >
+                      {ruleDisplayUrl(r)}
+                    </TableCell>
                     <TableCell>{ACTION_LABELS[r.action] || r.action}</TableCell>
                     <TableCell>
                       {(r.tags || []).length ? (r.tags || []).map((t) => <Chip key={t} label={t} size="small" sx={{ mr: 0.5 }} />) : '—'}

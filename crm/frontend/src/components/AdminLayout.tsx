@@ -22,7 +22,6 @@ import {
   MenuItem,
   Badge,
 } from '@mui/material';
-import { primaryGradient } from '../theme';
 import {
   Menu as MenuIcon,
   Dashboard as DashboardIcon,
@@ -148,11 +147,11 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         </Typography>
       </Toolbar>
       <Divider />
-      <List sx={{ pt: 1 }}>
+      <List sx={{ pt: 2, pb: 2 }}>
         {navItems.map((item) => {
           const showSupportBadge = item.path === '/support' && (supportStats.tickets_with_replies ?? 0) > 0;
           return (
-            <ListItem key={item.path} disablePadding>
+            <ListItem key={item.path} disablePadding sx={{ mb: 0.25 }}>
               <ListItemButton
                 selected={isActive(item.path)}
                 onClick={() => {
@@ -160,21 +159,16 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   setMobileOpen(false);
                 }}
                 sx={{
-                  minHeight: 48,
-                  '&:hover:not(.Mui-selected)': {
-                    backgroundColor: 'rgba(99, 102, 241, 0.06)',
-                  },
+                  minHeight: 52,
+                  py: 1.25,
+                  px: 2,
                   '&.Mui-selected': {
-                    backgroundColor: 'action.selected',
                     borderRight: '3px solid',
-                    borderColor: 'primary.main',
-                    '&:hover': {
-                      backgroundColor: 'action.selected',
-                    },
+                    borderColor: 'secondary.main',
                   },
                 }}
               >
-                <ListItemIcon sx={{ minWidth: 40 }}>
+                <ListItemIcon sx={{ minWidth: 44, mr: 1.25 }}>
                   {showSupportBadge ? (
                     <Badge badgeContent={supportStats.tickets_with_replies} color="primary">
                       {item.icon}
@@ -190,7 +184,8 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         })}
         {user?.is_admin && (
           <>
-            <ListItem disablePadding>
+            <Divider sx={{ my: 2 }} />
+            <ListItem disablePadding sx={{ mb: 0.25 }}>
               <ListItemButton
                 selected={isActive('/admin/users')}
                 onClick={() => {
@@ -198,21 +193,16 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   setMobileOpen(false);
                 }}
                 sx={{
-                  minHeight: 48,
-                  '&:hover:not(.Mui-selected)': {
-                    backgroundColor: 'rgba(99, 102, 241, 0.06)',
-                  },
+                  minHeight: 52,
+                  py: 1.25,
+                  px: 2,
                   '&.Mui-selected': {
-                    backgroundColor: 'action.selected',
                     borderRight: '3px solid',
-                    borderColor: 'primary.main',
-                    '&:hover': {
-                      backgroundColor: 'action.selected',
-                    },
+                    borderColor: 'secondary.main',
                   },
                 }}
               >
-                <ListItemIcon sx={{ minWidth: 40 }}>
+                <ListItemIcon sx={{ minWidth: 44, mr: 1.25 }}>
                   <PeopleIcon />
                 </ListItemIcon>
                 <ListItemText
@@ -224,7 +214,7 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 />
               </ListItemButton>
             </ListItem>
-            <ListItem disablePadding>
+            <ListItem disablePadding sx={{ mb: 0.25 }}>
               <ListItemButton
                 selected={isActive('/admin/requests')}
                 onClick={() => {
@@ -232,21 +222,16 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   setMobileOpen(false);
                 }}
                 sx={{
-                  minHeight: 48,
-                  '&:hover:not(.Mui-selected)': {
-                    backgroundColor: 'rgba(99, 102, 241, 0.06)',
-                  },
+                  minHeight: 52,
+                  py: 1.25,
+                  px: 2,
                   '&.Mui-selected': {
-                    backgroundColor: 'action.selected',
                     borderRight: '3px solid',
-                    borderColor: 'primary.main',
-                    '&:hover': {
-                      backgroundColor: 'action.selected',
-                    },
+                    borderColor: 'secondary.main',
                   },
                 }}
               >
-                <ListItemIcon sx={{ minWidth: 40 }}>
+                <ListItemIcon sx={{ minWidth: 44, mr: 1.25 }}>
                   <SecurityIcon />
                 </ListItemIcon>
                 <ListItemText
@@ -258,7 +243,7 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 />
               </ListItemButton>
             </ListItem>
-            <ListItem disablePadding>
+            <ListItem disablePadding sx={{ mb: 0.25 }}>
               <ListItemButton
                 selected={isActive('/admin/global-rules')}
                 onClick={() => {
@@ -266,21 +251,16 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   setMobileOpen(false);
                 }}
                 sx={{
-                  minHeight: 48,
-                  '&:hover:not(.Mui-selected)': {
-                    backgroundColor: 'rgba(99, 102, 241, 0.06)',
-                  },
+                  minHeight: 52,
+                  py: 1.25,
+                  px: 2,
                   '&.Mui-selected': {
-                    backgroundColor: 'action.selected',
                     borderRight: '3px solid',
-                    borderColor: 'primary.main',
-                    '&:hover': {
-                      backgroundColor: 'action.selected',
-                    },
+                    borderColor: 'secondary.main',
                   },
                 }}
               >
-                <ListItemIcon sx={{ minWidth: 40 }}>
+                <ListItemIcon sx={{ minWidth: 44, mr: 1.25 }}>
                   <PublicIcon />
                 </ListItemIcon>
                 <ListItemText
@@ -292,7 +272,7 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 />
               </ListItemButton>
             </ListItem>
-            <ListItem disablePadding>
+            <ListItem disablePadding sx={{ mb: 0.25 }}>
               <ListItemButton
                 selected={isActive('/admin/filter-switches')}
                 onClick={() => {
@@ -300,21 +280,16 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   setMobileOpen(false);
                 }}
                 sx={{
-                  minHeight: 48,
-                  '&:hover:not(.Mui-selected)': {
-                    backgroundColor: 'rgba(99, 102, 241, 0.06)',
-                  },
+                  minHeight: 52,
+                  py: 1.25,
+                  px: 2,
                   '&.Mui-selected': {
-                    backgroundColor: 'action.selected',
                     borderRight: '3px solid',
-                    borderColor: 'primary.main',
-                    '&:hover': {
-                      backgroundColor: 'action.selected',
-                    },
+                    borderColor: 'secondary.main',
                   },
                 }}
               >
-                <ListItemIcon sx={{ minWidth: 40 }}>
+                <ListItemIcon sx={{ minWidth: 44, mr: 1.25 }}>
                   <TuneIcon />
                 </ListItemIcon>
                 <ListItemText
@@ -326,7 +301,7 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 />
               </ListItemButton>
             </ListItem>
-            <ListItem disablePadding>
+            <ListItem disablePadding sx={{ mb: 0.25 }}>
               <ListItemButton
                 selected={isActive('/admin/support')}
                 onClick={() => {
@@ -334,21 +309,16 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   setMobileOpen(false);
                 }}
                 sx={{
-                  minHeight: 48,
-                  '&:hover:not(.Mui-selected)': {
-                    backgroundColor: 'rgba(99, 102, 241, 0.06)',
-                  },
+                  minHeight: 52,
+                  py: 1.25,
+                  px: 2,
                   '&.Mui-selected': {
-                    backgroundColor: 'action.selected',
                     borderRight: '3px solid',
-                    borderColor: 'primary.main',
-                    '&:hover': {
-                      backgroundColor: 'action.selected',
-                    },
+                    borderColor: 'secondary.main',
                   },
                 }}
               >
-                <ListItemIcon sx={{ minWidth: 40 }}>
+                <ListItemIcon sx={{ minWidth: 44, mr: 1.25 }}>
                   {(supportStats.admin_tickets_with_replies ?? 0) > 0 ? (
                     <Badge badgeContent={supportStats.admin_tickets_with_replies} color="primary">
                       <QuestionAnswerIcon />
@@ -379,10 +349,6 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         sx={{
           width: { sm: `calc(100% - ${DRAWER_WIDTH}px)` },
           ml: { sm: `${DRAWER_WIDTH}px` },
-          background: primaryGradient,
-          color: '#fff',
-          boxShadow: '0 1px 3px rgba(99, 102, 241, 0.25)',
-          borderBottom: 'none',
         }}
         elevation={0}
       >

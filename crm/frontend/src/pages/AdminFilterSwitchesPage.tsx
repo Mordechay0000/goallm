@@ -20,6 +20,7 @@ const FILTER_LABELS: Record<keyof FilterSwitches, string> = {
   text_filter: 'סינון טקסט – סינון תוכן טקסט בדפי HTML',
   image_filter: 'סינון תמונות – החלפת תמונות (כתובת ישירה) לפי ניתוח',
   embedded_image_filter: 'סינון תמונות מוטמעות – תמונות data: בתוך HTML',
+  file_download_filter: 'סינון הורדות קבצים – שליחה לבדיקה עם תיאור הקובץ',
 };
 
 const DEFAULT_SWITCHES: FilterSwitches = {
@@ -27,6 +28,7 @@ const DEFAULT_SWITCHES: FilterSwitches = {
   text_filter: true,
   image_filter: true,
   embedded_image_filter: true,
+  file_download_filter: true,
 };
 
 const AdminFilterSwitchesPage: React.FC = () => {
@@ -94,6 +96,9 @@ const AdminFilterSwitchesPage: React.FC = () => {
         </Alert>
       )}
       <Paper sx={{ p: 3 }}>
+        <Box className="card-header-accent" sx={{ mb: 2 }}>
+          <Typography variant="h6" sx={{ fontWeight: 600 }}>הפעלת סינונים</Typography>
+        </Box>
         <Stack spacing={2}>
           {(Object.keys(FILTER_LABELS) as (keyof FilterSwitches)[]).map((key) => (
             <Box

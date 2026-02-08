@@ -53,6 +53,8 @@ interface SupportAttachBarProps {
   onAppendContent?: (markdown: string) => void;
   disabled?: boolean;
   compact?: boolean;
+  /** When set (e.g. -1), all buttons/icon-buttons get this tabIndex so Tab skips them. */
+  buttonsTabIndex?: number;
 }
 
 export const SupportAttachBar: React.FC<SupportAttachBarProps> = ({
@@ -62,6 +64,7 @@ export const SupportAttachBar: React.FC<SupportAttachBarProps> = ({
   onAppendContent,
   disabled,
   compact,
+  buttonsTabIndex,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const attachmentsRef = useRef(attachments);
@@ -263,11 +266,12 @@ export const SupportAttachBar: React.FC<SupportAttachBarProps> = ({
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled || uploading}
           sx={btnSx}
+          tabIndex={buttonsTabIndex}
         >
           {compact ? 'קובץ' : 'הוסף קובץ או צילום מסך'}
         </Button>
         {recording === 'voice' ? (
-          <Button size="small" startIcon={<StopIcon />} onClick={stopRecording} color="error" sx={{ ...btnSx, color: 'error.main' }}>
+          <Button size="small" startIcon={<StopIcon />} onClick={stopRecording} color="error" sx={{ ...btnSx, color: 'error.main' }} tabIndex={buttonsTabIndex}>
             עצור הקלטה
           </Button>
         ) : (
@@ -277,12 +281,13 @@ export const SupportAttachBar: React.FC<SupportAttachBarProps> = ({
             onClick={startVoiceRecording}
             disabled={disabled || uploading || recording !== null}
             sx={btnSx}
+            tabIndex={buttonsTabIndex}
           >
             {compact ? 'אודיו' : 'הוסף הקלטת קול'}
           </Button>
         )}
         {recording === 'screen' ? (
-          <Button size="small" startIcon={<StopIcon />} onClick={stopRecording} color="error" sx={{ ...btnSx, color: 'error.main' }}>
+          <Button size="small" startIcon={<StopIcon />} onClick={stopRecording} color="error" sx={{ ...btnSx, color: 'error.main' }} tabIndex={buttonsTabIndex}>
             עצור הקלטה
           </Button>
         ) : (
@@ -292,19 +297,27 @@ export const SupportAttachBar: React.FC<SupportAttachBarProps> = ({
             onClick={startScreenRecording}
             disabled={disabled || uploading || recording !== null}
             sx={btnSx}
+            tabIndex={buttonsTabIndex}
           >
             {compact ? 'מסך' : 'הוסף הסרטת מסך'}
           </Button>
         )}
-        <Button
-          size="small"
-          startIcon={<RouteIcon sx={{ fontSize: 18 }} />}
-          onClick={handleTrafficRecording}
-          disabled={disabled || uploading || trafficLoading || recording !== null}
-          sx={btnSx}
-        >
-          {trafficRecording ? (compact ? 'סיום והצמדה' : 'סיום והצמדת קישור') : (compact ? 'תעבורה' : 'הקלטת תעבורה')}
-        </Button>
+        {trafficRecording ? (
+          <Button size="small" startIcon={<StopIcon />} onClick={handleTrafficRecording} color="error" sx={{ ...btnSx, color: 'error.main' }} tabIndex={buttonsTabIndex}>
+            {compact ? 'סיום והצמדה' : 'סיום והצמדת קישור'}
+          </Button>
+        ) : (
+          <Button
+            size="small"
+            startIcon={<RouteIcon sx={{ fontSize: 18 }} />}
+            onClick={handleTrafficRecording}
+            disabled={disabled || uploading || trafficLoading || recording !== null}
+            sx={btnSx}
+            tabIndex={buttonsTabIndex}
+          >
+            {compact ? 'תעבורה' : 'הקלטת תעבורה'}
+          </Button>
+        )}
       </Box>
       {uploading && (
         <LinearProgress
@@ -338,7 +351,7 @@ export const SupportAttachBar: React.FC<SupportAttachBarProps> = ({
                 {a.name}
               </a>
               {!disabled && (
-                <IconButton size="small" onClick={() => removeAttachment(i)} aria-label="הסר" sx={{ p: 0.25 }}>
+                <IconButton size="small" onClick={() => removeAttachment(i)} aria-label="הסר" sx={{ p: 0.25 }} tabIndex={buttonsTabIndex}>
                   <DeleteIcon sx={{ fontSize: 16 }} />
                 </IconButton>
               )}

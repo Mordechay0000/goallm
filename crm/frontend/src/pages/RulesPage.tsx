@@ -56,7 +56,7 @@ const RulesPage: React.FC = () => {
   return (
     <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
       <Box sx={{ mb: 3 }}>
-        <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/profiles')} sx={{ mb: 1 }}>
+        <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/profiles')} color="secondary" variant="outlined" sx={{ mb: 1 }}>
           חזרה לפרופילים
         </Button>
         <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
@@ -68,6 +68,9 @@ const RulesPage: React.FC = () => {
       </Box>
 
       <Paper sx={{ p: 2, mb: 2 }}>
+        <Box className="card-header-accent" sx={{ mb: 2 }}>
+          <Typography variant="h6">הנחיה</Typography>
+        </Box>
         <Typography variant="body1" sx={{ mb: 2 }}>
           {profile.mode === 'whitelist' ? (
             <>

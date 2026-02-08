@@ -4,7 +4,7 @@
  * Supports prefilled URL/params from blocked page redirect.
  */
 import React, { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   Container,
   Paper,
@@ -51,6 +51,7 @@ const STATUS_LABELS: Record<string, string> = {
 const TYPE_LABELS: Record<string, string> = {
   open: 'בקשה לפתיחה',
   change: 'בקשה לשינוי',
+  file: 'פתיחת קובץ',
 };
 
 type SortBy = 'created_at' | 'request_type' | 'status' | 'url';
@@ -58,6 +59,7 @@ type SortOrder = 'asc' | 'desc';
 
 const MyRequestsPage: React.FC = () => {
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const [requests, setRequests] = useState<RuleRequest[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -70,7 +72,7 @@ const MyRequestsPage: React.FC = () => {
   const [typeFilter, setTypeFilter] = useState<string>('');
   const [search, setSearch] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [requestType, setRequestType] = useState<'open' | 'change'>('open');
+  const [requestType] = useState<'open' | 'change'>('open');
   const [url, setUrl] = useState('');
   const [urlError, setUrlError] = useState('');
   const [action, setAction] = useState<'allow' | 'block'>('allow');
@@ -118,36 +120,15 @@ const MyRequestsPage: React.FC = () => {
     setPage(0);
   };
 
+  // כל יצירת בקשה עוברת דרך מערכת הפניות
   useEffect(() => {
-    if (prefilledUrl || prefilledType) {
-      setDialogOpen(true);
-      if (prefilledUrl) {
-        try {
-          const decoded = decodeURIComponent(prefilledUrl).replace(/^https?:\/\//, '').trim();
-          setUrl(decoded);
-          setUrlError(validateDomainOrUrl(decoded));
-        } catch {
-          setUrl(prefilledUrl);
-          setUrlError(validateDomainOrUrl(prefilledUrl));
-        }
-      }
-      if (prefilledType === 'open' || prefilledType === 'change') {
-        setRequestType(prefilledType);
-        setAction(prefilledType === 'open' ? 'allow' : 'block');
-      }
+    if ((prefilledType === 'open' || prefilledType === 'change') && navigate) {
+      const params = new URLSearchParams();
+      params.set('attach', prefilledType);
+      if (prefilledUrl) params.set('url', prefilledUrl);
+      navigate(`/support/new?${params.toString()}`, { replace: true });
     }
-  }, [prefilledUrl, prefilledType]);
-
-  const openAddDialog = (type: 'open' | 'change' = 'open') => {
-    setRequestType(type);
-    setAction(type === 'open' ? 'allow' : 'block');
-    setUrl('');
-    setUrlError('');
-    setIncludeSubdomains(false);
-    setTags([]);
-    setError('');
-    setDialogOpen(true);
-  };
+  }, [prefilledType, prefilledUrl, navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -208,16 +189,19 @@ const MyRequestsPage: React.FC = () => {
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1 }}>
-          <Button variant="outlined" startIcon={<AddIcon />} onClick={() => openAddDialog('open')}>
+          <Button variant="outlined" color="secondary" startIcon={<AddIcon />} onClick={() => navigate('/support/new?attach=open')}>
             בקשה לפתיחת אתר
           </Button>
-          <Button variant="contained" startIcon={<AddIcon />} onClick={() => openAddDialog('change')}>
+          <Button variant="contained" color="secondary" startIcon={<AddIcon />} onClick={() => navigate('/support/new?attach=change')}>
             בקשה לשינוי (חסום/פתוח)
           </Button>
         </Box>
       </Box>
 
       <Paper>
+        <Box className="card-header-accent" sx={{ px: 2, pt: 2, pb: 1 }}>
+          <Typography variant="h6" sx={{ fontWeight: 600 }}>רשימת בקשות</Typography>
+        </Box>
         <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center', p: 2, borderBottom: 1, borderColor: 'divider' }}>
           <TextField
             size="small"
@@ -292,10 +276,25 @@ const MyRequestsPage: React.FC = () => {
                       <Chip
                         label={STATUS_LABELS[r.status] || r.status}
                         size="small"
-                        color={r.status === 'approved' ? 'success' : r.status === 'rejected' ? 'error' : 'default'}
+                        variant="outlined"
+                        color={r.status === 'approved' ? 'secondary' : r.status === 'rejected' ? 'error' : 'default'}
                       />
                     </TableCell>
-                    <TableCell>{r.url || (r.domain_pattern || '') + (r.path_pattern || '') || '—'}</TableCell>
+                    <TableCell
+                      sx={{
+                        maxWidth: 400,
+                        overflowX: 'auto',
+                        whiteSpace: 'nowrap',
+                        scrollbarWidth: 'thin',
+                        scrollbarColor: '#2F6CFF #E4E7EC',
+                        '&::-webkit-scrollbar': { height: 8 },
+                        '&::-webkit-scrollbar-track': { background: '#E4E7EC', borderRadius: 8 },
+                        '&::-webkit-scrollbar-thumb': { background: '#2F6CFF', borderRadius: 8, border: '2px solid #E4E7EC' },
+                        '&::-webkit-scrollbar-thumb:hover': { background: '#2555d9' },
+                      }}
+                    >
+                      {r.url || (r.domain_pattern || '') + (r.path_pattern || '') || '—'}
+                    </TableCell>
                     <TableCell>{r.action || '—'}</TableCell>
                     <TableCell align="left">
                       {canDelete(r) && (

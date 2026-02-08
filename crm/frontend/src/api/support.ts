@@ -3,6 +3,18 @@
  */
 import apiClient from './client';
 
+/** Snapshot of a rule request (open/change/file) as sent by user – for display in ticket. */
+export interface AttachedRequestSnapshot {
+  request_type: 'open' | 'change' | 'file';
+  url?: string;
+  domain_pattern?: string;
+  path_pattern?: string;
+  action?: string;
+  include_subdomains?: boolean;
+  tags?: string[];
+  notes?: string;
+}
+
 export interface SupportTicket {
   id: number;
   user_id: number;
@@ -18,6 +30,9 @@ export interface SupportTicket {
   replies_count?: number;
   unread_replies_count?: number;
   attachments?: SupportAttachmentItem[];
+  attached_rule_request_id?: number;
+  request_snapshot_for_client?: string; // JSON
+  attached_request_status?: 'pending' | 'approved' | 'rejected';
 }
 
 export interface SupportAttachmentItem {
@@ -29,6 +44,7 @@ export interface SupportTicketCreate {
   subject: string;
   content: string;
   attachments?: SupportAttachmentItem[];
+  attached_request?: AttachedRequestSnapshot;
 }
 
 export interface SupportReply {
@@ -42,11 +58,13 @@ export interface SupportReply {
   author_avatar_url?: string;
   is_unread?: boolean;
   attachments?: SupportAttachmentItem[];
+  attached_request_snapshot?: string; // JSON
 }
 
 export interface SupportReplyCreate {
   content: string;
   attachments?: SupportAttachmentItem[];
+  attached_request_snapshot?: string;
 }
 
 export const supportApi = {

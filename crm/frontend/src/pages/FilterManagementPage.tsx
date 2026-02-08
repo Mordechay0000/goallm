@@ -140,7 +140,7 @@ const FilterManagementPage: React.FC = () => {
     <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
       {/* Header */}
       <Box sx={{ mb: 3 }}>
-        <IconButton onClick={() => navigate('/')} color="primary" sx={{ mb: 1, mr: 1 }}>
+        <IconButton onClick={() => navigate('/')} color="secondary" sx={{ mb: 1, mr: 1 }}>
           <ArrowBackIcon />
         </IconButton>
         <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
@@ -167,7 +167,7 @@ const FilterManagementPage: React.FC = () => {
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                     <span>{profile.name}</span>
                     {profile.is_default && (
-                      <Chip label="ברירת מחדל" size="small" color="primary" />
+                      <Chip label="ברירת מחדל" size="small" color="secondary" />
                     )}
                   </Box>
                 }
@@ -189,7 +189,8 @@ const FilterManagementPage: React.FC = () => {
               </Typography>
               <Chip
                 label={selectedProfile.mode === 'whitelist' ? 'הכל חסום – אוסיף פתיחות' : 'הכל פתוח – אוסיף חסימות'}
-                color={selectedProfile.mode === 'whitelist' ? 'default' : 'success'}
+                color={selectedProfile.mode === 'whitelist' ? 'default' : 'secondary'}
+                variant="outlined"
                 sx={{ mb: 2 }}
               />
               <Typography variant="body2" color="text.secondary" paragraph>
@@ -215,9 +216,11 @@ const FilterManagementPage: React.FC = () => {
 
       {/* Tag Rules (כללי תגיות) */}
       <Paper sx={{ p: 2, mt: 3 }}>
-        <Typography variant="h6" gutterBottom>
-          כללי תגיות
-        </Typography>
+        <Box className="card-header-accent" sx={{ mb: 2 }}>
+          <Typography variant="h6">
+            כללי תגיות
+          </Typography>
+        </Box>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           חסימה או פתיחה לפי תגית – למשל: אתרים עם תגית &quot;ממכר&quot; חסומים. התגיות מוגדרות לכל אתר בטבלה למעלה.
         </Typography>
@@ -304,7 +307,8 @@ const FilterManagementPage: React.FC = () => {
                       <TableCell>
                         <Chip
                           label={tr.state === 'block' ? 'חסום' : 'אפשר'}
-                          color={tr.state === 'block' ? 'error' : 'success'}
+                          color={tr.state === 'block' ? 'default' : 'secondary'}
+                          variant="outlined"
                           size="small"
                         />
                       </TableCell>
