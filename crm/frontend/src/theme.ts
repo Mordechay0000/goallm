@@ -8,8 +8,8 @@ import { createTheme } from '@mui/material/styles';
 export const aiSpectrumGradient =
   'linear-gradient(to right, #4A90FF 0%, #FF7ABD 25%, #FFA15E 50%, #F9E67A 75%, #45E68B 100%)';
 
-/** צל עדין מאוד לפי השפה העיצובית */
-const cardShadow = '0 4px 18px rgba(0, 0, 0, 0.05)';
+/** צל Cards – עומק 8–12% (פרימיום) */
+const cardShadow = '0 4px 20px rgba(0, 0, 0, 0.08)';
 
 export const theme = createTheme({
   direction: 'rtl',
@@ -33,7 +33,7 @@ export const theme = createTheme({
     },
     text: {
       primary: '#1A1A1A',
-      secondary: 'rgba(26, 26, 26, 0.55)',
+      secondary: '#6B7280',
     },
     divider: '#E4E7EC',
     action: {
@@ -47,14 +47,14 @@ export const theme = createTheme({
     fontFamily: '"Heebo", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
     h1: {
       fontFamily: '"Heebo", sans-serif',
-      fontWeight: 600,
+      fontWeight: 700,
       color: '#0D1A3B',
       fontSize: '2rem',
       lineHeight: 1.2,
     },
     h2: {
       fontFamily: '"Heebo", sans-serif',
-      fontWeight: 600,
+      fontWeight: 700,
       color: '#0D1A3B',
       fontSize: '1.75rem',
       lineHeight: 1.3,
@@ -89,14 +89,14 @@ export const theme = createTheme({
     },
     body1: {
       fontFamily: '"Heebo", sans-serif',
-      fontWeight: 400,
+      fontWeight: 500,
       fontSize: '1rem',
       lineHeight: 1.6,
       color: '#1A1A1A',
     },
     body2: {
       fontFamily: '"Heebo", sans-serif',
-      fontWeight: 400,
+      fontWeight: 500,
       fontSize: '0.9375rem',
       lineHeight: 1.6,
       color: '#1A1A1A',
@@ -110,6 +110,19 @@ export const theme = createTheme({
     caption: {
       fontFamily: '"Assistant", "Heebo", sans-serif',
       fontSize: '0.875rem',
+      color: '#6B7280',
+    },
+    subtitle1: {
+      fontFamily: '"Heebo", sans-serif',
+      fontWeight: 500,
+      fontSize: '0.9375rem',
+      color: '#6B7280',
+    },
+    subtitle2: {
+      fontFamily: '"Heebo", sans-serif',
+      fontWeight: 500,
+      fontSize: '0.8125rem',
+      color: '#6B7280',
     },
   },
   shape: {
@@ -227,15 +240,15 @@ export const theme = createTheme({
           fontWeight: 500,
           borderRadius: 24,
           padding: '10px 20px',
-          transition: 'background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease',
+          transition: 'background-color 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease',
         },
         contained: {
           backgroundColor: '#2F6CFF',
           color: '#ffffff',
-          boxShadow: '0 3px 10px rgba(0, 0, 0, 0.06)',
+          boxShadow: '0 3px 10px rgba(0, 0, 0, 0.08)',
           '&:hover': {
             backgroundColor: '#2555d9',
-            boxShadow: '0 4px 14px rgba(47, 108, 255, 0.22)',
+            boxShadow: '0 5px 16px rgba(47, 108, 255, 0.28)',
           },
         },
         outlined: {
@@ -243,7 +256,7 @@ export const theme = createTheme({
           color: '#0D1A3B',
           '&:hover': {
             borderColor: '#2F6CFF',
-            backgroundColor: 'rgba(47, 108, 255, 0.06)',
+            backgroundColor: 'rgba(47, 108, 255, 0.08)',
           },
         },
       },
@@ -292,8 +305,10 @@ export const theme = createTheme({
         root: {
           color: '#2F6CFF',
           borderRadius: 20,
+          transition: 'background-color 0.18s ease, transform 0.18s ease',
           '&:hover': {
-            backgroundColor: 'rgba(47, 108, 255, 0.08)',
+            backgroundColor: 'rgba(47, 108, 255, 0.1)',
+            transform: 'scale(1.02)',
           },
         },
       },
@@ -302,8 +317,9 @@ export const theme = createTheme({
       styleOverrides: {
         root: {
           borderRadius: 20,
+          transition: 'background-color 0.18s ease',
           '&:hover': {
-            backgroundColor: 'rgba(47, 108, 255, 0.06)',
+            backgroundColor: 'rgba(47, 108, 255, 0.08)',
           },
           '&.Mui-selected': {
             backgroundColor: 'rgba(47, 108, 255, 0.1)',
@@ -328,8 +344,15 @@ export const theme = createTheme({
     MuiTableRow: {
       styleOverrides: {
         root: {
+          transition: 'background-color 0.15s ease',
           '&:hover': {
             backgroundColor: '#F4F7FF',
+          },
+          '&.Mui-selected': {
+            backgroundColor: 'rgba(47, 108, 255, 0.06)',
+            '&:hover': {
+              backgroundColor: 'rgba(47, 108, 255, 0.1)',
+            },
           },
           'thead &': {
             '&:hover': {
@@ -343,12 +366,14 @@ export const theme = createTheme({
       styleOverrides: {
         root: {
           fontFamily: '"Assistant", "Heebo", sans-serif',
-          borderBottom: '1px solid #E4E7EC',
+          borderBottom: '1px solid #E5E7EB',
         },
         head: {
           fontFamily: '"Heebo", sans-serif',
           fontWeight: 600,
-          color: '#080f1f',
+          color: '#050a14',
+          backgroundColor: '#F7F8FA',
+          borderBottom: '2px solid #E5E7EB',
         },
       },
     },
