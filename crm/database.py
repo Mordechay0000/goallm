@@ -331,6 +331,15 @@ def init_db_schema():
     db_connection.execute("""
         CREATE INDEX IF NOT EXISTS idx_tag_rules_tag ON tag_rules(tag)
     """)
+    # Migration: audit fields for tag_rules (who created/updated – stored for logging/security, not displayed in API)
+    tr_cursor = db_connection.execute("PRAGMA table_info(tag_rules)")
+    tr_cols = [row[1] for row in tr_cursor.fetchall()]
+    if "created_by_user_id" not in tr_cols:
+        db_connection.execute("ALTER TABLE tag_rules ADD COLUMN created_by_user_id INTEGER")
+        logger.info("Added created_by_user_id to tag_rules")
+    if "updated_by_user_id" not in tr_cols:
+        db_connection.execute("ALTER TABLE tag_rules ADD COLUMN updated_by_user_id INTEGER")
+        logger.info("Added updated_by_user_id to tag_rules")
     
     db_connection.execute("""
         CREATE INDEX IF NOT EXISTS idx_schedules_profile_id 
@@ -408,6 +417,12 @@ def init_db_schema():
     if "request_url" not in rr_cols:
         db_connection.execute("ALTER TABLE rule_requests ADD COLUMN request_url TEXT")
         logger.info("Added request_url to rule_requests")
+    if "notes" not in rr_cols:
+        db_connection.execute("ALTER TABLE rule_requests ADD COLUMN notes TEXT")
+        logger.info("Added notes to rule_requests")
+    if "resolved_by_user_id" not in rr_cols:
+        db_connection.execute("ALTER TABLE rule_requests ADD COLUMN resolved_by_user_id INTEGER")
+        logger.info("Added resolved_by_user_id to rule_requests")
 
     # global_rules: base whitelist managed only by admins (same shape as rules, no profile_id)
     db_connection.execute("""
@@ -438,6 +453,14 @@ def init_db_schema():
     if "file_filter_enabled" not in gr_cols:
         db_connection.execute("ALTER TABLE global_rules ADD COLUMN file_filter_enabled INTEGER NOT NULL DEFAULT 1")
         logger.info("Added file_filter_enabled to global_rules")
+    # Migration: audit fields (who created/updated – stored for logging/security, not displayed in API)
+    gr_cols = [row[1] for row in db_connection.execute("PRAGMA table_info(global_rules)").fetchall()]
+    if "created_by_user_id" not in gr_cols:
+        db_connection.execute("ALTER TABLE global_rules ADD COLUMN created_by_user_id INTEGER")
+        logger.info("Added created_by_user_id to global_rules")
+    if "updated_by_user_id" not in gr_cols:
+        db_connection.execute("ALTER TABLE global_rules ADD COLUMN updated_by_user_id INTEGER")
+        logger.info("Added updated_by_user_id to global_rules")
     # Migration: remove type column from global_rules (no longer used)
     gr_cols = [row[1] for row in db_connection.execute("PRAGMA table_info(global_rules)").fetchall()]
     if "type" in gr_cols:
@@ -503,6 +526,23 @@ def init_db_schema():
             db_connection.execute(f"ALTER TABLE {table} ADD COLUMN attachments TEXT")
             logger.info("Added attachments column to %s", table)
 
+    # support_tickets: optional attached rule request (בקשה לפתיחה) – client sees snapshot + status
+    st_cursor = db_connection.execute("PRAGMA table_info(support_tickets)")
+    st_cols = [row[1] for row in st_cursor.fetchall()]
+    if "attached_rule_request_id" not in st_cols:
+        db_connection.execute("ALTER TABLE support_tickets ADD COLUMN attached_rule_request_id INTEGER REFERENCES rule_requests(id)")
+        logger.info("Added attached_rule_request_id to support_tickets")
+    if "request_snapshot_for_client" not in st_cols:
+        db_connection.execute("ALTER TABLE support_tickets ADD COLUMN request_snapshot_for_client TEXT")
+        logger.info("Added request_snapshot_for_client to support_tickets")
+
+    # support_replies: optional attached request snapshot (user sends edited copy as reply)
+    sr_cursor = db_connection.execute("PRAGMA table_info(support_replies)")
+    sr_cols = [row[1] for row in sr_cursor.fetchall()]
+    if "attached_request_snapshot" not in sr_cols:
+        db_connection.execute("ALTER TABLE support_replies ADD COLUMN attached_request_snapshot TEXT")
+        logger.info("Added attached_request_snapshot to support_replies")
+
     # support_ticket_views: when user last viewed ticket (for unread replies)
     db_connection.execute("""
         CREATE TABLE IF NOT EXISTS support_ticket_views (
@@ -516,6 +556,19 @@ def init_db_schema():
     """)
     db_connection.execute("CREATE INDEX IF NOT EXISTS idx_support_ticket_views_user ON support_ticket_views(user_id)")
 
+    # לוג אבטחה: צפיות בהקלטות תעבורה (משתמש + זמן צפייה)
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS traffic_recording_views (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            traffic_session_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            viewed_at INTEGER NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+    db_connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_recording_views_session ON traffic_recording_views(traffic_session_id)")
+    db_connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_recording_views_user ON traffic_recording_views(user_id)")
+
     db_connection.commit()
     logger.info("CRM database schema initialized successfully")
 
@@ -523,6 +576,35 @@ def init_db_schema():
 def get_db():
     """Get database connection (for FastAPI dependency)."""
     return db_connection
+
+
+def log_traffic_recording_view(traffic_session_id: int, user_id: int) -> None:
+    """רישום לוג אבטחה: משתמש צפה בהקלטת תעבורה."""
+    import time
+    viewed_at = int(time.time())
+    db_connection.execute(
+        "INSERT INTO traffic_recording_views (traffic_session_id, user_id, viewed_at) VALUES (?, ?, ?)",
+        (traffic_session_id, user_id, viewed_at),
+    )
+    db_connection.commit()
+
+
+def get_traffic_recording_views(session_id: Optional[int] = None) -> List[Dict]:
+    """החזרת רשימת צפיות בהקלטות תעבורה (ללוג אבטחה). אם session_id נתון – רק צפיות להקלטה זו."""
+    sql = """
+        SELECT v.id, v.traffic_session_id, v.user_id, v.viewed_at,
+               u.email, u.first_name, u.last_name
+        FROM traffic_recording_views v
+        JOIN users u ON u.id = v.user_id
+    """
+    params: tuple = ()
+    if session_id is not None:
+        sql += " WHERE v.traffic_session_id = ?"
+        params = (session_id,)
+    sql += " ORDER BY v.viewed_at DESC"
+    cursor = db_connection.execute(sql, params)
+    rows = cursor.fetchall()
+    return [dict(zip([c[0] for c in cursor.description], row)) for row in rows]
 
 
 # Initialize schema on import

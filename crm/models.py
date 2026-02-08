@@ -294,13 +294,15 @@ class LoginRequest(BaseModel):
 
 # Rule request models (user requests for admin to approve)
 class RuleRequestCreate(BaseModel):
-    request_type: str = Field(..., pattern="^(open|change)$")
+    request_type: str = Field(..., pattern="^(open|change|file)$")
     url: Optional[str] = None
     domain_pattern: Optional[str] = None
     path_pattern: Optional[str] = None
     action: Optional[str] = Field(None, pattern="^(allow|block)$")
     include_subdomains: bool = False
     tags: Optional[List[str]] = None
+    notes: Optional[str] = None  # for file requests: user description of the file
+    request_url: Optional[str] = None  # full URL user tried to access (e.g. from surf widget)
 
 
 class RuleRequestApprove(BaseModel):
@@ -326,6 +328,9 @@ class RuleRequestResponse(BaseModel):
     approved_profile_id: Optional[int] = None
     is_from_blocked_page: bool = False
     request_url: Optional[str] = None  # full URL user tried to access (read-only)
+    notes: Optional[str] = None  # for file requests: user description of the file
+    resolved_by_user_id: Optional[int] = None
+    resolved_by_name: Optional[str] = None  # display name of admin who approved/rejected (last resolver)
 
     class Config:
         from_attributes = True
@@ -352,8 +357,10 @@ class SupportAttachmentItem(BaseModel):
 
 class SupportTicketCreate(BaseModel):
     subject: str = Field(..., min_length=1, max_length=500)
-    content: str = Field(..., min_length=1)
+    content: str = Field(default="")
     attachments: Optional[List[SupportAttachmentItem]] = None
+    """Optional: attach a rule request (בקשה לפתיחה). Creates rule_request and ticket with snapshot for client."""
+    attached_request: Optional[RuleRequestCreate] = None
 
 
 class SupportTicketResponse(BaseModel):
@@ -371,6 +378,11 @@ class SupportTicketResponse(BaseModel):
     replies_count: Optional[int] = None
     unread_replies_count: Optional[int] = None  # for ticket owner: replies not yet read
     attachments: Optional[List[SupportAttachmentItem]] = None
+    attached_rule_request_id: Optional[int] = None
+    """Request as the user sent it (for client display). Admin edits are not shown to client."""
+    request_snapshot_for_client: Optional[str] = None  # JSON
+    """Current status of the attached request: pending / approved / rejected."""
+    attached_request_status: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -379,6 +391,8 @@ class SupportTicketResponse(BaseModel):
 class SupportReplyCreate(BaseModel):
     content: str = Field(default="")
     attachments: Optional[List[SupportAttachmentItem]] = None
+    """Optional: user sends edited copy of request as reply (JSON snapshot)."""
+    attached_request_snapshot: Optional[str] = None
 
 
 class SupportReplyResponse(BaseModel):
@@ -392,6 +406,7 @@ class SupportReplyResponse(BaseModel):
     author_avatar_url: Optional[str] = None
     is_unread: Optional[bool] = None  # True if ticket owner has not read this reply
     attachments: Optional[List[SupportAttachmentItem]] = None
+    attached_request_snapshot: Optional[str] = None  # JSON when reply is "edited copy" of request
 
     class Config:
         from_attributes = True
