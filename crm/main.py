@@ -45,6 +45,7 @@ from .services import (
     mark_support_ticket_read, delete_support_ticket,
     get_global_rules, get_global_rule, create_global_rule, update_global_rule, delete_global_rule, resolve_global_rule_for_url, find_and_update_global_rule_to_block, ensure_global_block_rule_for_url,
     list_bindings_for_user, add_ip_binding, remove_ip_binding, sync_ip_bindings_to_core, touch_ip_binding,
+    get_user_id_for_ip,
 )
 from .auth import create_user_access_token, get_current_user, get_current_admin
 from .security import decode_access_token
@@ -1932,9 +1933,22 @@ async def delete_my_binding(
 # ---------- Traffic recording (הקלטת תעבורה – התחל/סיום/קבלת לוג) ----------
 
 @app.post("/api/traffic/start", status_code=status.HTTP_201_CREATED)
-async def traffic_start(current_user: dict = Depends(get_current_user)):
-    """Start traffic recording for the current user. Proxy will log requests until stop."""
+async def traffic_start(
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
+    """Start traffic recording for the current user. Proxy will log requests until stop.
+    Only allowed when the client IP is bound to some account (traffic goes through the proxy)."""
     from core.policy.policy_database import start_traffic_session, get_active_traffic_session_id
+    client_ip = _client_ip(request)
+    if not client_ip:
+        raise HTTPException(status_code=400, detail="לא ניתן לזהות את כתובת ה-IP.")
+    bound_user_id = get_user_id_for_ip(client_ip)
+    if bound_user_id is None:
+        raise HTTPException(
+            status_code=403,
+            detail="החיבור ממנו הינך גולש אינו מסונן.",
+        )
     if get_active_traffic_session_id(current_user["id"]) is not None:
         raise HTTPException(status_code=400, detail="הקלטה כבר פעילה. סיים הקלטה קיימת לפני התחלה חדשה.")
     session_id = start_traffic_session(current_user["id"])
