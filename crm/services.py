@@ -38,17 +38,27 @@ def create_user(email: str, password: str, first_name: str, last_name: str,
     now = int(datetime.now().timestamp())
     
     try:
+        # Insert with is_admin=0 always. Admin is set only by the atomic UPDATE below when DB has exactly one user.
+        # This avoids race conditions: two concurrent signups cannot both become admin.
         cursor = db_connection.execute("""
-            INSERT INTO users (email, password_hash, first_name, last_name, phone, avatar_url, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO users (email, password_hash, first_name, last_name, phone, avatar_url, created_at, updated_at, is_admin)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
         """, (email, password_hash, first_name, last_name, phone, avatar_url, now, now))
         user_id = cursor.lastrowid
+
+        # Only the first user can become admin: set is_admin=1 only when this row is the sole user in the table.
+        # Runs in same transaction as INSERT, so no race – only one INSERT can ever see COUNT(*)=1 after itself.
+        upd = db_connection.execute("""
+            UPDATE users SET is_admin = 1
+            WHERE id = ? AND (SELECT COUNT(*) FROM users) = 1
+        """, (user_id,))
+        is_admin = upd.rowcount == 1
         
-        # Create default profile
+        # Create default profile: blacklist = everything open by default, user adds blocks
         db_connection.execute("""
             INSERT INTO profiles (user_id, name, mode, is_default, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?)
-        """, (user_id, "ברירת מחדל", "whitelist", 1, now, now))
+        """, (user_id, "ברירת מחדל", "blacklist", 1, now, now))
         
         db_connection.commit()
         
@@ -60,7 +70,8 @@ def create_user(email: str, password: str, first_name: str, last_name: str,
             "phone": phone,
             "avatar_url": avatar_url,
             "created_at": now,
-            "updated_at": now
+            "updated_at": now,
+            "is_admin": is_admin,
         }
     except sqlite3.IntegrityError as e:
         db_connection.rollback()
@@ -127,6 +138,11 @@ def get_user_by_phone(phone: str) -> Optional[Dict]:
         if _normalize_phone(u.get("phone") or "") == normalized:
             return u
     return None
+
+
+def setup_needed() -> bool:
+    """True when there are no users (first-time setup: first registrant becomes admin)."""
+    return db_connection.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
 
 
 def get_user_by_id(user_id: int) -> Optional[Dict]:

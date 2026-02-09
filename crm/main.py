@@ -30,7 +30,7 @@ from .models import (
     SupportTicketCreate, SupportTicketResponse, SupportReplyCreate, SupportReplyResponse,
 )
 from .services import (
-    create_user, authenticate_user, authenticate_user_by_phone, get_user_by_id, update_user, change_password, get_user_profiles,
+    create_user, setup_needed, authenticate_user, authenticate_user_by_phone, get_user_by_id, update_user, change_password, get_user_profiles,
     create_profile, get_profile, update_profile, delete_profile,
     create_rule, get_rule, get_profile_rules, update_rule, delete_rule,
     get_tag_rules, add_tag_rule, update_tag_rule, delete_tag_rule, sync_crm_rules_to_core, get_user_ids_with_profiles,
@@ -188,6 +188,12 @@ def _validate_email(s: str) -> str:
     if not local or not domain or ".." in domain or domain.startswith(".") or domain.endswith("."):
         raise ValueError("כתובת אימייל לא תקינה")
     return s
+
+
+@app.get("/api/auth/setup-status")
+async def get_setup_status():
+    """Returns whether first-time setup is needed (no users yet). When true, first registrant becomes admin."""
+    return {"needs_setup": setup_needed()}
 
 
 @app.post("/api/auth/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)

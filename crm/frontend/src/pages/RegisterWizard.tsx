@@ -24,7 +24,18 @@ import { validatePhone } from '../utils/validation';
 const ALLOWED = 'image/jpeg,image/png,image/gif,image/webp';
 const MAX_MB = 5;
 
-const RegisterWizard: React.FC = () => {
+export interface RegisterWizardSetupMode {
+  title: string;
+  subtitle: string;
+  successMessage: string;
+}
+
+interface RegisterWizardProps {
+  /** When set, show first-time admin setup UI and redirect to /login with successMessage after register */
+  setupMode?: RegisterWizardSetupMode;
+}
+
+const RegisterWizard: React.FC<RegisterWizardProps> = ({ setupMode }) => {
   const [activeStep, setActiveStep] = useState(0);
   const [formData, setFormData] = useState({
     email: '',
@@ -43,8 +54,8 @@ const RegisterWizard: React.FC = () => {
   const { register, logout, isAuthenticated } = useAuthStore();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const redirectTo = searchParams.get('redirect') || '/login';
-  const isBindFlow = redirectTo.includes('/bind') && (redirectTo.includes('from_login=1') || redirectTo.includes('from_login%3D1'));
+  const redirectTo = setupMode ? '/login' : (searchParams.get('redirect') || '/login');
+  const isBindFlow = !setupMode && redirectTo.includes('/bind') && (redirectTo.includes('from_login=1') || redirectTo.includes('from_login%3D1'));
 
   // When coming from bind flow while already logged in: disconnect from current account so the new registration binds the device to the new account
   useEffect(() => {
@@ -149,9 +160,11 @@ const RegisterWizard: React.FC = () => {
         avatar: avatarFile || undefined,
       });
       const loginUrl = redirectTo.startsWith('/') ? `/login?redirect=${encodeURIComponent(redirectTo)}` : '/login';
-      const successMessage = isBindFlow
-        ? 'החשבון החדש נוצר! עכשיו היכנס עם הטלפון והסיסמה שבחרת – ואז נחבר את המכשיר לחשבון הזה.'
-        : 'החשבון נוצר! עכשיו אפשר להיכנס עם הטלפון והסיסמה שבחרת.';
+      const successMessage = setupMode
+        ? setupMode.successMessage
+        : isBindFlow
+          ? 'החשבון החדש נוצר! עכשיו היכנס עם הטלפון והסיסמה שבחרת – ואז נחבר את המכשיר לחשבון הזה.'
+          : 'החשבון נוצר! עכשיו אפשר להיכנס עם הטלפון והסיסמה שבחרת.';
       navigate(loginUrl, { state: { message: successMessage } });
     } catch (error: unknown) {
       let msg = 'משהו השתבש – נסה שוב או פנה לתמיכה';
@@ -401,9 +414,14 @@ const RegisterWizard: React.FC = () => {
   return (
     <Container maxWidth="md" sx={{ mt: 4, mb: 4 }} onKeyDown={handleKeyDown}>
       <Paper sx={{ p: 4 }}>
-        <Typography variant="h5" component="h1" gutterBottom sx={{ mb: 4, fontWeight: 600 }}>
-          יצירת חשבון חדש
+        <Typography variant="h5" component="h1" gutterBottom sx={{ mb: setupMode ? 1 : 4, fontWeight: 600 }}>
+          {setupMode ? setupMode.title : 'יצירת חשבון חדש'}
         </Typography>
+        {setupMode && (
+          <Typography variant="body1" color="text.secondary" sx={{ mb: 4 }}>
+            {setupMode.subtitle}
+          </Typography>
+        )}
 
         <Stepper
           steps={steps}
@@ -415,11 +433,13 @@ const RegisterWizard: React.FC = () => {
           backLabel="חזור"
           finishLabel={loading ? 'יוצר חשבון...' : 'סיום – ליצור את החשבון'}
         />
-        <Box sx={{ textAlign: 'center', mt: 3 }}>
-          <Button variant="text" size="small" onClick={() => navigate(redirectTo.startsWith('/') ? `/login?redirect=${encodeURIComponent(redirectTo)}` : '/login')}>
-            כבר יש לי חשבון – אני רוצה להיכנס
-          </Button>
-        </Box>
+        {!setupMode && (
+          <Box sx={{ textAlign: 'center', mt: 3 }}>
+            <Button variant="text" size="small" onClick={() => navigate(redirectTo.startsWith('/') ? `/login?redirect=${encodeURIComponent(redirectTo)}` : '/login')}>
+              כבר יש לי חשבון – אני רוצה להיכנס
+            </Button>
+          </Box>
+        )}
       </Paper>
     </Container>
   );

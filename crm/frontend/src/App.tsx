@@ -11,8 +11,10 @@ import { CacheProvider } from '@emotion/react';
 import createCache from '@emotion/cache';
 import { theme } from './theme';
 import { useAuthStore } from './store/authStore';
+import { authApi } from './api/auth';
 import LoginPage from './pages/LoginPage';
 import RegisterWizard from './pages/RegisterWizard';
+import SetupPage from './pages/SetupPage';
 import BindPage from './pages/BindPage';
 import ConnectionsPage from './pages/ConnectionsPage';
 import HomePage from './pages/HomePage';
@@ -53,13 +55,36 @@ const LoginRedirect: React.FC = () => {
   return <Navigate to={to} replace />;
 };
 
-// Login route: show login form when coming from bind flow (force re-login) even if already authenticated; otherwise redirect if authenticated
+// Login route: when no users exist, redirect to setup; else show login (or redirect if already authenticated)
 const LoginRoute: React.FC = () => {
   const [searchParams] = useSearchParams();
   const { isAuthenticated } = useAuthStore();
+  const [setupChecked, setSetupChecked] = React.useState(false);
+  const [needsSetup, setNeedsSetup] = React.useState(false);
   const redirect = searchParams.get('redirect') || '';
   const isBindFlowReLogin = redirect.includes('/bind') && (redirect.includes('from_login=1') || redirect.includes('from_login%3D1'));
+
+  React.useEffect(() => {
+    if (isAuthenticated) {
+      setSetupChecked(true);
+      setNeedsSetup(false);
+      return;
+    }
+    let cancelled = false;
+    authApi.getSetupStatus().then((res) => {
+      if (!cancelled) {
+        setNeedsSetup(res.needs_setup);
+        setSetupChecked(true);
+      }
+    }).catch(() => {
+      if (!cancelled) setSetupChecked(true);
+    });
+    return () => { cancelled = true; };
+  }, [isAuthenticated]);
+
   if (isAuthenticated && !isBindFlowReLogin) return <LoginRedirect />;
+  if (!setupChecked) return null; // or a tiny spinner
+  if (needsSetup) return <Navigate to="/setup" replace />;
   return <LoginPage />;
 };
 
@@ -68,12 +93,31 @@ function isBindFlowRedirect(redirect: string): boolean {
   return redirect.includes('/bind') && (redirect.includes('from_login=1') || redirect.includes('from_login%3D1'));
 }
 
-// Register route: when coming from bind flow, show RegisterWizard even if authenticated (user can create new account for this device); otherwise redirect to home if authenticated
+// Register route: when needs_setup, redirect to /setup (first user = admin); when coming from bind flow show wizard; else redirect if authenticated
 const RegisterRoute: React.FC = () => {
   const [searchParams] = useSearchParams();
   const { isAuthenticated } = useAuthStore();
+  const [setupChecked, setSetupChecked] = React.useState(false);
+  const [needsSetup, setNeedsSetup] = React.useState(false);
   const redirect = searchParams.get('redirect') || '';
+
+  React.useEffect(() => {
+    if (isAuthenticated && !isBindFlowRedirect(redirect)) return;
+    let cancelled = false;
+    authApi.getSetupStatus().then((res) => {
+      if (!cancelled) {
+        setNeedsSetup(res.needs_setup);
+        setSetupChecked(true);
+      }
+    }).catch(() => {
+      if (!cancelled) setSetupChecked(true);
+    });
+    return () => { cancelled = true; };
+  }, [isAuthenticated, redirect]);
+
   if (isAuthenticated && !isBindFlowRedirect(redirect)) return <Navigate to="/" replace />;
+  if (!setupChecked) return null;
+  if (needsSetup) return <Navigate to="/setup" replace />;
   return <RegisterWizard />;
 };
 
@@ -112,6 +156,7 @@ function App() {
         <BrowserRouter>
         <Routes>
           <Route path="/surf-admin-check" element={<SurfAdminCheckPage />} />
+          <Route path="/setup" element={<SetupPage />} />
           <Route path="/login" element={<LoginRoute />} />
           <Route path="/register" element={<RegisterRoute />} />
           <Route path="/bind" element={<BindPage />} />

@@ -57,7 +57,16 @@ export interface LoginResponse {
   user: User;
 }
 
+export interface SetupStatus {
+  needs_setup: boolean;
+}
+
 export const authApi = {
+  getSetupStatus: async (): Promise<SetupStatus> => {
+    const response = await apiClient.get<SetupStatus>('/api/auth/setup-status');
+    return response.data;
+  },
+
   login: async (data: LoginRequest): Promise<LoginResponse> => {
     const response = await apiClient.post<LoginResponse>('/api/auth/login', data);
     return response.data;

@@ -215,13 +215,13 @@ def init_db_schema():
     except:
         pass  # May already exist
     
-    # Profiles table
+    # Profiles table (mode: blacklist = default allow / add blocks; whitelist = default block / add allows)
     db_connection.execute("""
         CREATE TABLE IF NOT EXISTS profiles (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
             name TEXT NOT NULL,
-            mode TEXT NOT NULL DEFAULT 'whitelist',
+            mode TEXT NOT NULL DEFAULT 'blacklist',
             is_default INTEGER NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
