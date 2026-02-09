@@ -8,20 +8,11 @@ import logging
 from pathlib import Path
 from typing import List, Dict, Any
 
+from data.upload_config import SUPPORT_MAX_BYTES
+
 logger = logging.getLogger(__name__)
 
 SUPPORT_UPLOADS_DIR = Path(__file__).resolve().parent.parent / ".storage" / "uploads" / "support"
-SUPPORT_MAX_BYTES = 25 * 1024 * 1024  # 25MB per file
-# Allow images, pdf, audio/video (webm), text
-ALLOWED_EXTENSIONS = {
-    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp",
-    ".pdf",
-    ".webm", ".mp4", ".ogg", ".mp3", ".wav", ".m4a",
-    ".txt", ".md", ".csv",
-    ".doc", ".docx", ".xls", ".xlsx",
-}
-# Block executables and scripts
-BLOCKED_EXTENSIONS = {".exe", ".bat", ".cmd", ".sh", ".ps1", ".js", ".vbs", ".jar", ".py", ".php"}
 
 
 def _normalize_ext(ext: str) -> str:
@@ -43,10 +34,6 @@ def validate_support_file(content: bytes, filename: str) -> str:
     if ".." in base or not base:
         raise ValueError("שם קובץ לא תקין")
     ext = _normalize_ext(os.path.splitext(base)[1])
-    if ext in BLOCKED_EXTENSIONS:
-        raise ValueError("סוג קובץ לא מורשה")
-    if ext not in ALLOWED_EXTENSIONS:
-        raise ValueError("סוג קובץ לא נתמך. מותרים: תמונות, PDF, וידאו/אודיו (webm), מסמכים")
     return ext
 
 

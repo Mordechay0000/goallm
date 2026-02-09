@@ -8,7 +8,7 @@ from typing import Tuple
 
 from PIL import Image
 
-from data.constants import BLOCK_IMAGE, CHECKING_IMAGE, ERROR_IMAGE
+from data.image_placeholders import BLOCK_IMAGE, CHECKING_IMAGE, ERROR_IMAGE
 
 logger = logging.getLogger(__name__)
 

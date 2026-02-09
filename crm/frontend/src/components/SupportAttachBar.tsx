@@ -259,7 +259,7 @@ export const SupportAttachBar: React.FC<SupportAttachBarProps> = ({
           ref={fileInputRef}
           type="file"
           multiple
-          accept="image/*,.pdf,.webm,.mp4,.mp3,.wav,.txt,.md,.doc,.docx"
+          accept="*/*"
           style={{ display: 'none' }}
           onChange={handleFileSelect}
         />

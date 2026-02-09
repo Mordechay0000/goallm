@@ -1,5 +1,5 @@
 """
-Secure avatar upload. Validates file type (no executables).
+Secure avatar upload. Validates file type – only supported image formats.
 """
 import os
 import uuid
@@ -7,12 +7,12 @@ import logging
 from pathlib import Path
 from typing import Tuple
 
+from data.upload_config import AVATAR_MAX_BYTES, AVATAR_ALLOWED_EXTENSIONS
+
 logger = logging.getLogger(__name__)
 
 UPLOADS_DIR = Path(__file__).resolve().parent.parent / ".storage" / "uploads" / "avatars"
-AVATAR_MAX_BYTES = 5 * 1024 * 1024  # 5MB
-ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
-ALLOWED_MIMES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+ALLOWED_MIMES = {"image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp"}
 
 # Magic bytes (file signatures). No executables.
 MAGIC = {
@@ -21,6 +21,7 @@ MAGIC = {
     b"GIF87a": ".gif",
     b"GIF89a": ".gif",
     b"RIFF": None,  # webp starts with RIFF....WEBP
+    b"BM": ".bmp",
 }
 
 
@@ -55,8 +56,8 @@ def validate_avatar_file(content: bytes, filename: str, content_type: str | None
     if ".." in base or base != (filename or "").strip():
         raise ValueError("שם קובץ לא תקין")
     ext = _normalize_ext(os.path.splitext(base)[1])
-    if ext not in ALLOWED_EXTENSIONS:
-        raise ValueError("סוג קובץ לא נתמך. מותרים: JPG, PNG, GIF, WEBP")
+    if ext not in AVATAR_ALLOWED_EXTENSIONS:
+        raise ValueError("סוג קובץ לא נתמך. מותרים: JPG, PNG, GIF, WEBP, BMP")
 
     # MIME
     mime = (content_type or "").strip().lower().split(";")[0].strip()

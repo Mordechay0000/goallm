@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 
+from data.constants import POLICIES_TABLE_NAME, TAG_RULES_TABLE_NAME
+
 logger = logging.getLogger(__name__)
 
 # Storage: GOALLM_STORAGE_DIR env, or project .storage
@@ -42,9 +44,6 @@ except sqlite3.OperationalError:
         raise
 db_connection.execute("PRAGMA journal_mode=WAL;")
 db_connection.execute("PRAGMA synchronous=NORMAL;")
-
-POLICIES_TABLE_NAME = "url_policies"
-TAG_RULES_TABLE_NAME = "tag_rules"
 
 
 def init_db_schema():

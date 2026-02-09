@@ -60,6 +60,7 @@ from .verification import (
 from .uploads import validate_avatar_file, save_avatar
 from .support_uploads import save_support_file
 from .security import validate_password_strength
+from data.constants import DEFAULT_CRM_PROXY_SECRET, DEFAULT_API_HOST, DEFAULT_API_PORT
 
 logger = logging.getLogger(__name__)
 
@@ -1060,7 +1061,7 @@ async def resolver_test_url(
 # Incoming requests are only from logged-in users (no anonymous from-blocked-page).
 
 # Same value must be set when running the proxy (mitmdump). Used for internal endpoints e.g. touch-ip.
-CRM_PROXY_SECRET = os.environ.get("CRM_PROXY_SECRET", "dev-secret").strip()
+CRM_PROXY_SECRET = os.environ.get("CRM_PROXY_SECRET", DEFAULT_CRM_PROXY_SECRET).strip()
 
 
 def _verify_surf_token(token: str) -> Optional[dict]:
@@ -2044,4 +2045,4 @@ async def internal_touch_ip(body: dict):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host=DEFAULT_API_HOST, port=DEFAULT_API_PORT)

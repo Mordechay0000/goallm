@@ -141,7 +141,7 @@ const RegisterPage: React.FC = () => {
     const f = e.target.files?.[0];
     if (!f) return;
     if (!f.type.startsWith('image/') || !ALLOWED.includes(f.type)) {
-      setErrors((prev) => ({ ...prev, avatar: 'רק תמונות: JPG, PNG, GIF, WEBP' }));
+      setErrors((prev) => ({ ...prev, avatar: 'רק תמונות: JPG, PNG, GIF, WEBP, BMP' }));
       return;
     }
     if (f.size > MAX_MB * 1024 * 1024) {

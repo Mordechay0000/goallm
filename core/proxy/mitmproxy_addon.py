@@ -28,17 +28,18 @@ from core.policy.policy_database import (
     add_traffic_log_entry,
 )
 from core.proxy.utils import format_flow_error, format_response_error
+from data.constants import DEFAULT_FILTER_BIND_BASE_URL, DEFAULT_CRM_PROXY_SECRET
 
 setup_logging()
 logger = logging.getLogger(__name__)
 
 # Base URL for the bind page. Unbound IPs are redirected here. Default: CRM on same machine (dev).
 # Set to "off" or "0" to disable redirect (old behavior: use first user's rules for all).
-_raw = (os.environ.get("FILTER_BIND_BASE_URL") or "http://localhost:5173").strip().rstrip("/")
+_raw = (os.environ.get("FILTER_BIND_BASE_URL") or DEFAULT_FILTER_BIND_BASE_URL).strip().rstrip("/")
 FILTER_BIND_BASE_URL = None if _raw.lower() in ("off", "0", "false", "") else _raw
 
 # Same secret as CRM for internal touch endpoint (last_used_at).
-CRM_PROXY_SECRET = os.environ.get("CRM_PROXY_SECRET", "dev-secret").strip()
+CRM_PROXY_SECRET = os.environ.get("CRM_PROXY_SECRET", DEFAULT_CRM_PROXY_SECRET).strip()
 
 
 # Error page shown when client IP is not bound to any user (no recording/filtering for unregistered).
