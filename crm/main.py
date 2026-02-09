@@ -151,6 +151,9 @@ async def start_periodic_schedule_sync():
 static_folder = Path(__file__).resolve().parent / "static"
 if static_folder.exists():
     app.mount("/static", StaticFiles(directory=str(static_folder)), name="static")
+    assets_folder = static_folder / "assets"
+    if assets_folder.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_folder)), name="assets")
 
 # User uploads (avatars)
 uploads_dir = Path(__file__).resolve().parent.parent / ".storage" / "uploads"
