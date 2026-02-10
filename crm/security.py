@@ -8,17 +8,8 @@ import jwt
 from jwt.exceptions import InvalidTokenError, ExpiredSignatureError
 import bcrypt
 from fastapi import HTTPException, status
-import os
 
-# Bcrypt rounds (higher = more secure but slower, 12 is recommended)
-BCRYPT_ROUNDS = 12
-
-# JWT Configuration
-# In production, set SECRET_KEY as environment variable
-# Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"
-SECRET_KEY = os.getenv("SECRET_KEY", "change-this-in-production-use-secrets-token-urlsafe-32")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
+from data.constants import BCRYPT_ROUNDS, SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:

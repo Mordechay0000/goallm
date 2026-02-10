@@ -3,8 +3,7 @@
 ניתן לשנות כאן סגנונות, רקעים (SVG), גופנים וטקסטים.
 """
 
-# Design language: ניקיון עסקי, טאצ' מודרני עדין (תואם ל-CRM)
-# Primary #0D1A3B, Accent #2F6CFF, Border #E4E7EC, Text #1A1A1A, Shadow עדין
+# CSS משותף לכל דפי הנחיתה – גופנים, ריווח, כפתורים, תגיות. מוזרק כ־<style> ב־head.
 COMMON_STYLES = """
 * { box-sizing: border-box; }
 body {
@@ -113,18 +112,37 @@ textarea.readonly-debug {
 }
 """
 
-# Heebo font – תואם לשפה העיצובית של ה-CRM
+# קישור לטעינת גופן Heebo מ־Google Fonts. מוזרק ב־<head> של דפי הנחיתה.
 FONT_LINK = '<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700&display=swap" rel="stylesheet">'
 
-# Overlay: מרכז בהיר לקריאות, שוליים נותנים לצבע המצב לבלוט
+# רקע CSS מעל רקע המצב – גרדיאנט לבן במרכז כדי שהטקסט יישאר קריא על הרקע הצבעוני.
 BG_OVERLAY = "radial-gradient(ellipse 85% 75% at 50% 50%, rgba(255,255,255,0.94), transparent 65%), "
 
-# מיפוי צבע לפי מצב (מזוהה במבט): אדום=חסום | כחול=הגדרות שלי | כתום=תוכן מסונן | צהוב/ענבר=ממתין לבדיקה
-# חסום מדיניות (אין גישה): אדום/קורל רך
+# רקע SVG אדום/קורל – מוצג כשהאתר חסום במדיניות (אין גישה).
 BG_DANGER = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600"><defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#fef2f2"/><stop offset="50%" style="stop-color:#fee2e2"/><stop offset="100%" style="stop-color:#fecaca"/></linearGradient><pattern id="stripes" patternUnits="userSpaceOnUse" width="32" height="16"><path d="M0 0L16 16M16 0L32 16" stroke="#dc2626" stroke-width="1.5" opacity="0.15"/></pattern></defs><rect width="600" height="600" fill="url(#g)"/><rect width="600" height="600" fill="url(#stripes)"/></svg>"""
-# חסום בהגדרות המשתמש: כחול רך – "ההגדרות שלי"
+# רקע SVG כחול רך – מוצג כשהאתר חסום בהגדרות המשתמש ("ההגדרות שלי").
 BG_USER = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600"><defs><linearGradient id="u" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#eff6ff"/><stop offset="50%" style="stop-color:#dbeafe"/><stop offset="100%" style="stop-color:#bfdbfe"/></linearGradient><pattern id="dots" patternUnits="userSpaceOnUse" width="40" height="40"><circle cx="20" cy="20" r="2" fill="#2F6CFF" opacity="0.2"/></pattern></defs><rect width="600" height="600" fill="url(#u)"/><rect width="600" height="600" fill="url(#dots)"/></svg>"""
-# סינון תוכן (הדף נחסם): כתום/ענבר רך – "תוכן מסונן"
+# רקע SVG כתום/ענבר – מוצג כשהדף נחסם בגלל סינון תוכן (מלל/תמונה).
 BG_FILTER = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600"><defs><linearGradient id="f" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#fff7ed"/><stop offset="50%" style="stop-color:#ffedd5"/><stop offset="100%" style="stop-color:#fed7aa"/></linearGradient><pattern id="lines" patternUnits="userSpaceOnUse" width="6" height="20"><line x1="0" y1="4" x2="6" y2="4" stroke="#ea580c" stroke-width="1.2" opacity="0.25"/><line x1="0" y1="12" x2="5" y2="12" stroke="#c2410c" stroke-width="0.8" opacity="0.2"/></pattern></defs><rect width="600" height="600" fill="url(#f)"/><rect width="600" height="600" fill="url(#lines)"/></svg>"""
-# ממתין לבדיקה: צהוב/ענבר רך – "בהמתנה"
+# רקע SVG צהוב/ענבר – מוצג בדף "נשלח לבדיקה" (האתר עדיין לא נבדק).
 BG_PENDING = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600"><defs><linearGradient id="p" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#fffbeb"/><stop offset="50%" style="stop-color:#fef3c7"/><stop offset="100%" style="stop-color:#fde68a"/></linearGradient><pattern id="waves" patternUnits="userSpaceOnUse" width="60" height="30"><path d="M0 15 Q15 8 30 15 T60 15" stroke="#d97706" stroke-width="1" fill="none" opacity="0.25"/><path d="M0 22 Q15 15 30 22 T60 22" stroke="#b45309" stroke-width="0.8" fill="none" opacity="0.15"/></pattern></defs><rect width="600" height="600" fill="url(#p)"/><rect width="600" height="600" fill="url(#waves)"/></svg>"""
+
+# דף HTML שמוצג כשכתובת ה-IP של הגולש לא משויכת לאף משתמש – הפרוקסי מחזיר 403 עם התוכן הזה.
+UNBOUND_IP_HTML = """<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>חיבור לא מאושר</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; text-align: center; }
+    h1 { color: #c00; }
+    p { max-width: 32em; margin: 1rem auto; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <h1>חיבור לא מאושר</h1>
+  <p>החיבור שלך לא מסונן על ידי המערכת. שירות הסינון וההקלטה זמין רק למשתמשים רשומים שמשויכים לחשבון.</p>
+  <p>כדי להשתמש בשירות, יש לשייך את המכשיר (כתובת ה-IP) לחשבון במערכת.</p>
+</body>
+</html>"""

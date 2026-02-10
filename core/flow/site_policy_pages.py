@@ -3,11 +3,10 @@ HTML replacement pages for site-level policy: blocked and send-for-review.
 - Button links to CRM account to add request (user must be logged in).
 - Requests are submitted from within the user's account.
 """
-import os
 import html
 from urllib.parse import quote
 
-from data.urls import DEFAULT_CRM_API_URL, DEFAULT_CRM_FRONTEND_URL
+from data.constants import CRM_API_URL, CRM_FRONTEND_URL
 from data.landing_pages import (
     COMMON_STYLES,
     FONT_LINK,
@@ -17,10 +16,6 @@ from data.landing_pages import (
     BG_FILTER,
     BG_PENDING,
 )
-
-CRM_API_URL = (os.environ.get("CRM_API_URL") or DEFAULT_CRM_API_URL).rstrip("/")
-# Frontend URL for login/requests links (default: 5173 in dev, same as API in production)
-CRM_FRONTEND_URL = (os.environ.get("CRM_FRONTEND_URL") or DEFAULT_CRM_FRONTEND_URL).rstrip("/")
 
 def _crm_request_link(request_url: str, request_type: str) -> str:
     """Build CRM login URL with redirect to new support ticket (פנייה) with attached request (open/change)."""

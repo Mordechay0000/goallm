@@ -17,7 +17,7 @@ from urllib.parse import quote, urlparse
 from typing import Optional, Any
 
 from core.flow.site_policy_pages import CRM_API_URL, CRM_FRONTEND_URL
-from data.constants import DEFAULT_CRM_PROXY_SECRET, SURF_TOKEN_TTL_SEC
+from data.constants import CRM_PROXY_SECRET, SURF_TOKEN_TTL_SEC
 
 
 def _url_to_domain_path(url: str) -> tuple[str, str]:
@@ -33,9 +33,6 @@ def _url_to_domain_path(url: str) -> tuple[str, str]:
         return domain, path
     except Exception:
         return "", "/"
-
-CRM_PROXY_SECRET = (os.environ.get("CRM_PROXY_SECRET") or DEFAULT_CRM_PROXY_SECRET).strip()
-
 
 def create_surf_token(user_id: int) -> str:
     """Create a signed token for the bound user (proxy → CRM verification)."""

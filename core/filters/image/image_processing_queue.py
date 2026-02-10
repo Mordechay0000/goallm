@@ -6,12 +6,13 @@ import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 
-logger = logging.getLogger(__name__)
+from data.constants import (
+    DEFAULT_ANALYSIS_TIMEOUT_SECONDS,
+    WATCHDOG_INTERVAL_SECONDS,
+    DEFAULT_MAX_WORKERS,
+)
 
-DEFAULT_ANALYSIS_TIMEOUT_SECONDS = 120
-WATCHDOG_INTERVAL_SECONDS = 30
-# מספר workers במקביל – מגדיל throughput בלי להעמיס על ה־analyzer (GPU/LLM)
-DEFAULT_MAX_WORKERS = 1000
+logger = logging.getLogger(__name__)
 
 
 def _hash_prefix(h: str) -> str:

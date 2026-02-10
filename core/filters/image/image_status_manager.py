@@ -34,8 +34,8 @@ except ImportError:
 
 def _create_image_analyzer():
     """Choose analyzer: LLM if USE_LLM_IMAGE_ANALYZER=1 and available, else simulated."""
-    use_llm = (os.environ.get("USE_LLM_IMAGE_ANALYZER") or "").strip().lower() in ("1", "true", "yes")
-    if use_llm and LLMImageAnalyzer is not None:
+    from data.constants import USE_LLM_IMAGE_ANALYZER
+    if USE_LLM_IMAGE_ANALYZER and LLMImageAnalyzer is not None:
         logger.info("Using LLM image analyzer (USE_LLM_IMAGE_ANALYZER=1)")
         return LLMImageAnalyzer()
     logger.info("Using simulated image analyzer")

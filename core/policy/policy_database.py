@@ -13,17 +13,16 @@ from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 
-from data.constants import POLICIES_TABLE_NAME, TAG_RULES_TABLE_NAME
+from data.constants import POLICIES_TABLE_NAME, TAG_RULES_TABLE_NAME, GOALLM_STORAGE_DIR
 
 logger = logging.getLogger(__name__)
 
-# Storage: GOALLM_STORAGE_DIR env, or project .storage
 _project_root = Path(__file__).resolve().parent.parent.parent
 
 
 def _get_storage_dir():
-    if os.environ.get("GOALLM_STORAGE_DIR"):
-        return Path(os.environ["GOALLM_STORAGE_DIR"])
+    if GOALLM_STORAGE_DIR:
+        return Path(GOALLM_STORAGE_DIR)
     return _project_root / ".storage"
 
 

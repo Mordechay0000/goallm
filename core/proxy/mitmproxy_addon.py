@@ -28,39 +28,11 @@ from core.policy.policy_database import (
     add_traffic_log_entry,
 )
 from core.proxy.utils import format_flow_error, format_response_error
-from data.constants import DEFAULT_FILTER_BIND_BASE_URL, DEFAULT_CRM_PROXY_SECRET
+from data.constants import FILTER_BIND_BASE_URL, CRM_PROXY_SECRET
+from data.landing_pages import UNBOUND_IP_HTML
 
 setup_logging()
 logger = logging.getLogger(__name__)
-
-# Base URL for the bind page. Unbound IPs are redirected here. Default: CRM on same machine (dev).
-# Set to "off" or "0" to disable redirect (old behavior: use first user's rules for all).
-_raw = (os.environ.get("FILTER_BIND_BASE_URL") or DEFAULT_FILTER_BIND_BASE_URL).strip().rstrip("/")
-FILTER_BIND_BASE_URL = None if _raw.lower() in ("off", "0", "false", "") else _raw
-
-# Same secret as CRM for internal touch endpoint (last_used_at).
-CRM_PROXY_SECRET = os.environ.get("CRM_PROXY_SECRET", DEFAULT_CRM_PROXY_SECRET).strip()
-
-
-# Error page shown when client IP is not bound to any user (no recording/filtering for unregistered).
-UNBOUND_IP_HTML = """<!DOCTYPE html>
-<html dir="rtl" lang="he">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>חיבור לא מאושר</title>
-  <style>
-    body { font-family: system-ui, sans-serif; margin: 2rem; text-align: center; }
-    h1 { color: #c00; }
-    p { max-width: 32em; margin: 1rem auto; line-height: 1.5; }
-  </style>
-</head>
-<body>
-  <h1>חיבור לא מאושר</h1>
-  <p>החיבור שלך לא מסונן על ידי המערכת. שירות הסינון וההקלטה זמין רק למשתמשים רשומים שמשויכים לחשבון.</p>
-  <p>כדי להשתמש בשירות, יש לשייך את המכשיר (כתובת ה-IP) לחשבון במערכת.</p>
-</body>
-</html>"""
 
 
 def _client_ip_from_flow(flow: http.HTTPFlow) -> str | None:

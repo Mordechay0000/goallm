@@ -5,18 +5,15 @@ Backend validation; SMS/email sending pluggable (mock in dev).
 import random
 import string
 import logging
-import os
 from typing import Optional
 from datetime import datetime, timedelta
+
+from data.constants import CODE_LENGTH, CODE_EXPIRE_MINUTES, RATE_LIMIT_MINUTES
 
 from .database import db_connection
 from .services import get_user_by_phone, get_user_by_email
 
 logger = logging.getLogger(__name__)
-
-CODE_LENGTH = 6
-CODE_EXPIRE_MINUTES = 10
-RATE_LIMIT_MINUTES = 2
 
 
 def _normalize_phone(phone: str) -> str:

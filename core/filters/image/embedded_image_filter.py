@@ -10,10 +10,9 @@ import logging
 import re
 from typing import Tuple
 
-logger = logging.getLogger(__name__)
+from data.constants import MAX_EMBEDDED_IMAGES_PER_PAGE
 
-# מקסימום תמונות מוטמעות לעיבוד בדף (למניעת עומס)
-MAX_EMBEDDED_IMAGES_PER_PAGE = 100
+logger = logging.getLogger(__name__)
 
 
 def _parse_data_url(src: str) -> Tuple[bytes, str] | None:

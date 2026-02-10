@@ -8,12 +8,9 @@ from typing import Optional
 
 from PIL import Image
 
-logger = logging.getLogger(__name__)
+from data.constants import MAX_SIDE_FOR_HASH, JPEG_QUALITY
 
-# מקסימום צלע לתמונה לפני hash – חוסך זיכרון ו־CPU באלפי תמונות, ותמונות באותו תוכן בגודל שונה יקבלו אותו hash
-MAX_SIDE_FOR_HASH = 1024
-# איכות JPEG לקנוניזציה – קבועה כדי hash דטרמיניסטי
-JPEG_QUALITY = 90
+logger = logging.getLogger(__name__)
 
 
 def normalize_image_for_hash(image_data: bytes, mime_type: Optional[str] = None) -> Optional[bytes]:

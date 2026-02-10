@@ -9,15 +9,16 @@ from pathlib import Path
 from typing import List, Dict, Optional
 from datetime import datetime
 
+from data.constants import GOALLM_STORAGE_DIR
+
 logger = logging.getLogger(__name__)
 
-# Storage dir: GOALLM_STORAGE_DIR env, or project .storage, or fallback $HOME/.goallm
 _project_root = Path(__file__).resolve().parent.parent
 
 
 def _get_storage_dir():
-    if os.environ.get("GOALLM_STORAGE_DIR"):
-        return Path(os.environ["GOALLM_STORAGE_DIR"])
+    if GOALLM_STORAGE_DIR:
+        return Path(GOALLM_STORAGE_DIR)
     return _project_root / ".storage"
 
 
