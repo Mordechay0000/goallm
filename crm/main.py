@@ -60,7 +60,7 @@ from .verification import (
 from .uploads import validate_avatar_file, save_avatar
 from .support_uploads import save_support_file
 from .security import validate_password_strength
-from data.constants import DEFAULT_CRM_PROXY_SECRET, DEFAULT_API_HOST, DEFAULT_API_PORT
+from data.constants import CRM_PROXY_SECRET, DEFAULT_API_HOST, DEFAULT_API_PORT
 
 logger = logging.getLogger(__name__)
 
@@ -1061,7 +1061,6 @@ async def resolver_test_url(
 # Incoming requests are only from logged-in users (no anonymous from-blocked-page).
 
 # Same value must be set when running the proxy (mitmdump). Used for internal endpoints e.g. touch-ip.
-CRM_PROXY_SECRET = os.environ.get("CRM_PROXY_SECRET", DEFAULT_CRM_PROXY_SECRET).strip()
 
 
 def _verify_surf_token(token: str) -> Optional[dict]:
@@ -2041,6 +2040,29 @@ async def internal_touch_ip(body: dict):
         raise HTTPException(status_code=400, detail="חסר ip")
     touch_ip_binding(ip)
     return {"status": "ok"}
+
+
+# ---------- SPA catch-all (for React router paths like /schedules, /rules, etc.) ----------
+@app.get("/{full_path:path}")
+async def spa_catch_all(full_path: str, request: Request):
+    """
+    Serve the React SPA for any non-API path.
+    This allows direct navigation / refresh on routes like /schedules to work.
+    """
+    # Do NOT intercept API / static / uploads / websocket / internal paths
+    protected_prefixes = (
+        "api/",
+        "static/",
+        "assets/",
+        "uploads/",
+        "ws",
+        "api/internal/",
+    )
+    for prefix in protected_prefixes:
+        if full_path.startswith(prefix):
+            # Let FastAPI return the normal 404 for unknown API/static paths
+            raise HTTPException(status_code=404, detail="Not Found")
+    return _serve_spa()
 
 
 if __name__ == "__main__":
