@@ -83,6 +83,13 @@ class FilterAddon:
         flow.metadata["request_start_time"] = time.perf_counter()
         # IP of the surfer (real client): from X-Forwarded-For / X-Real-IP when behind proxy, else connection peername
         client_ip = _client_ip_from_flow(flow)
+        # When the request goes to the bind host (CRM), inject the real client IP so the CRM sees the same IP
+        # we use for binding checks. Otherwise the CRM would see the proxy's IP and bind the wrong address.
+        if client_ip and _is_request_to_bind_host(flow):
+            existing = (flow.request.headers.get("x-forwarded-for") or "").strip()
+            new_val = client_ip if not existing else f"{client_ip}, {existing}"
+            flow.request.headers["x-forwarded-for"] = new_val
+            flow.request.headers["x-real-ip"] = client_ip
         # Security: traffic recording and filtering only for IPs bound to a user. Unbound IPs get redirect or error.
         if client_ip and not _is_request_to_bind_host(flow):
             user_id = get_user_id_for_ip(client_ip)
