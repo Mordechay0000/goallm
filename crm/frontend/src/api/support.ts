@@ -7,6 +7,7 @@ import apiClient from './client';
 export interface AttachedRequestSnapshot {
   request_type: 'open' | 'change' | 'file';
   url?: string;
+  request_url?: string;  /* full URL with path (כתובת מלאה) – what user tried to access */
   domain_pattern?: string;
   path_pattern?: string;
   action?: string;
@@ -59,12 +60,16 @@ export interface SupportReply {
   is_unread?: boolean;
   attachments?: SupportAttachmentItem[];
   attached_request_snapshot?: string; // JSON
+  /** true = תגובת תמיכה (נשלח מפניות שהתקבלו), false = תגובת משתמש (נשלח מפניות שלי) */
+  is_support_reply?: boolean;
 }
 
 export interface SupportReplyCreate {
   content: string;
   attachments?: SupportAttachmentItem[];
   attached_request_snapshot?: string;
+  /** true when sending from /admin/support/:id, false from /support/:id */
+  is_support_reply?: boolean;
 }
 
 export const supportApi = {

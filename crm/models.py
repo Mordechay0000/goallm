@@ -393,6 +393,8 @@ class SupportReplyCreate(BaseModel):
     attachments: Optional[List[SupportAttachmentItem]] = None
     """Optional: user sends edited copy of request as reply (JSON snapshot)."""
     attached_request_snapshot: Optional[str] = None
+    """True = תגובת תמיכה (נשלח מפניות שהתקבלו), False = תגובת משתמש (נשלח מפניות שלי)."""
+    is_support_reply: Optional[bool] = None
 
 
 class SupportReplyResponse(BaseModel):
@@ -407,6 +409,7 @@ class SupportReplyResponse(BaseModel):
     is_unread: Optional[bool] = None  # True if ticket owner has not read this reply
     attachments: Optional[List[SupportAttachmentItem]] = None
     attached_request_snapshot: Optional[str] = None  # JSON when reply is "edited copy" of request
+    is_support_reply: bool = False  # True = תגובת תמיכה, False = תגובת משתמש (נשמר לפי מקום השליחה)
 
     class Config:
         from_attributes = True

@@ -1441,6 +1441,7 @@ async def create_support_ticket_endpoint(
                 action=data.attached_request.action,
                 include_subdomains=data.attached_request.include_subdomains or False,
                 tags=data.attached_request.tags,
+                request_url=getattr(data.attached_request, "request_url", None),
                 notes=data.attached_request.notes,
             )
             rid = req["id"]
@@ -1576,6 +1577,7 @@ async def list_support_replies_endpoint(
             is_unread=r.get("is_unread", False),
             attachments=r.get("attachments"),
             attached_request_snapshot=r.get("attached_request_snapshot"),
+            is_support_reply=r.get("is_support_reply", False),
         )
         for r in replies
     ]
@@ -1597,12 +1599,14 @@ async def create_support_reply_endpoint(
         raise HTTPException(status_code=400, detail="נא להזין תוכן, לצרף קובץ או לצרף עותק ערוך של הבקשה")
     try:
         attachments = [{"name": a.name, "url": a.url} for a in (data.attachments or [])]
+        is_support_reply = data.is_support_reply if data.is_support_reply is not None else current_user.get("is_admin", False)
         reply = add_support_reply(
             ticket_id=ticket_id,
             author_id=current_user["id"],
             content=data.content or "",
             attachments=attachments or None,
             attached_request_snapshot=data.attached_request_snapshot.strip() if data.attached_request_snapshot else None,
+            is_support_reply=is_support_reply,
         )
         return SupportReplyResponse(
             id=reply["id"],
@@ -1616,6 +1620,7 @@ async def create_support_reply_endpoint(
             is_unread=False,
             attachments=reply.get("attachments"),
             attached_request_snapshot=reply.get("attached_request_snapshot"),
+            is_support_reply=reply.get("is_support_reply", False),
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

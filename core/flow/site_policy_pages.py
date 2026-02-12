@@ -17,10 +17,12 @@ from data.landing_pages import (
     BG_PENDING,
 )
 
-def _crm_request_link(request_url: str, request_type: str) -> str:
-    """Build CRM login URL with redirect to new support ticket (פנייה) with attached request (open/change)."""
-    url_param = (request_url or "").strip()
-    redirect_path = f"/support/new?attach={quote(request_type, safe='')}&url={quote(url_param, safe='')}"
+def _crm_request_link(request_url_full: str, request_type: str, url_domain: str | None = None) -> str:
+    """Build CRM login URL with redirect to new support ticket (פנייה) with attached request (open/change).
+    request_url_full = full URL with path (כתובת מלאה). url_domain = domain only for the rule (כתובת אתר); if None, derived from request_url_full."""
+    full_param = (request_url_full or "").strip()
+    domain_param = (url_domain or _url_to_domain_only(request_url_full) or full_param).strip()
+    redirect_path = f"/support/new?attach={quote(request_type, safe='')}&url={quote(domain_param, safe='')}&request_url={quote(full_param, safe='')}"
     return f"{CRM_FRONTEND_URL}/login?redirect={quote(redirect_path, safe='')}"
 
 
@@ -118,9 +120,9 @@ def _blocked_page_html(
         body_color = "#1A1A1A"
         btn_style = "background: #2F6CFF; color: #fff;"
     full_request_url = request_url.replace("https://", "").replace("http://", "").strip() if request_url else ""
-    prefilled_url = (rule_domain or "").strip() or full_request_url
+    url_domain = (rule_domain or "").strip() or _url_to_domain_only(request_url or "")
     full_url_display = html.escape(full_request_url, quote=False) if full_request_url else "—"
-    crm_link = _crm_request_link(prefilled_url or full_request_url, "change")
+    crm_link = _crm_request_link(full_request_url, "change", url_domain=url_domain or None)
     crm_link_esc = html.escape(crm_link, quote=True)
     tags_html = "".join(f'<span class="tag-chip">{html.escape(t)}</span>' for t in tags_list) if tags_list else '<span style="opacity:0.6;">—</span>'
     actions_html = (
@@ -156,9 +158,9 @@ def _blocked_page_html(
 
 def _send_for_review_page_html(request_url: str = "") -> str:
     full_request_url = request_url.replace("https://", "").replace("http://", "").strip() if request_url else ""
-    prefilled_url = _url_to_domain_only(request_url) if request_url else full_request_url
     full_url_display = html.escape(full_request_url, quote=False) if full_request_url else "—"
-    crm_link = _crm_request_link(prefilled_url, "open")
+    # url = domain only (כתובת אתר), request_url = full (כתובת מלאה)
+    crm_link = _crm_request_link(full_request_url, "open")
     crm_link_esc = html.escape(crm_link, quote=True)
     return f"""<!DOCTYPE html>
 <html lang="he" dir="rtl">

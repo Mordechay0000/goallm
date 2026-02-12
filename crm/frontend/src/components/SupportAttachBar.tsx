@@ -134,33 +134,52 @@ export const SupportAttachBar: React.FC<SupportAttachBarProps> = ({
     }
   };
 
+  const uploadFiles = React.useCallback(
+    async (files: File[]) => {
+      if (!files.length || disabled) return;
+      setError(null);
+      setUploading(true);
+      setUploadProgress(null);
+      try {
+        for (let i = 0; i < files.length; i++) {
+          setUploadProgress(null);
+          const file = files[i];
+          if (!file) continue;
+          const info = await onUpload(file, (p) => setUploadProgress(p));
+          appendOrAttach(info.name, info.url);
+        }
+      } catch (err) {
+        const ax = err as { response?: { status?: number; data?: { detail?: string } }; message?: string };
+        const detail = ax?.response?.data?.detail;
+        const msg = typeof detail === 'string' ? detail : err instanceof Error ? err.message : 'שגיאה בהעלאת הקובץ. נסה שוב.';
+        setError(msg);
+      } finally {
+        setUploading(false);
+        setUploadProgress(null);
+      }
+    },
+    [disabled, onUpload, appendOrAttach]
+  );
+
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const input = e.target;
     const fileList = input.files;
     const filesArray = fileList ? Array.from(fileList) : [];
-    if (!filesArray.length || disabled) return;
     input.value = '';
-    setError(null);
-    setUploading(true);
-    setUploadProgress(null);
-    try {
-      for (let i = 0; i < filesArray.length; i++) {
-        setUploadProgress(null);
-        const file = filesArray[i];
-        if (!file) continue;
-        const info = await onUpload(file, (p) => setUploadProgress(p));
-        appendOrAttach(info.name, info.url);
-      }
-    } catch (err) {
-      const ax = err as { response?: { status?: number; data?: { detail?: string } }; message?: string };
-      const detail = ax?.response?.data?.detail;
-      const msg = typeof detail === 'string' ? detail : err instanceof Error ? err.message : 'שגיאה בהעלאת הקובץ. נסה שוב.';
-      setError(msg);
-    } finally {
-      setUploading(false);
-      setUploadProgress(null);
-    }
+    await uploadFiles(filesArray);
   };
+
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const files = e.clipboardData?.files;
+      const filesArray = files ? Array.from(files) : [];
+      if (filesArray.length === 0 || disabled || uploading) return;
+      e.preventDefault();
+      uploadFiles(filesArray);
+    };
+    document.addEventListener('paste', onPaste);
+    return () => document.removeEventListener('paste', onPaste);
+  }, [disabled, uploading, uploadFiles]);
 
   const removeAttachment = (index: number) => {
     onAttachmentsChange?.(attachments.filter((_, i) => i !== index));

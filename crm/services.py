@@ -1400,9 +1400,11 @@ def add_rule_request(
     if url and request_type != "file":
         url = _normalize_url(url)
     if url and request_type != "file" and (not domain_pattern and not path_pattern):
-        parsed_domain, parsed_path, _ = parse_url(url)
-        domain_pattern = parsed_domain or ""
+        parsed_domain, parsed_path, inferred_sub = parse_url(url)
+        domain_pattern = (parsed_domain[2:] if (parsed_domain or "").startswith("*.") else (parsed_domain or "")) or ""
         path_pattern = parsed_path or "/"
+        if inferred_sub:
+            include_subdomains = True
     now = int(datetime.now().timestamp())
     tags_str = _tags_to_str(tags)
     req_url = (request_url or "").strip() or None
@@ -1522,6 +1524,8 @@ def approve_rule_request(request_id: int, profile_id: Optional[int] = None, reso
         url_for_rule = _normalize_url(url_raw)
     else:
         dom = (req.get("domain_pattern") or "").strip()
+        if dom.startswith("*."):
+            dom = dom[2:]
         path = (req.get("path_pattern") or "").strip()
         if not path or not path.startswith("/"):
             path = "/"
@@ -1529,6 +1533,8 @@ def approve_rule_request(request_id: int, profile_id: Optional[int] = None, reso
     if not url_for_rule:
         raise ValueError("חסר כתובת בבקשה")
     domain, path, inc = parse_url(url_for_rule)
+    if domain.startswith("*."):
+        domain = domain[2:]
     inc = inc or bool(req.get("include_subdomains"))
     domain_pattern = f"*.{domain}" if inc else domain
     action = req.get("action") or "allow"
@@ -1914,8 +1920,9 @@ def add_support_reply(
     content: str,
     attachments: Optional[List[Dict]] = None,
     attached_request_snapshot: Optional[str] = None,
+    is_support_reply: bool = False,
 ) -> Dict:
-    """Add a reply to a ticket (admin or ticket owner). attachments = list of {name, url}. attached_request_snapshot = JSON when user sends edited copy of request."""
+    """Add a reply to a ticket. is_support_reply: True if sent from admin support (פניות שהתקבלו), False if from user (פניות שלי)."""
     ticket = get_support_ticket(ticket_id)
     if not ticket:
         raise ValueError("פנייה לא נמצאה")
@@ -1926,8 +1933,8 @@ def add_support_reply(
     now = int(datetime.now().timestamp())
     att_json = _support_attachments_json(attachments)
     cursor = db_connection.execute(
-        "INSERT INTO support_replies (ticket_id, author_id, content, created_at, attachments, attached_request_snapshot) VALUES (?, ?, ?, ?, ?, ?)",
-        (ticket_id, author_id, content or "", now, att_json, snapshot),
+        "INSERT INTO support_replies (ticket_id, author_id, content, created_at, attachments, attached_request_snapshot, is_support_reply) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (ticket_id, author_id, content or "", now, att_json, snapshot, 1 if is_support_reply else 0),
     )
     rid = cursor.lastrowid
     db_connection.execute(
@@ -1938,9 +1945,9 @@ def add_support_reply(
 
 
 def get_support_reply(reply_id: int) -> Optional[Dict]:
-    """Get a single support reply with author profile (first_name, last_name, avatar_url), attachments, and optional attached_request_snapshot."""
+    """Get a single support reply with author profile and is_support_reply."""
     cursor = db_connection.execute(
-        "SELECT id, ticket_id, author_id, content, created_at, attachments, attached_request_snapshot FROM support_replies WHERE id = ?",
+        "SELECT id, ticket_id, author_id, content, created_at, attachments, attached_request_snapshot, is_support_reply FROM support_replies WHERE id = ?",
         (reply_id,),
     )
     row = cursor.fetchone()
@@ -1948,6 +1955,7 @@ def get_support_reply(reply_id: int) -> Optional[Dict]:
         return None
     d = dict(row)
     d["attachments"] = _support_attachments_parse(d.get("attachments"))
+    d["is_support_reply"] = bool(d.get("is_support_reply", 0))
     author = get_user_by_id(d["author_id"])
     if author:
         d["author_first_name"] = author.get("first_name") or "—"
@@ -1969,7 +1977,7 @@ def list_support_replies(ticket_id: int, viewer_id: Optional[int] = None) -> Lis
     ticket_owner_id = ticket["user_id"]
     cursor = db_connection.execute(
         """
-        SELECT id, ticket_id, author_id, content, created_at, attachments, attached_request_snapshot
+        SELECT id, ticket_id, author_id, content, created_at, attachments, attached_request_snapshot, is_support_reply
         FROM support_replies WHERE ticket_id = ?
         ORDER BY created_at ASC
         """,
@@ -1978,6 +1986,7 @@ def list_support_replies(ticket_id: int, viewer_id: Optional[int] = None) -> Lis
     rows = [dict(row) for row in cursor.fetchall()]
     for r in rows:
         r["attachments"] = _support_attachments_parse(r.get("attachments"))
+        r["is_support_reply"] = bool(r.get("is_support_reply", 0))
         author = get_user_by_id(r["author_id"])
         if author:
             r["author_first_name"] = author.get("first_name") or "—"

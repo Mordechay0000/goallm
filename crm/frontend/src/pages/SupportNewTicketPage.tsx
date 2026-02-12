@@ -23,6 +23,8 @@ import { supportApi } from '../api/support';
 import type { AttachedRequestSnapshot } from '../api/support';
 import SupportAttachBar from '../components/SupportAttachBar';
 import { TagInput } from '../components/TagInput';
+import { parseUrl } from '../utils/urlParser';
+import { processUrlInput } from '../utils/validation';
 
 type AttachType = 'open' | 'change' | 'file' | null;
 
@@ -31,6 +33,7 @@ const SupportNewTicketPage: React.FC = () => {
   const navigate = useNavigate();
   const attachFromQuery = (searchParams.get('attach') || '').toLowerCase() as AttachType;
   const urlFromQuery = searchParams.get('url') || '';
+  const requestUrlFromQuery = searchParams.get('request_url') || '';
   const fileUrlFromQuery = searchParams.get('file_url') || '';
   const filenameFromQuery = searchParams.get('filename') || '';
 
@@ -38,8 +41,9 @@ const SupportNewTicketPage: React.FC = () => {
   const [content, setContent] = useState('');
   const [attach, setAttach] = useState<AttachType>(null);
 
-  // Open/change form
+  // Open/change form: url = domain (כתובת אתר), requestUrl = full URL (כתובת מלאה)
   const [url, setUrl] = useState('');
+  const [requestUrl, setRequestUrl] = useState('');
   const [action, setAction] = useState<'allow' | 'block'>('allow');
   const [includeSubdomains, setIncludeSubdomains] = useState(false);
   const [tags, setTags] = useState<string[]>([]);
@@ -56,10 +60,13 @@ const SupportNewTicketPage: React.FC = () => {
     if (attachFromQuery === 'open' || attachFromQuery === 'change') {
       setAttach(attachFromQuery);
       try {
-        const decoded = decodeURIComponent(urlFromQuery || '').replace(/^https?:\/\//, '').trim();
-        setUrl(decoded);
+        const decodedUrl = decodeURIComponent(urlFromQuery || '').replace(/^https?:\/\//, '').trim();
+        setUrl(decodedUrl);
+        const decodedRequestUrl = decodeURIComponent(requestUrlFromQuery || '').trim();
+        setRequestUrl(decodedRequestUrl);
       } catch {
         setUrl(urlFromQuery);
+        setRequestUrl(requestUrlFromQuery);
       }
       setSubject(attachFromQuery === 'open' ? 'בקשה לפתיחת אתר' : 'בקשה לשינוי');
     } else if (attachFromQuery === 'file') {
@@ -73,7 +80,31 @@ const SupportNewTicketPage: React.FC = () => {
       }
       setSubject(filenameFromQuery ? `פתיחת קובץ – ${decodeURIComponent(filenameFromQuery)}` : 'פתיחת קובץ');
     }
-  }, [attachFromQuery, urlFromQuery, fileUrlFromQuery, filenameFromQuery]);
+  }, [attachFromQuery, urlFromQuery, requestUrlFromQuery, fileUrlFromQuery, filenameFromQuery]);
+
+  /** Typing in "כתובת אתר": only clean protocol and *. (no split), so "/" can be typed. */
+  const handleWebsiteUrlChange = (value: string) => {
+    const { cleaned, setSubdomains } = processUrlInput(value);
+    if (setSubdomains) setIncludeSubdomains(true);
+    setUrl(cleaned);
+  };
+
+  /** Paste in "כתובת אתר": extract domain → כתובת אתר, full URL → כתובת מלאה. */
+  const handleWebsiteUrlPaste = (e: React.ClipboardEvent) => {
+    const pasted = (e.clipboardData.getData('text') || '').trim();
+    if (!pasted) return;
+    e.preventDefault();
+    const { cleaned, setSubdomains } = processUrlInput(pasted);
+    if (setSubdomains) setIncludeSubdomains(true);
+    const hasProtocol = pasted.includes('://');
+    const hasPath = cleaned.includes('/');
+    if (hasPath || hasProtocol) {
+      setRequestUrl(cleaned);
+      setUrl(hasPath ? parseUrl(cleaned).domain : cleaned);
+    } else {
+      setUrl(cleaned);
+    }
+  };
 
   const handleSubmit = async () => {
     setError('');
@@ -101,9 +132,11 @@ const SupportNewTicketPage: React.FC = () => {
     try {
       let attached_request: AttachedRequestSnapshot | undefined;
       if (attach === 'open' || attach === 'change') {
+        const urlForRule = includeSubdomains && !url.trim().startsWith('*.') ? `*.${url.trim()}` : url.trim();
         attached_request = {
           request_type: attach,
-          url: url.trim(),
+          url: urlForRule,
+          request_url: requestUrl.trim() || undefined,
           action,
           include_subdomains: includeSubdomains,
           tags: tags.length > 0 ? tags : undefined,
@@ -191,11 +224,14 @@ const SupportNewTicketPage: React.FC = () => {
               <Box sx={{ mb: 2, p: 1.5, bgcolor: 'action.hover', borderRadius: 1 }}>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
                   <Typography variant="subtitle2">בקשה לפתיחה – תצוגה מקדימה</Typography>
-                  <Button size="small" variant="text" color="secondary" onClick={() => { setAttach(null); setUrl(''); setAction('allow'); setIncludeSubdomains(false); setTags([]); setSubject(''); }}>
+                  <Button size="small" variant="text" color="secondary" onClick={() => { setAttach(null); setUrl(''); setRequestUrl(''); setAction('allow'); setIncludeSubdomains(false); setTags([]); setSubject(''); }}>
                     הסר בקשה
                   </Button>
                 </Box>
-                <TextField fullWidth label="כתובת אתר" value={url} onChange={(e) => setUrl(e.target.value)} size="small" sx={{ mb: 1 }} />
+                {requestUrl && (
+                  <TextField fullWidth label="כתובת מלאה" value={requestUrl} disabled size="small" sx={{ mb: 1 }} helperText="הכתובת עם הנתיב שהמשתמש ניסה להיכנס אליה (לצפייה בלבד)" />
+                )}
+                <TextField fullWidth label="כתובת אתר" value={url} onChange={(e) => handleWebsiteUrlChange(e.target.value)} onPaste={handleWebsiteUrlPaste} size="small" sx={{ mb: 1 }} placeholder="example.com או *.example.com/path או הדבק קישור מלא" helperText="הקלדה חופשית; הדבקת קישור תמלא אוטומטית דומיין + כתובת מלאה" />
                 <FormControl fullWidth size="small" sx={{ mb: 1 }}>
                   <InputLabel>פעולה</InputLabel>
                   <Select value={action} label="פעולה" onChange={(e) => setAction(e.target.value as 'allow' | 'block')}>
@@ -219,7 +255,7 @@ const SupportNewTicketPage: React.FC = () => {
               </Box>
             )}
 
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>כאן כותבים את תוכן הפנייה</Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>אפשר לכתוב בהודעה, לבחור קובץ או להדביק מהלוח</Typography>
             <SupportAttachBar
               onAppendContent={(markdown) => setContent((prev) => (prev ? prev + markdown : markdown.trim()))}
               onUpload={supportApi.uploadFile}
@@ -237,7 +273,7 @@ const SupportNewTicketPage: React.FC = () => {
                   if (canSubmit && !submitting) handleSubmit();
                 }
               }}
-              placeholder="כתוב את תוכן הפנייה"
+              placeholder="כתוב את תוכן הפנייה, או בחר קובץ / הדבק מהלוח"
               variant="outlined"
               size="small"
               sx={{

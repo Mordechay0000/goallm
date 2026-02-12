@@ -543,6 +543,9 @@ def init_db_schema():
     if "attached_request_snapshot" not in sr_cols:
         db_connection.execute("ALTER TABLE support_replies ADD COLUMN attached_request_snapshot TEXT")
         logger.info("Added attached_request_snapshot to support_replies")
+    if "is_support_reply" not in sr_cols:
+        db_connection.execute("ALTER TABLE support_replies ADD COLUMN is_support_reply INTEGER NOT NULL DEFAULT 0")
+        logger.info("Added is_support_reply to support_replies (0=תגובת משתמש, 1=תגובת תמיכה)")
 
     # support_ticket_views: when user last viewed ticket (for unread replies)
     db_connection.execute("""

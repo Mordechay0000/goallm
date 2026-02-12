@@ -28,6 +28,7 @@ import { supportApi } from '../api/support';
 import type { SupportTicket, SupportReply, SupportAttachmentItem, AttachedRequestSnapshot } from '../api/support';
 import SupportAttachBar from '../components/SupportAttachBar';
 import { getAvatarUrl } from '../api/auth';
+import { useAuthStore } from '../store/authStore';
 import { ruleRequestsApi } from '../api/ruleRequests';
 import { TagInput } from '../components/TagInput';
 
@@ -244,10 +245,15 @@ const MessageBlock: React.FC<{
   content: string;
   attachments?: SupportAttachmentItem[];
   attachedRequestSnapshot?: string | null;
+  /** When isOpening: attached request (בקשה) shown inside this message frame */
+  openingRequestSnapshot?: string | null;
+  openingRequestStatus?: string | null;
+  /** When isOpening: action buttons (ערוך, אישור, דחה) rendered inside the message below the request */
+  openingRequestActions?: React.ReactNode;
   isUnread?: boolean;
   variant?: 'user' | 'system';
   isOpening?: boolean;
-}> = ({ name, avatarUrl, date, content, attachments, attachedRequestSnapshot, isUnread, variant = 'user', isOpening = false }) => {
+}> = ({ name, avatarUrl, date, content, attachments, attachedRequestSnapshot, openingRequestSnapshot, openingRequestStatus, openingRequestActions, isUnread, variant = 'user', isOpening = false }) => {
   const text = (content || '').trim();
   const fromUser = variant === 'user';
   return (
@@ -316,6 +322,14 @@ const MessageBlock: React.FC<{
             <AttachedRequestBlock snapshotJson={attachedRequestSnapshot} compact />
           </Box>
         )}
+        {isOpening && openingRequestSnapshot && (
+          <Box sx={{ mt: 1.5 }}>
+            <AttachedRequestBlock snapshotJson={openingRequestSnapshot} status={openingRequestStatus ?? undefined} />
+            {openingRequestActions && (
+              <Box sx={{ mt: 1 }}>{openingRequestActions}</Box>
+            )}
+          </Box>
+        )}
         <MessageAttachments items={attachments || []} resolveUrl={getAvatarUrl} />
       </Box>
     </Box>
@@ -325,6 +339,7 @@ const MessageBlock: React.FC<{
 const SupportConversationPage: React.FC<{ isAdmin?: boolean }> = ({ isAdmin }) => {
   const { ticketId } = useParams<{ ticketId: string }>();
   const navigate = useNavigate();
+  const { user: currentUser } = useAuthStore();
   const [ticket, setTicket] = useState<SupportTicket | null>(null);
   const [replies, setReplies] = useState<SupportReply[]>([]);
   const [replyContent, setReplyContent] = useState('');
@@ -365,6 +380,22 @@ const SupportConversationPage: React.FC<{ isAdmin?: boolean }> = ({ isAdmin }) =
     load();
   }, [ticketId]);
 
+  useEffect(() => {
+    if (!currentUser || !ticket) return;
+    if (isAdmin && !currentUser.is_admin) {
+      navigate('/support');
+      return;
+    }
+    if (!isAdmin && ticket.user_id !== currentUser.id) {
+      navigate('/support');
+      return;
+    }
+    if (!isAdmin && currentUser.is_admin && ticketId) {
+      navigate(`/admin/support/${ticketId}`, { replace: true });
+      return;
+    }
+  }, [currentUser, ticket, isAdmin, ticketId, navigate]);
+
   const handleBack = () => navigate(listPath);
 
   const handleAddReply = async (opts?: { attached_request_snapshot?: string }) => {
@@ -375,7 +406,11 @@ const SupportConversationPage: React.FC<{ isAdmin?: boolean }> = ({ isAdmin }) =
     setReplySubmitting(true);
     setError('');
     try {
-      await supportApi.addReply(ticket.id, { content, ...(snapshot && { attached_request_snapshot: snapshot }) });
+      await supportApi.addReply(ticket.id, {
+        content,
+        ...(snapshot && { attached_request_snapshot: snapshot }),
+        is_support_reply: isAdmin,
+      });
       setReplyContent('');
       setShowEditCopyForm(false);
       setEditCopySnapshot(null);
@@ -510,37 +545,37 @@ const SupportConversationPage: React.FC<{ isAdmin?: boolean }> = ({ isAdmin }) =
           date={formatRelative(ticket.created_at)}
           content={ticket.content}
           attachments={ticket.attachments}
-        />
-        {ticket.request_snapshot_for_client && (
-          <Box sx={{ mb: 2, ml: 6 }}>
-            <AttachedRequestBlock
-              snapshotJson={ticket.request_snapshot_for_client}
-              status={ticket.attached_request_status}
-            />
-            {!isAdmin && attachedRequestPending && (
-              <Button size="small" startIcon={<EditIcon />} onClick={handleStartEditCopy} sx={{ mt: 0.5 }}>
-                ערוך עותק
-              </Button>
-            )}
-            {isAdmin && ticket.attached_rule_request_id && (
-              <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
-                <Button size="small" startIcon={<EditIcon />} onClick={() => navigate(`/admin/requests?request_id=${ticket.attached_rule_request_id}`)}>
-                  ערוך בקשה (רק למנהל)
-                </Button>
-                {attachedRequestPending && (
-                  <>
-                    <Button size="small" color="success" startIcon={<CheckIcon />} onClick={handleApproveRequest} disabled={adminActionLoading}>
-                      אישור
-                    </Button>
-                    <Button size="small" color="error" startIcon={<CloseIcon />} onClick={handleRejectRequest} disabled={adminActionLoading}>
-                      דחה (יש להוסיף תגובה למטה)
-                    </Button>
-                  </>
+          openingRequestSnapshot={ticket.request_snapshot_for_client}
+          openingRequestStatus={ticket.attached_request_status}
+          openingRequestActions={
+            ticket.request_snapshot_for_client ? (
+              <>
+                {!isAdmin && attachedRequestPending && (
+                  <Button size="small" startIcon={<EditIcon />} onClick={handleStartEditCopy}>
+                    ערוך עותק
+                  </Button>
                 )}
-              </Box>
-            )}
-          </Box>
-        )}
+                {isAdmin && ticket.attached_rule_request_id && (
+                  <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <Button size="small" startIcon={<EditIcon />} onClick={() => navigate(`/admin/requests?request_id=${ticket.attached_rule_request_id}`)}>
+                      ערוך בקשה (רק למנהל)
+                    </Button>
+                    {attachedRequestPending && (
+                      <>
+                        <Button size="small" color="success" startIcon={<CheckIcon />} onClick={handleApproveRequest} disabled={adminActionLoading}>
+                          אישור
+                        </Button>
+                        <Button size="small" color="error" startIcon={<CloseIcon />} onClick={handleRejectRequest} disabled={adminActionLoading}>
+                          דחה (יש להוסיף תגובה למטה)
+                        </Button>
+                      </>
+                    )}
+                  </Box>
+                )}
+              </>
+            ) : undefined
+          }
+        />
         {showEditCopyForm && editCopySnapshot && (
           <Box sx={{ mb: 2, ml: 6, p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 1, bgcolor: 'background.paper' }}>
             <Typography variant="subtitle2" sx={{ mb: 1 }}>עותק ערוך של הבקשה – שמירה תשלח כתגובה חדשה</Typography>
@@ -574,9 +609,9 @@ const SupportConversationPage: React.FC<{ isAdmin?: boolean }> = ({ isAdmin }) =
         {replies.map((r) => (
           <MessageBlock
             key={r.id}
-            variant={r.author_id === ticket.user_id ? 'user' : 'system'}
+            variant={r.is_support_reply ? 'system' : 'user'}
             isOpening={false}
-            name={[r.author_first_name, r.author_last_name].filter(Boolean).join(' ') || (r.author_id === ticket.user_id ? 'משתמש' : 'תמיכה')}
+            name={[r.author_first_name, r.author_last_name].filter(Boolean).join(' ') || (r.is_support_reply ? 'תמיכה' : 'משתמש')}
             avatarUrl={r.author_avatar_url}
             date={formatRelative(r.created_at)}
             content={r.content}
@@ -622,7 +657,7 @@ const SupportConversationPage: React.FC<{ isAdmin?: boolean }> = ({ isAdmin }) =
                   if (replyContent.trim() && !replySubmitting) handleAddReply();
                 }
               }}
-              placeholder="כתוב הודעה (⌘+Enter או Ctrl+Enter לשליחה)"
+              placeholder="כתוב הודעה, או בחר קובץ / הדבק מהלוח (⌘+Enter לשליחה)"
               variant="outlined"
               size="small"
               sx={{
