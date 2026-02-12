@@ -6,6 +6,7 @@ Process HTTP flows: site-level policy (HTML), then image filtering.
 import json
 import logging
 from typing import Tuple, Optional, Any
+from urllib.parse import urlparse
 
 from mitmproxy import http
 
@@ -20,8 +21,36 @@ from core.filters.text.text_filter import filter_text_content, _encode_debug_b64
 from core.filters.image.image_status_manager import get_image_with_status
 from core.policy.policy_loader import get_policy_resolver
 from core.policy.policy_database import get_profile_mode, get_filter_switches
+from data.constants import CRM_FRONTEND_URL
 
 logger = logging.getLogger(__name__)
+
+_CRM_FRONTEND_HOST = ""
+try:
+    _parsed_crm = urlparse(
+        CRM_FRONTEND_URL
+        if "://" in (CRM_FRONTEND_URL or "")
+        else f"https://{CRM_FRONTEND_URL}"
+    )
+    _CRM_FRONTEND_HOST = (_parsed_crm.hostname or "").lower().rstrip(".")
+except Exception:
+    _CRM_FRONTEND_HOST = ""
+
+
+def _is_crm_frontend_request(url: str) -> bool:
+    """Return True אם הבקשה שייכת לדומיין של ממשק ה-CRM עצמו.
+
+    על בקשות אלה לא מפעילים שום סינון (מדיניות, טקסט, תמונות, קבצים),
+    כדי שממשק הניהול של הסינון לא ייפגע מהסינון.
+    """
+    if not _CRM_FRONTEND_HOST or not url:
+        return False
+    try:
+        parsed = urlparse(url if "://" in url else f"https://{url}")
+        host = (parsed.hostname or "").lower().rstrip(".")
+        return host == _CRM_FRONTEND_HOST
+    except Exception:
+        return False
 
 
 def _is_html_response(flow: http.HTTPFlow) -> bool:
@@ -177,6 +206,16 @@ def process_http_response(flow: http.HTTPFlow) -> None:
     if not hasattr(flow, "metadata") or flow.metadata is None:
         flow.metadata = {}
     flow.metadata["traffic_status"] = "open"
+
+    # CRM frontend (UI) traffic should לעולם לא לעבור סינון,
+    # כדי שממשק ניהול הסינון עצמו לא ייחסם או ישתבש.
+    if _is_crm_frontend_request(url):
+        logger.debug(
+            "Skipping all filtering for CRM frontend request - URL: %s (user_id=%s)",
+            url,
+            user_id,
+        )
+        return
 
     logger.info("Processing HTTP response - Method: %s, URL: %s (user_id=%s)", method, url, user_id)
     logger.debug(

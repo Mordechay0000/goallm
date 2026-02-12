@@ -22,31 +22,34 @@ POLICIES_TABLE_NAME = "url_policies"
 # שם הטבלה של חוקי תגיות (tag → state) במאגר המדיניות.
 TAG_RULES_TABLE_NAME = "tag_rules"
 
-# ========== פרוקסי / CRM ==========
+# ========== פרוקסי / CRM – כתובת בסיס אחת ==========
+# אתר ניהול הסינון (CRM) – כתובת בסיס אחת שכוללת:
+# - פרונט (ממשק ניהול)
+# - API (תחת /api)
+# - דף שיוך IP (bind) – אותו דומיין
+#
+# אפשר להגדיר פעם אחת ב-CRM_BASE_URL, וכל השאר נגזר ממנו.
+DEFAULT_CRM_BASE_URL = "https://filter.forum-dev.com"
+CRM_BASE_URL = (os.environ.get("CRM_BASE_URL") or DEFAULT_CRM_BASE_URL).strip().rstrip("/")
+
 # ברירת מחדל לסוד המשותף – דרוס עם CRM_PROXY_SECRET בסביבה.
 DEFAULT_CRM_PROXY_SECRET = "dev-secret"
-# ברירת מחדל לכתובת דף הקישור – IP לא משויך מנותב לכאן; "off"/"0" = כבוי.
-DEFAULT_FILTER_BIND_BASE_URL = "https://filter.forum-dev.com"
-
 # ערך אפקטיבי: מסביבה או ברירת מחדל. משמש אימות touch-ip ו־Surf token.
 CRM_PROXY_SECRET = (os.environ.get("CRM_PROXY_SECRET") or DEFAULT_CRM_PROXY_SECRET).strip()
 
-# ערך אפקטיבי: אם "off"/"0"/"false" – None (לא מפנים ל־bind, מציגים 403).
-_raw_bind = (os.environ.get("FILTER_BIND_BASE_URL") or DEFAULT_FILTER_BIND_BASE_URL).strip().rstrip("/")
+# כתובת דף הקישור (bind) – כברירת מחדל אותה כתובת בסיס של ה-CRM.
+# אם FILTER_BIND_BASE_URL מוגדר בסביבה – הוא יגבר; אם "off"/"0"/"false" – אין דף bind.
+_raw_bind = (os.environ.get("FILTER_BIND_BASE_URL") or CRM_BASE_URL).strip().rstrip("/")
 FILTER_BIND_BASE_URL = None if _raw_bind.lower() in ("off", "0", "false", "") else _raw_bind
 
 # תוקף טוקן Surf בשניות – אחרי הזמן הזה הטוקן לא תקף לאימות משתמש מפרוקסי ל-CRM.
 SURF_TOKEN_TTL_SEC = 300
-   
-# ========== כתובות CRM (API ופרונט) ==========
-# ברירת מחדל לכתובת ה-API של ה-CRM (FastAPI).
-DEFAULT_CRM_API_URL = "http://127.0.0.1:8000"
-# ברירת מחדל לכתובת הפרונט (למשל Vite ב־dev על 5173).
-DEFAULT_CRM_FRONTEND_URL = "http://localhost:5173"
 
-# ערכים אפקטיביים – מסביבה או ברירת מחדל. קישורים בדפי נחיתה ובדפדפן.
-CRM_API_URL = (os.environ.get("CRM_API_URL") or DEFAULT_CRM_API_URL).rstrip("/")
-CRM_FRONTEND_URL = (os.environ.get("CRM_FRONTEND_URL") or DEFAULT_CRM_FRONTEND_URL).rstrip("/")
+# ========== כתובות CRM (API ופרונט) ==========
+# ערכים אפקטיביים – מסביבה או נגזרים מ-CRM_BASE_URL.
+# ניתן עדיין לדרוס כל אחד מהם בנפרד במקרה הצורך.
+CRM_API_URL = (os.environ.get("CRM_API_URL") or f"{CRM_BASE_URL}/api").rstrip("/")
+CRM_FRONTEND_URL = (os.environ.get("CRM_FRONTEND_URL") or CRM_BASE_URL).rstrip("/")
 
 # ========== אחסון ==========
 # אם מוגדר – נתיב תיקיית האחסון (מאגר, DB). אם None – כל מודול משתמש ב־.storage יחסית לשורש.
