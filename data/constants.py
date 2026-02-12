@@ -85,8 +85,9 @@ USE_LLM_IMAGE_ANALYZER = (os.environ.get("USE_LLM_IMAGE_ANALYZER") or "").strip(
 DEFAULT_ANALYSIS_TIMEOUT_SECONDS = 120
 # מרווח בשניות בין בדיקות Watchdog על משימות תקועות בתור.
 WATCHDOG_INTERVAL_SECONDS = 30
-# מספר workers במקביל בתור ניתוח התמונות – מגדיל throughput.
-DEFAULT_MAX_WORKERS = 1000
+# מספר workers במקביל בתור ניתוח התמונות. 1000 גרם להפעלה איטית של mitmproxy (pending).
+# ניתן לדרוס עם משתנה סביבה IMAGE_MAX_WORKERS.
+DEFAULT_MAX_WORKERS = int(os.environ.get("IMAGE_MAX_WORKERS", "16"))
 
 # צלע מקסימלית (פיקסלים) לתמונה לפני חישוב hash – חוסך זיכרון ו-CPU.
 MAX_SIDE_FOR_HASH = 1024

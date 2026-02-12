@@ -14,11 +14,14 @@ _project_root = Path(__file__).resolve().parent.parent.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
+import json
 import logging
+import threading
 import time
 import traceback
+import urllib.request
 
-from mitmproxy import http
+from mitmproxy import ctx, http
 
 from core.flow.http_flow_processor import process_http_response
 from core.logger.logging_config import setup_logging
@@ -106,20 +109,21 @@ class FilterAddon:
                 return
             flow.metadata["user_id"] = user_id
             logger.info("Bound connection: IP=%s -> user_id=%s (filter settings apply to this user)", client_ip, user_id)
-            # Update last_used_at for this binding (fire-and-forget to CRM).
+            # Update last_used_at for this binding (fire-and-forget in thread so we don't block the event loop).
             if FILTER_BIND_BASE_URL is not None:
-                try:
-                    import urllib.request
-                    import json
-                    req = urllib.request.Request(
-                        f"{FILTER_BIND_BASE_URL}/api/internal/touch-ip",
-                        data=json.dumps({"ip": client_ip, "secret": CRM_PROXY_SECRET}).encode("utf-8"),
-                        headers={"Content-Type": "application/json"},
-                        method="POST",
-                    )
-                    urllib.request.urlopen(req, timeout=2)
-                except Exception as e:
-                    logger.debug("Touch IP failed (non-fatal): %s", e)
+                def _touch_ip_background():
+                    try:
+                        req = urllib.request.Request(
+                            f"{FILTER_BIND_BASE_URL}/api/internal/touch-ip",
+                            data=json.dumps({"ip": client_ip, "secret": CRM_PROXY_SECRET}).encode("utf-8"),
+                            headers={"Content-Type": "application/json"},
+                            method="POST",
+                        )
+                        urllib.request.urlopen(req, timeout=2)
+                    except Exception as e:
+                        logger.debug("Touch IP failed (non-fatal): %s", e)
+                t = threading.Thread(target=_touch_ip_background, daemon=True)
+                t.start()
         else:
             flow.metadata["user_id"] = get_user_id_for_ip(client_ip) if client_ip else None
 
