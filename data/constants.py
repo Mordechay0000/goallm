@@ -5,6 +5,7 @@
 
 משתני סביבה:
   CRM_PROXY_SECRET         – סוד משותף בין הפרוקסי ל-CRM (touch-ip, Surf token).
+  PROXY_AUTH               – אימות פרוקסי בפורמט username:password (ברירת מחדל: filter:f123456Ab).
   FILTER_BIND_BASE_URL     – כתובת דף הקישור (unbound IP). "off"/"0" = כבוי.
   CRM_API_URL              – כתובת API של ה-CRM.
   CRM_FRONTEND_URL         – כתובת פרונט ה-CRM.
@@ -36,6 +37,12 @@ CRM_BASE_URL = (os.environ.get("CRM_BASE_URL") or DEFAULT_CRM_BASE_URL).strip().
 DEFAULT_CRM_PROXY_SECRET = "dev-secret"
 # ערך אפקטיבי: מסביבה או ברירת מחדל. משמש אימות touch-ip ו־Surf token.
 CRM_PROXY_SECRET = (os.environ.get("CRM_PROXY_SECRET") or DEFAULT_CRM_PROXY_SECRET).strip()
+
+# אימות פרוקסי – משתמשים חייבים להזין שם משתמש וסיסמה כדי לגלוש דרך הפרוקסי.
+# פורמט: "username:password". דרוס עם PROXY_AUTH בסביבה (למשל PROXY_AUTH=user:pass).
+# "" = ללא אימות. mitmproxy מקבל את הערך ב־--set proxyauth=...
+DEFAULT_PROXY_AUTH = "filter:f123456Ab"
+PROXY_AUTH = (os.environ.get("PROXY_AUTH") or DEFAULT_PROXY_AUTH).strip()
 
 # כתובת דף הקישור (bind) – כברירת מחדל אותה כתובת בסיס של ה-CRM.
 # אם FILTER_BIND_BASE_URL מוגדר בסביבה – הוא יגבר; אם "off"/"0"/"false" – אין דף bind.

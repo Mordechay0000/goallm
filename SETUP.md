@@ -41,7 +41,7 @@ bash setup.sh
 
 | טרמינל | פקודה |
 |--------|-------|
-| 1 (פרוקסי) | `cd goallm && source venv/bin/activate && mitmproxy -s core/proxy/mitmproxy_addon.py` |
+| 1 (פרוקסי) | `cd goallm && bash core/proxy/run_proxy.sh` |
 | 2 (Backend) | `cd goallm/crm && bash run_fastapi.sh` |
 | 3 (Frontend) | `cd goallm/crm/frontend && bash run_dev.sh` |
 
@@ -68,7 +68,7 @@ cd crm/frontend && npm install && cd ../..
 
 | טרמינל | פקודה |
 |--------|-------|
-| 1 | `cd goallm && source venv/bin/activate && mitmproxy -s core/proxy/mitmproxy_addon.py` |
+| 1 | `cd goallm && bash core/proxy/run_proxy.sh` |
 | 2 | `cd goallm/crm && bash run_fastapi.sh` |
 | 3 | `cd goallm/crm/frontend && bash run_dev.sh` |
 
@@ -89,17 +89,18 @@ bash setup.sh
 
 ### 4.2 הרצת הפרוקסי
 
-**חשוב:** מריצים **משורש הפרויקט** (`goallm/`).
+**חשוב:** מריצים **משורש הפרויקט** (`goallm/`). הפרוקסי דורש אימות (ברירת מחדל: `filter` / `f123456Ab`).
 
 ```bash
 cd /path/to/goallm
-source venv/bin/activate
-mitmproxy -s core/proxy/mitmproxy_addon.py
+bash core/proxy/run_proxy.sh
 ```
 
 אלטרנטיבות:
-- `mitmweb -s core/proxy/mitmproxy_addon.py` – ממשק ווב
-- `mitmdump -s core/proxy/mitmproxy_addon.py` – לוג בלבד
+- `bash core/proxy/run_proxy.sh mitmweb` – ממשק ווב
+- `bash core/proxy/run_proxy.sh mitmdump` – לוג בלבד
+
+בהגדרת הפרוקסי בדפדפן – הזינו את שם המשתמש והסיסמה כשמופיעה בקשת אימות.
 
 ### 4.3 הרצת Backend CRM
 

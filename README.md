@@ -18,7 +18,7 @@ bash setup.sh
 
 | טרמינל | פקודה |
 |--------|-------|
-| 1 (פרוקסי) | `cd goallm && source venv/bin/activate && mitmproxy -s core/proxy/mitmproxy_addon.py` |
+| 1 (פרוקסי) | `cd goallm && bash core/proxy/run_proxy.sh` |
 | 2 (Backend) | `cd goallm/crm && bash run_fastapi.sh` |
 | 3 (Frontend) | `cd goallm/crm/frontend && bash run_dev.sh` |
 
@@ -61,9 +61,9 @@ pip install -r requirements.txt
 
 | פקודה | תיאור |
 |--------|--------|
-| `mitmproxy -s core/proxy/mitmproxy_addon.py` | ממשק אינטראקטיבי בטרמינל |
-| `mitmweb -s core/proxy/mitmproxy_addon.py` | ממשק ווב |
-| `mitmdump -s core/proxy/mitmproxy_addon.py` | לוג בלבד, ללא ממשק |
+| `bash core/proxy/run_proxy.sh` | ממשק אינטראקטיבי עם אימות (filter/f123456Ab) |
+| `bash core/proxy/run_proxy.sh mitmweb` | ממשק ווב |
+| `bash core/proxy/run_proxy.sh mitmdump` | לוג בלבד, ללא ממשק |
 
 ברירת מחדל: `http://127.0.0.1:8080`. להגדרת פורט אחר: `-p 8888`.
 
