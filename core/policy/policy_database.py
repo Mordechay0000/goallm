@@ -225,6 +225,14 @@ def init_db_schema():
         )
     """)
 
+    # Allowed file downloads: URLs approved by admin (from "request file" flow); proxy skips file-download block for these
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS allowed_file_downloads (
+            url TEXT PRIMARY KEY,
+            created_at INTEGER NOT NULL
+        )
+    """)
+
     # Traffic recording: user starts recording in CRM → proxy logs each request until user stops
     db_connection.execute("""
         CREATE TABLE IF NOT EXISTS traffic_recording_sessions (
@@ -405,6 +413,33 @@ def set_filter_switches(switches: Dict[str, bool], updated_by_user_id: Optional[
             )
     db_connection.commit()
     logger.info("Filter switches updated: %s", switches)
+
+
+def set_allowed_file_urls(urls: List[str]) -> None:
+    """Replace the allowed file-download list (synced from CRM). Core does not own this list; CRM does."""
+    db_connection.execute("DELETE FROM allowed_file_downloads")
+    now = int(datetime.now().timestamp())
+    for url in (urls or []):
+        u = (url or "").strip()
+        if u:
+            db_connection.execute(
+                "INSERT INTO allowed_file_downloads (url, created_at) VALUES (?, ?)",
+                (u, now),
+            )
+    db_connection.commit()
+    logger.info("Allowed file URLs synced from CRM: %s entries", len([u for u in (urls or []) if (u or "").strip()]))
+
+
+def is_file_url_allowed(url: str) -> bool:
+    """Return True if this URL is in the global allowed file-download list (approved by admin)."""
+    url = (url or "").strip()
+    if not url:
+        return False
+    cursor = db_connection.execute(
+        "SELECT 1 FROM allowed_file_downloads WHERE url = ? LIMIT 1",
+        (url,),
+    )
+    return cursor.fetchone() is not None
 
 
 def _tags_to_str(tags: Optional[List[str]]) -> Optional[str]:

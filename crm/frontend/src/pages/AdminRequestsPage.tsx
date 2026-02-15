@@ -39,6 +39,7 @@ import {
 import { Check as CheckIcon, Close as CloseIcon, Delete as DeleteIcon, Edit as EditIcon, MoreVert as MoreVertIcon, Search as SearchIcon } from '@mui/icons-material';
 import { ruleRequestsApi } from '../api/ruleRequests';
 import type { RuleRequest, RuleRequestUpdate } from '../api/ruleRequests';
+import { adminApi } from '../api/admin';
 import { TagInput } from '../components/TagInput';
 import { validateDomainOrUrl, processUrlInput } from '../utils/validation';
 
@@ -77,6 +78,9 @@ const AdminRequestsPage: React.FC = () => {
   const [editAction, setEditAction] = useState<'allow' | 'block'>('block');
   const [editIncludeSubdomains, setEditIncludeSubdomains] = useState(false);
   const [editTags, setEditTags] = useState<string[]>([]);
+  const [editTextFilterEnabled, setEditTextFilterEnabled] = useState(true);
+  const [editImageFilterEnabled, setEditImageFilterEnabled] = useState(true);
+  const [editFileFilterEnabled, setEditFileFilterEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
   const [editMoreAnchor, setEditMoreAnchor] = useState<null | HTMLElement>(null);
 
@@ -178,6 +182,24 @@ const AdminRequestsPage: React.FC = () => {
     setEditAction((req.action as 'allow' | 'block') || 'block');
     setEditIncludeSubdomains(!!req.include_subdomains);
     setEditTags(normalizeTags(req.tags));
+    if (req.request_type !== 'file') {
+      setEditTextFilterEnabled((req as { text_filter_enabled?: boolean }).text_filter_enabled !== false);
+      setEditImageFilterEnabled((req as { image_filter_enabled?: boolean }).image_filter_enabled !== false);
+      setEditFileFilterEnabled((req as { file_filter_enabled?: boolean }).file_filter_enabled !== false);
+    }
+    if (req.approved_rule_id) {
+      adminApi.getGlobalRule(req.approved_rule_id).then((rule) => {
+        const ruleUrl = (rule.domain_pattern || '') + (rule.path_pattern || '/');
+        setEditUrl(ruleUrl);
+        setEditUrlError(validateDomainOrUrl(ruleUrl));
+        setEditAction((rule.action as 'allow' | 'block') || 'allow');
+        setEditIncludeSubdomains(!!rule.include_subdomains);
+        setEditTags(normalizeTags(rule.tags));
+        setEditTextFilterEnabled(rule.text_filter_enabled !== false);
+        setEditImageFilterEnabled(rule.image_filter_enabled !== false);
+        setEditFileFilterEnabled(rule.file_filter_enabled !== false);
+      }).catch(() => {});
+    }
   };
 
   const normalizeTags = (tags: unknown): string[] => {
@@ -219,6 +241,9 @@ const AdminRequestsPage: React.FC = () => {
         action: editAction,
         include_subdomains: editIncludeSubdomains,
         tags: editTags.length > 0 ? editTags : undefined,
+        text_filter_enabled: editTextFilterEnabled,
+        image_filter_enabled: editImageFilterEnabled,
+        file_filter_enabled: editFileFilterEnabled,
       };
       await ruleRequestsApi.update(editDialog.id, data);
       const reqToApprove = { ...editDialog, ...data };
@@ -235,20 +260,37 @@ const AdminRequestsPage: React.FC = () => {
 
   const handleSaveEdit = async () => {
     if (!editDialog) return;
-    const err = validateDomainOrUrl(editUrl);
-    if (err) {
-      setEditUrlError(err);
-      return;
+    if (editDialog.request_type !== 'file') {
+      const err = validateDomainOrUrl(editUrl);
+      if (err) {
+        setEditUrlError(err);
+        return;
+      }
     }
     setSaving(true);
     try {
-      const data: RuleRequestUpdate = {
-        url: editUrl.trim(),
-        action: editAction,
-        include_subdomains: editIncludeSubdomains,
-        tags: editTags.length > 0 ? editTags : undefined,
-      };
-      await ruleRequestsApi.update(editDialog.id, data);
+      if (editDialog.approved_rule_id) {
+        await adminApi.updateGlobalRule(editDialog.approved_rule_id, {
+          url: editUrl.trim(),
+          action: editAction,
+          include_subdomains: editIncludeSubdomains,
+          tags: editTags.length > 0 ? editTags : undefined,
+          text_filter_enabled: editTextFilterEnabled,
+          image_filter_enabled: editImageFilterEnabled,
+          file_filter_enabled: editFileFilterEnabled,
+        });
+      } else {
+        const data: RuleRequestUpdate = {
+          url: editUrl.trim(),
+          action: editAction,
+          include_subdomains: editIncludeSubdomains,
+          tags: editTags.length > 0 ? editTags : undefined,
+          text_filter_enabled: editTextFilterEnabled,
+          image_filter_enabled: editImageFilterEnabled,
+          file_filter_enabled: editFileFilterEnabled,
+        };
+        await ruleRequestsApi.update(editDialog.id, data);
+      }
       setEditDialog(null);
       await loadRequests();
     } catch (e: unknown) {
@@ -404,6 +446,9 @@ const AdminRequestsPage: React.FC = () => {
                     )}
                     {r.status === 'approved' && (
                       <>
+                        {r.approved_rule_id != null && (
+                          <Button size="small" color="secondary" variant="outlined" startIcon={<EditIcon />} onClick={(e) => { e.stopPropagation(); openEditDialog(r); }}>עריכת כלל</Button>
+                        )}
                         <Button size="small" color="secondary" variant="outlined" startIcon={<EditIcon />} onClick={(e) => { e.stopPropagation(); if (r.approved_rule_id) navigate(`/admin/global-rules?edit=${r.approved_rule_id}`); else if (r.approved_profile_id) navigate(`/profiles/${r.approved_profile_id}/rules`); else navigate('/admin/global-rules'); }}>לכלל</Button>
                         <IconButton size="small" onClick={(e) => handleDelete(r, e)} title="מחק"><DeleteIcon /></IconButton>
                       </>
@@ -528,6 +573,14 @@ const AdminRequestsPage: React.FC = () => {
               </FormControl>
               <FormControlLabel control={<Checkbox checked={editIncludeSubdomains} onChange={(e) => setEditIncludeSubdomains(e.target.checked)} />} label="כולל סאב-דומיינים" />
               <TagInput value={editTags} onChange={setEditTags} label="תגיות" helperText="" />
+              {editAction === 'allow' && (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, pt: 0.5 }}>
+                  <Typography variant="subtitle2" color="text.secondary">סינונים לכלל</Typography>
+                  <FormControlLabel control={<Checkbox checked={editTextFilterEnabled} onChange={(e) => setEditTextFilterEnabled(e.target.checked)} />} label="סינון מלל לאתר" />
+                  <FormControlLabel control={<Checkbox checked={editImageFilterEnabled} onChange={(e) => setEditImageFilterEnabled(e.target.checked)} />} label="סינון תמונות לאתר" sx={{ display: 'block', mt: 0.5 }} />
+                  <FormControlLabel control={<Checkbox checked={editFileFilterEnabled} onChange={(e) => setEditFileFilterEnabled(e.target.checked)} />} label="סינון קבצים לאתר" sx={{ display: 'block', mt: 0.5 }} />
+                </Box>
+              )}
               </>
               )}
             </Box>

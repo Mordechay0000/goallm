@@ -27,6 +27,9 @@ export interface RuleRequest {
   resolved_by_user_id?: number;
   /** Display name of admin who last approved/rejected */
   resolved_by_name?: string | null;
+  text_filter_enabled?: boolean;
+  image_filter_enabled?: boolean;
+  file_filter_enabled?: boolean;
 }
 
 export interface RuleRequestUpdate {
@@ -34,6 +37,9 @@ export interface RuleRequestUpdate {
   action?: 'allow' | 'block';
   include_subdomains?: boolean;
   tags?: string[];
+  text_filter_enabled?: boolean;
+  image_filter_enabled?: boolean;
+  file_filter_enabled?: boolean;
 }
 
 export interface RuleRequestCreate {

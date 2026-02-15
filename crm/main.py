@@ -37,6 +37,7 @@ from .services import (
     create_schedule, get_schedule, get_profile_schedules, update_schedule, delete_schedule,
     list_users, set_user_admin, delete_user, get_locked_settings, set_locked_setting, remove_locked_setting,
     add_rule_request, list_rule_requests, get_rule_request, approve_rule_request, reject_rule_request, delete_rule_request,
+    list_allowed_file_downloads, sync_allowed_file_downloads_to_core,
     update_rule_request, list_all_profiles_for_admin,
     create_support_ticket, get_support_ticket, list_my_support_tickets, list_all_support_tickets,
     add_support_reply, list_support_replies, get_support_reply,
@@ -115,11 +116,15 @@ init_db_schema()
 
 @app.on_event("startup")
 async def startup_sync_bindings():
-    """Sync IP bindings to core so the proxy has current bindings on startup."""
+    """Sync IP bindings and allowed file downloads to core so the proxy has current data on startup."""
     try:
         sync_ip_bindings_to_core()
     except Exception as e:
         logger.warning("Startup sync_ip_bindings_to_core failed: %s", e)
+    try:
+        sync_allowed_file_downloads_to_core()
+    except Exception as e:
+        logger.warning("Startup sync_allowed_file_downloads_to_core failed: %s", e)
 
 
 async def _periodic_schedule_sync():
@@ -1264,6 +1269,9 @@ async def list_rule_requests_endpoint(
             notes=r.get("notes"),
             resolved_by_user_id=r.get("resolved_by_user_id"),
             resolved_by_name=r.get("resolved_by_name"),
+            text_filter_enabled=r.get("text_filter_enabled"),
+            image_filter_enabled=r.get("image_filter_enabled"),
+            file_filter_enabled=r.get("file_filter_enabled"),
         ))
     return {"requests": out, "total": total}
 
@@ -1302,6 +1310,9 @@ async def get_rule_request_endpoint(
         notes=req.get("notes"),
         resolved_by_user_id=req.get("resolved_by_user_id"),
         resolved_by_name=req.get("resolved_by_name"),
+        text_filter_enabled=req.get("text_filter_enabled"),
+        image_filter_enabled=req.get("image_filter_enabled"),
+        file_filter_enabled=req.get("file_filter_enabled"),
     )
 
 
@@ -1331,6 +1342,9 @@ async def update_rule_request_endpoint(
             action=body.action,
             include_subdomains=body.include_subdomains,
             tags=body.tags,
+            text_filter_enabled=body.text_filter_enabled,
+            image_filter_enabled=body.image_filter_enabled,
+            file_filter_enabled=body.file_filter_enabled,
         )
         user = get_user_by_id(updated["user_id"])
         user_phone = user.get("phone") if user else None
@@ -1355,6 +1369,9 @@ async def update_rule_request_endpoint(
             notes=updated.get("notes"),
             resolved_by_user_id=updated.get("resolved_by_user_id"),
             resolved_by_name=updated.get("resolved_by_name"),
+            text_filter_enabled=updated.get("text_filter_enabled"),
+            image_filter_enabled=updated.get("image_filter_enabled"),
+            file_filter_enabled=updated.get("file_filter_enabled"),
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

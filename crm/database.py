@@ -424,6 +424,16 @@ def init_db_schema():
     if "resolved_by_user_id" not in rr_cols:
         db_connection.execute("ALTER TABLE rule_requests ADD COLUMN resolved_by_user_id INTEGER")
         logger.info("Added resolved_by_user_id to rule_requests")
+    rr_cols = [row[1] for row in db_connection.execute("PRAGMA table_info(rule_requests)").fetchall()]
+    if "text_filter_enabled" not in rr_cols:
+        db_connection.execute("ALTER TABLE rule_requests ADD COLUMN text_filter_enabled INTEGER NOT NULL DEFAULT 1")
+        logger.info("Added text_filter_enabled to rule_requests")
+    if "image_filter_enabled" not in rr_cols:
+        db_connection.execute("ALTER TABLE rule_requests ADD COLUMN image_filter_enabled INTEGER NOT NULL DEFAULT 1")
+        logger.info("Added image_filter_enabled to rule_requests")
+    if "file_filter_enabled" not in rr_cols:
+        db_connection.execute("ALTER TABLE rule_requests ADD COLUMN file_filter_enabled INTEGER NOT NULL DEFAULT 1")
+        logger.info("Added file_filter_enabled to rule_requests")
 
     # global_rules: base whitelist managed only by admins (same shape as rules, no profile_id)
     db_connection.execute("""
@@ -471,6 +481,14 @@ def init_db_schema():
             logger.info("Dropped type column from global_rules")
         except Exception as e:
             logger.warning("Could not drop global_rules.type (e.g. SQLite < 3.35): %s", e)
+
+    # allowed_file_downloads: global list of approved file URLs (separate from global_rules / sites)
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS allowed_file_downloads (
+            url TEXT PRIMARY KEY,
+            created_at INTEGER NOT NULL
+        )
+    """)
 
     # IP bindings: which client IP is associated with which user (for filter per-user)
     db_connection.execute("""

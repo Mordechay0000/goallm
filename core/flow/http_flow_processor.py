@@ -20,7 +20,7 @@ from core.filters.image.embedded_image_filter import filter_embedded_images_in_h
 from core.filters.text.text_filter import filter_text_content, _encode_debug_b64
 from core.filters.image.image_status_manager import get_image_with_status
 from core.policy.policy_loader import get_policy_resolver
-from core.policy.policy_database import get_profile_mode, get_filter_switches
+from core.policy.policy_database import get_profile_mode, get_filter_switches, is_file_url_allowed
 from data.constants import CRM_FRONTEND_URL
 
 logger = logging.getLogger(__name__)
@@ -65,12 +65,31 @@ def _is_text_or_json_response(flow: http.HTTPFlow) -> bool:
 
 
 def _is_file_download_response(flow: http.HTTPFlow) -> bool:
-    """True when response has Content-Disposition indicating a file download (attachment or filename=)."""
+    """True when response is meant to be saved as a file (Content-Disposition: attachment).
+
+    We only treat 'attachment' as file download so that site assets are not blocked:
+    - Many sites send Content-Disposition: inline; filename=... for HTML/JS/CSS – those must pass.
+    - Only 'attachment' means the server intends the user to download/save the file.
+    """
     cd = (flow.response.headers.get("content-disposition") or "").strip()
     if not cd:
         return False
     cd_lower = cd.lower()
-    return "attachment" in cd_lower or "filename=" in cd_lower
+    # Only attachment = real file download. "inline" or "inline; filename=..." = display in browser.
+    if "attachment" not in cd_lower:
+        return False
+    # Do not treat page assets as file download even if server wrongly sends attachment
+    ct = (flow.response.headers.get("content-type") or "").lower().split(";")[0].strip()
+    if ct in (
+        "text/html",
+        "text/css",
+        "application/javascript",
+        "application/x-javascript",
+        "text/javascript",
+        "application/json",
+    ) or ct.startswith("text/plain"):
+        return False
+    return True
 
 
 def _get_filename_from_response(flow: http.HTTPFlow) -> str:
@@ -382,8 +401,11 @@ def process_http_response(flow: http.HTTPFlow) -> None:
                 logger.warning("Text filter failed for text/json %s: %s", url, e, exc_info=True)
         return
 
-    # File download (non-image): require send-for-review
+    # File download (non-image): require send-for-review unless URL is in allowed list
     if _is_file_download_response(flow) and not _is_content_type_already_filtered(flow):
+        if is_file_url_allowed(url):
+            logger.info("File download URL is in allowed list, passing through - URL: %s", url)
+            return
         if get_filter_switches().get("file_download_filter", True):
             file_url = url
             filename = _get_filename_from_response(flow) or "קובץ"

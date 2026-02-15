@@ -331,6 +331,9 @@ class RuleRequestResponse(BaseModel):
     notes: Optional[str] = None  # for file requests: user description of the file
     resolved_by_user_id: Optional[int] = None
     resolved_by_name: Optional[str] = None  # display name of admin who approved/rejected (last resolver)
+    text_filter_enabled: Optional[bool] = None  # for allow rules: enable text filter (only for open/change)
+    image_filter_enabled: Optional[bool] = None
+    file_filter_enabled: Optional[bool] = None
 
     class Config:
         from_attributes = True
@@ -341,6 +344,9 @@ class RuleRequestUpdate(BaseModel):
     action: Optional[str] = Field(None, pattern="^(allow|block)$")
     include_subdomains: Optional[bool] = None
     tags: Optional[List[str]] = None
+    text_filter_enabled: Optional[bool] = None
+    image_filter_enabled: Optional[bool] = None
+    file_filter_enabled: Optional[bool] = None
 
 
 class ResolverTestUrlBody(BaseModel):

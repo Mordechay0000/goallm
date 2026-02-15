@@ -1425,7 +1425,10 @@ def get_rule_request(request_id: int) -> Optional[Dict]:
     """Get a single rule request. Includes resolved_by_user_id and resolved_by_name (from users)."""
     cursor = db_connection.execute("""
         SELECT r.id, r.user_id, r.request_type, r.url, r.domain_pattern, r.path_pattern, r.action, r.type, r.include_subdomains, r.tags, r.status, r.created_at, r.updated_at,
-               r.approved_rule_id, r.approved_profile_id, r.request_url, r.notes, r.resolved_by_user_id
+               r.approved_rule_id, r.approved_profile_id, r.request_url, r.notes, r.resolved_by_user_id,
+               COALESCE(r.text_filter_enabled, 1) AS text_filter_enabled,
+               COALESCE(r.image_filter_enabled, 1) AS image_filter_enabled,
+               COALESCE(r.file_filter_enabled, 1) AS file_filter_enabled
         FROM rule_requests r WHERE r.id = ?
     """, (request_id,))
     row = cursor.fetchone()
@@ -1433,6 +1436,9 @@ def get_rule_request(request_id: int) -> Optional[Dict]:
         return None
     d = dict(row)
     d["tags"] = _parse_tags(d.get("tags"))
+    d["text_filter_enabled"] = bool(d.get("text_filter_enabled", 1))
+    d["image_filter_enabled"] = bool(d.get("image_filter_enabled", 1))
+    d["file_filter_enabled"] = bool(d.get("file_filter_enabled", 1))
     d["resolved_by_name"] = None
     if d.get("resolved_by_user_id"):
         u = get_user_by_id(d["resolved_by_user_id"])
@@ -1482,7 +1488,10 @@ def list_rule_requests(
     cursor = db_connection.execute(
         f"""
         SELECT id, user_id, request_type, url, domain_pattern, path_pattern, action, type, include_subdomains, tags, status, created_at, updated_at,
-               approved_rule_id, approved_profile_id, request_url, notes, resolved_by_user_id
+               approved_rule_id, approved_profile_id, request_url, notes, resolved_by_user_id,
+               COALESCE(text_filter_enabled, 1) AS text_filter_enabled,
+               COALESCE(image_filter_enabled, 1) AS image_filter_enabled,
+               COALESCE(file_filter_enabled, 1) AS file_filter_enabled
         FROM rule_requests {where}
         ORDER BY {order_col} {direction}
         LIMIT ? OFFSET ?
@@ -1494,6 +1503,9 @@ def list_rule_requests(
     for row in rows:
         d = dict(row)
         d["tags"] = _parse_tags(d.get("tags"))
+        d["text_filter_enabled"] = bool(d.get("text_filter_enabled", 1))
+        d["image_filter_enabled"] = bool(d.get("image_filter_enabled", 1))
+        d["file_filter_enabled"] = bool(d.get("file_filter_enabled", 1))
         d["resolved_by_name"] = None
         if d.get("resolved_by_user_id"):
             u = get_user_by_id(d["resolved_by_user_id"])
@@ -1504,8 +1516,39 @@ def list_rule_requests(
     return out, total
 
 
+def list_allowed_file_downloads() -> List[Dict]:
+    """Return the global list of allowed file URLs (separate from global_rules). Stored in CRM DB, synced to core."""
+    cursor = db_connection.execute(
+        "SELECT url, created_at FROM allowed_file_downloads ORDER BY created_at DESC"
+    )
+    return [{"url": row["url"], "created_at": row["created_at"]} for row in cursor.fetchall()]
+
+
+def add_allowed_file_url_crm(url: str) -> None:
+    """Add a URL to the CRM global allowed-file list. Call sync_allowed_file_downloads_to_core() to push to proxy."""
+    url = (url or "").strip()
+    if not url:
+        return
+    now = int(datetime.now().timestamp())
+    db_connection.execute(
+        "INSERT OR REPLACE INTO allowed_file_downloads (url, created_at) VALUES (?, ?)",
+        (url, now),
+    )
+    db_connection.commit()
+
+
+def sync_allowed_file_downloads_to_core() -> None:
+    """Sync CRM allowed_file_downloads to core so the proxy uses the same list."""
+    try:
+        from core.policy.policy_database import set_allowed_file_urls
+        rows = list_allowed_file_downloads()
+        set_allowed_file_urls([r["url"] for r in rows])
+    except Exception as e:
+        logger.warning("sync_allowed_file_downloads_to_core failed: %s", e)
+
+
 def approve_rule_request(request_id: int, profile_id: Optional[int] = None, resolved_by_user_id: Optional[int] = None) -> Dict:
-    """Admin approves a request: add or update rule in global list. For file requests, only mark as approved (no rule)."""
+    """Admin approves a request: add or update rule in global list. For file requests, add URL to allowed_file_downloads (separate from sites)."""
     req = get_rule_request(request_id)
     if not req:
         raise ValueError("בקשה לא נמצאה")
@@ -1513,6 +1556,10 @@ def approve_rule_request(request_id: int, profile_id: Optional[int] = None, reso
         raise ValueError("הבקשה כבר אושרה")
     now = int(datetime.now().timestamp())
     if req.get("request_type") == "file":
+        request_url = (req.get("request_url") or "").strip()
+        if request_url:
+            add_allowed_file_url_crm(request_url)
+            sync_allowed_file_downloads_to_core()
         db_connection.execute(
             "UPDATE rule_requests SET status = 'approved', updated_at = ?, approved_rule_id = ?, approved_profile_id = ?, resolved_by_user_id = ? WHERE id = ?",
             (now, None, None, resolved_by_user_id, request_id),
@@ -1539,6 +1586,9 @@ def approve_rule_request(request_id: int, profile_id: Optional[int] = None, reso
     domain_pattern = f"*.{domain}" if inc else domain
     action = req.get("action") or "allow"
     tags = req.get("tags")
+    tf = bool(req.get("text_filter_enabled", True)) if action == "allow" else False
+    imgf = bool(req.get("image_filter_enabled", True)) if action == "allow" else False
+    filef = bool(req.get("file_filter_enabled", True)) if action == "allow" else False
     existing_id = _global_rule_exists(domain_pattern, path, inc)
     if existing_id:
         updated = update_global_rule(
@@ -1546,10 +1596,12 @@ def approve_rule_request(request_id: int, profile_id: Optional[int] = None, reso
             action=action,
             include_subdomains=inc,
             tags=tags,
+            text_filter_enabled=tf,
+            image_filter_enabled=imgf,
+            file_filter_enabled=filef,
         )
         rule_id = updated["id"]
     else:
-        tf = imgf = filef = (action == "allow")
         created = create_global_rule(
             url=url_for_rule,
             action=action,
@@ -1575,6 +1627,9 @@ def update_rule_request(
     action: Optional[str] = None,
     include_subdomains: Optional[bool] = None,
     tags: Optional[List[str]] = None,
+    text_filter_enabled: Optional[bool] = None,
+    image_filter_enabled: Optional[bool] = None,
+    file_filter_enabled: Optional[bool] = None,
 ) -> Dict:
     """Update a pending or rejected rule request (admin or owner)."""
     req = get_rule_request(request_id)
@@ -1582,19 +1637,26 @@ def update_rule_request(
         raise ValueError("בקשה לא נמצאה")
     if req["status"] == "approved":
         raise ValueError("לא ניתן לערוך בקשה שאושרה")
+    now = int(datetime.now().timestamp())
     if url is not None:
         url = _normalize_url(url.strip())
         domain_pattern, path_pattern, inc = parse_url(url)
         db_connection.execute(
             "UPDATE rule_requests SET url = ?, domain_pattern = ?, path_pattern = ?, updated_at = ? WHERE id = ?",
-            (url, domain_pattern or "", path_pattern or "/", int(datetime.now().timestamp()), request_id),
+            (url, domain_pattern or "", path_pattern or "/", now, request_id),
         )
     if action is not None and action in ("allow", "block"):
-        db_connection.execute("UPDATE rule_requests SET action = ?, updated_at = ? WHERE id = ?", (action, int(datetime.now().timestamp()), request_id))
+        db_connection.execute("UPDATE rule_requests SET action = ?, updated_at = ? WHERE id = ?", (action, now, request_id))
     if include_subdomains is not None:
-        db_connection.execute("UPDATE rule_requests SET include_subdomains = ?, updated_at = ? WHERE id = ?", (1 if include_subdomains else 0, int(datetime.now().timestamp()), request_id))
+        db_connection.execute("UPDATE rule_requests SET include_subdomains = ?, updated_at = ? WHERE id = ?", (1 if include_subdomains else 0, now, request_id))
     if tags is not None:
-        db_connection.execute("UPDATE rule_requests SET tags = ?, updated_at = ? WHERE id = ?", (_tags_to_str(tags), int(datetime.now().timestamp()), request_id))
+        db_connection.execute("UPDATE rule_requests SET tags = ?, updated_at = ? WHERE id = ?", (_tags_to_str(tags), now, request_id))
+    if text_filter_enabled is not None:
+        db_connection.execute("UPDATE rule_requests SET text_filter_enabled = ?, updated_at = ? WHERE id = ?", (1 if text_filter_enabled else 0, now, request_id))
+    if image_filter_enabled is not None:
+        db_connection.execute("UPDATE rule_requests SET image_filter_enabled = ?, updated_at = ? WHERE id = ?", (1 if image_filter_enabled else 0, now, request_id))
+    if file_filter_enabled is not None:
+        db_connection.execute("UPDATE rule_requests SET file_filter_enabled = ?, updated_at = ? WHERE id = ?", (1 if file_filter_enabled else 0, now, request_id))
     db_connection.commit()
     return get_rule_request(request_id)
 
