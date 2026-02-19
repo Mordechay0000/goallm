@@ -18,6 +18,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { PasswordField } from '../components/PasswordField';
 import { FormErrors } from '../components/FormErrors';
 import { validatePhone } from '../utils/validation';
+import { PAGE_DESCRIPTIONS, PLACEHOLDERS } from '../brand';
 
 type LoginMode = 'phone' | 'password';
 
@@ -153,11 +154,16 @@ const LoginPage: React.FC = () => {
   };
 
   return (
-    <Container maxWidth="sm" sx={{ mt: 4, mb: 4 }}>
-      <Paper sx={{ p: 4 }}>
-        <Typography variant="h5" align="center" gutterBottom sx={{ fontWeight: 600, mb: 4 }}>
-          כניסה לחשבון שלי
-        </Typography>
+    <Container maxWidth="sm" sx={{ mt: 4, mb: 4 }} className="page-section">
+      <Paper className="paper-form" sx={{ p: 4 }}>
+        <Box className="page-title-section">
+          <Typography variant="h5" component="h1" align="center" gutterBottom sx={{ fontWeight: 600, mb: 1 }}>
+            כניסה לחשבון שלי
+          </Typography>
+          <Typography variant="body2" color="text.secondary" align="center" sx={{ mt: 1 }}>
+            {PAGE_DESCRIPTIONS.login}
+          </Typography>
+        </Box>
 
         {registrationMessage && (
           <Alert severity="success" sx={{ mb: 3 }}>
@@ -181,7 +187,7 @@ const LoginPage: React.FC = () => {
             }}
             error={!!errors.phone}
             helperText={errors.phone || 'נכנסים עם הטלפון והסיסמה (או עם קוד שנשלח לטלפון)'}
-            placeholder="050-1234567"
+            placeholder={PLACEHOLDERS.phone}
             sx={{ mb: 2 }}
             autoComplete="tel"
             inputProps={{ inputMode: 'tel' }}
@@ -200,7 +206,7 @@ const LoginPage: React.FC = () => {
               }}
               error={!!errors.code}
               helperText={errors.code || 'הקוד בן 6 ספרות שקיבלת בהודעה'}
-              placeholder="123456"
+              placeholder={PLACEHOLDERS.code}
               sx={{ mb: 2 }}
               autoComplete="one-time-code"
               inputProps={{ inputMode: 'numeric', maxLength: 6 }}

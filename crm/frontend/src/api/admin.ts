@@ -82,6 +82,19 @@ export const adminApi = {
     return response.data;
   },
 
+  // Allowed file downloads (רשימת קבצים מאושרים – אדמין)
+  listAllowedFileDownloads: async (): Promise<AllowedFileItem[]> => {
+    const response = await apiClient.get<{ items: AllowedFileItem[] }>('/api/admin/allowed-file-downloads');
+    return response.data.items;
+  },
+  addAllowedFileDownload: async (url: string): Promise<{ url: string }> => {
+    const response = await apiClient.post<{ url: string }>('/api/admin/allowed-file-downloads', { url: url.trim() });
+    return response.data;
+  },
+  removeAllowedFileDownload: async (url: string): Promise<void> => {
+    await apiClient.delete('/api/admin/allowed-file-downloads', { data: { url: url.trim() } });
+  },
+
   // Filter switches (הפעלה/כיבוי סינונים – אדמין)
   getFilterSwitches: async (): Promise<FilterSwitches> => {
     const response = await apiClient.get<FilterSwitches>('/api/admin/filter-switches');
@@ -140,6 +153,11 @@ export interface GlobalRuleUpdate {
   text_filter_enabled?: boolean;
   image_filter_enabled?: boolean;
   file_filter_enabled?: boolean;
+}
+
+export interface AllowedFileItem {
+  url: string;
+  created_at: number;
 }
 
 /** רשומה בלוג אבטחה – צפייה בהקלטת תעבורה */

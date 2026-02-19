@@ -40,6 +40,7 @@ import { Add as AddIcon, Delete as DeleteIcon, Edit as EditIcon, ExpandMore as E
 import { adminApi, type GlobalRule, type GlobalRuleCreate, type GlobalRuleUpdate } from '../api/admin';
 import { TagInput } from '../components/TagInput';
 import { validateDomainOrUrl, processUrlInput } from '../utils/validation';
+import { PAGE_DESCRIPTIONS, PLACEHOLDERS } from '../brand';
 
 const ACTION_LABELS: Record<string, string> = { block: 'חסום', allow: 'אפשר' };
 
@@ -259,22 +260,22 @@ const AdminGlobalRulesPage: React.FC = () => {
   const paginatedRules = sortedRules.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
 
   return (
-    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }} className="page-section container-content">
       {editRuleIdError && (
         <Alert severity="error" onClose={() => setEditRuleIdError(null)} sx={{ mb: 2 }}>
           {editRuleIdError}
         </Alert>
       )}
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 2, mb: 3 }}>
+      <Box className="page-title-section" sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 2, mb: 3 }}>
         <Box>
           <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
-            רשימה גלובלית
+            רשימת האתרים הגלובלית
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            הרשימה הגלובלית קובעת אילו אתרים בכלל יכולים להיות פתוחים במערכת. רק אדמין יכול לערוך.
+            {PAGE_DESCRIPTIONS.adminGlobalRules}
           </Typography>
         </Box>
-        <Button variant="contained" color="secondary" startIcon={<AddIcon />} onClick={openAdd}>
+        <Button variant="contained" startIcon={<AddIcon />} onClick={openAdd}>
           הוסף כלל
         </Button>
       </Box>
@@ -378,11 +379,11 @@ const AdminGlobalRulesPage: React.FC = () => {
                         overflowX: 'auto',
                         whiteSpace: 'nowrap',
                         scrollbarWidth: 'thin',
-                        scrollbarColor: '#2F6CFF #E4E7EC',
+                        scrollbarColor: '#1e3a5f #e2e8f0',
                         '&::-webkit-scrollbar': { height: 8 },
-                        '&::-webkit-scrollbar-track': { background: '#E4E7EC', borderRadius: 8 },
-                        '&::-webkit-scrollbar-thumb': { background: '#2F6CFF', borderRadius: 8, border: '2px solid #E4E7EC' },
-                        '&::-webkit-scrollbar-thumb:hover': { background: '#2555d9' },
+                        '&::-webkit-scrollbar-track': { background: '#e2e8f0', borderRadius: 8 },
+                        '&::-webkit-scrollbar-thumb': { background: '#1e3a5f', borderRadius: 8, border: '2px solid #e2e8f0' },
+                        '&::-webkit-scrollbar-thumb:hover': { background: '#152a45' },
                       }}
                     >
                       {ruleDisplayUrl(r)}

@@ -26,7 +26,7 @@ from .models import (
     TagRuleCreate, TagRuleUpdate, TagRuleResponse,
     ScheduleCreate, ScheduleUpdate, ScheduleResponse,
     RuleRequestCreate, RuleRequestApprove, RuleRequestUpdate, RuleRequestResponse,
-    ResolverTestUrlBody,
+    ResolverTestUrlBody, AllowedFileUrlBody,
     SupportTicketCreate, SupportTicketResponse, SupportReplyCreate, SupportReplyResponse,
 )
 from .services import (
@@ -37,7 +37,7 @@ from .services import (
     create_schedule, get_schedule, get_profile_schedules, update_schedule, delete_schedule,
     list_users, set_user_admin, delete_user, get_locked_settings, set_locked_setting, remove_locked_setting,
     add_rule_request, list_rule_requests, get_rule_request, approve_rule_request, reject_rule_request, delete_rule_request,
-    list_allowed_file_downloads, sync_allowed_file_downloads_to_core,
+    list_allowed_file_downloads, sync_allowed_file_downloads_to_core, add_allowed_file_url_crm, remove_allowed_file_url_crm,
     update_rule_request, list_all_profiles_for_admin,
     create_support_ticket, get_support_ticket, list_my_support_tickets, list_all_support_tickets,
     add_support_reply, list_support_replies, get_support_reply,
@@ -1772,6 +1772,40 @@ async def admin_delete_global_rule(
         raise HTTPException(status_code=404, detail="כלל גלובלי לא נמצא")
 
 
+# Allowed file downloads (רשימת קבצים מאושרים – אדמין)
+@app.get("/api/admin/allowed-file-downloads")
+async def admin_list_allowed_file_downloads(admin: dict = Depends(get_current_admin)):
+    """List global allowed file download URLs. Admin only."""
+    return {"items": list_allowed_file_downloads()}
+
+
+@app.post("/api/admin/allowed-file-downloads", status_code=status.HTTP_201_CREATED)
+async def admin_add_allowed_file_download(
+    body: AllowedFileUrlBody,
+    admin: dict = Depends(get_current_admin),
+):
+    """Add a URL to the global allowed file list. Admin only."""
+    url = (body.url or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="חסר כתובת קובץ")
+    add_allowed_file_url_crm(url)
+    return {"url": url}
+
+
+@app.delete("/api/admin/allowed-file-downloads", status_code=status.HTTP_204_NO_CONTENT)
+async def admin_remove_allowed_file_download(
+    body: AllowedFileUrlBody,
+    admin: dict = Depends(get_current_admin),
+):
+    """Remove a URL from the global allowed file list. Admin only."""
+    url = (body.url or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="חסר כתובת קובץ")
+    deleted = remove_allowed_file_url_crm(url)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="הכתובת לא נמצאה ברשימה")
+
+
 @app.post("/api/admin/surf-update-rule-to-block")
 async def admin_surf_update_rule_to_block(
     request: Request,
@@ -2052,8 +2086,14 @@ async def admin_list_traffic_recording_views(
 
 
 @app.post("/api/internal/touch-ip")
-async def internal_touch_ip(body: dict):
+async def internal_touch_ip(request: Request):
     """Update last_used_at for an IP binding. Called by proxy. Requires CRM_PROXY_SECRET."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
     secret = body.get("secret")
     if not CRM_PROXY_SECRET or secret != CRM_PROXY_SECRET:
         raise HTTPException(status_code=403, detail="גישה נדחתה")

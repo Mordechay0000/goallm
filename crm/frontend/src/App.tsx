@@ -1,7 +1,9 @@
 /**
- * Main App component with routing and RTL support
+ * Main App component with routing and RTL support.
+ * מיתוג: theme + index.css (מערכת עיצוב) — DESIGN_SYSTEM.md
  */
 import React, { useEffect } from 'react';
+import './index.css';
 import './App.css';
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useSearchParams } from 'react-router-dom';
 import { ThemeProvider } from '@mui/material/styles';
@@ -26,6 +28,7 @@ import ProfileEditPage from './pages/ProfileEditPage';
 import AdminUsersPage from './pages/AdminUsersPage';
 import AdminRequestsPage from './pages/AdminRequestsPage';
 import AdminGlobalRulesPage from './pages/AdminGlobalRulesPage';
+import AdminAllowedFilesPage from './pages/AdminAllowedFilesPage';
 import AdminFilterSwitchesPage from './pages/AdminFilterSwitchesPage';
 import MyRequestsPage from './pages/MyRequestsPage';
 import RequestFilePage from './pages/RequestFilePage';
@@ -40,6 +43,7 @@ import SurfAdminCheckPage from './pages/SurfAdminCheckPage';
 import SurfBlockPage from './pages/SurfBlockPage';
 import SurfUpdateRulePage from './pages/SurfUpdateRulePage';
 import AdminLayout from './components/AdminLayout';
+import { DOCUMENT_TITLE } from './brand';
 
 // Create RTL cache
 const cacheRtl = createCache({
@@ -148,6 +152,10 @@ function App() {
   useEffect(() => {
     init();
   }, [init]);
+
+  useEffect(() => {
+    document.title = DOCUMENT_TITLE;
+  }, []);
 
   return (
     <CacheProvider value={cacheRtl}>
@@ -266,6 +274,16 @@ function App() {
               <ProtectedRoute>
                 <AdminLayout>
                   <AdminGlobalRulesPage />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/global-files"
+            element={
+              <ProtectedRoute>
+                <AdminLayout>
+                  <AdminAllowedFilesPage />
                 </AdminLayout>
               </ProtectedRoute>
             }

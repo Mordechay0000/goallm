@@ -33,6 +33,7 @@ import { adminApi } from '../api/admin';
 import type { AdminUser } from '../api/admin';
 import { useManagedUserStore } from '../store/managedUserStore';
 import { useAuthStore } from '../store/authStore';
+import { PAGE_DESCRIPTIONS, PLACEHOLDERS } from '../brand';
 
 type Order = 'asc' | 'desc';
 type SortBy = 'id' | 'phone' | 'first_name' | 'email' | 'is_admin' | 'created_at';
@@ -125,20 +126,20 @@ const AdminUsersPage: React.FC = () => {
   }
 
   return (
-    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
-      <Box sx={{ mb: 3 }}>
+    <Container maxWidth="lg" sx={{ mb: 4 }} className="page-section container-content">
+      <Box className="page-title-section" sx={{ mb: 3 }}>
         <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
           ניהול משתמשים
         </Typography>
         <Typography variant="body2" color="text.secondary">
-          בחר משתמש ולחץ &quot;נהל&quot; כדי לנהל את הפרופילים והכללים שלו. לא ניתן לנהל את עצמך.
+          {PAGE_DESCRIPTIONS.adminUsers}
         </Typography>
       </Box>
-      <Paper>
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 2, px: 2, pt: 2, pb: 1 }}>
+      <Paper className="paper-table">
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 2, px: 2, pt: 2, pb: 1.5, borderBottom: '1px solid', borderColor: 'divider' }}>
           <TextField
             size="small"
-            placeholder="חיפוש (טלפון, שם, אימייל)..."
+            placeholder={PLACEHOLDERS.search}
             value={search}
             onChange={handleSearchChange}
             sx={{ minWidth: 260 }}

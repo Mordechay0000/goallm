@@ -41,6 +41,7 @@ import { ruleRequestsApi } from '../api/ruleRequests';
 import type { RuleRequest, RuleRequestCreate } from '../api/ruleRequests';
 import { TagInput } from '../components/TagInput';
 import { validateDomainOrUrl, processUrlInput } from '../utils/validation';
+import { PAGE_DESCRIPTIONS, EMPTY_STATE, PLACEHOLDERS } from '../brand';
 
 const STATUS_LABELS: Record<string, string> = {
   pending: 'ממתין',
@@ -178,34 +179,34 @@ const MyRequestsPage: React.FC = () => {
   const canDelete = (r: RuleRequest) => r.status === 'pending';
 
   return (
-    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 2, mb: 3 }}>
+    <Container maxWidth="lg" sx={{ mb: 4 }} className="page-section container-content">
+      <Box className="page-title-section" sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 2, mb: 3 }}>
         <Box>
           <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
-            הבקשות שלי
+            בקשות ששלחתי
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            שלח בקשות למנהל לאישור. כאן תוכל לראות את סטטוס הבקשות שלך ולנהל אותן.
+            {PAGE_DESCRIPTIONS.requests}
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1 }}>
-          <Button variant="outlined" color="secondary" startIcon={<AddIcon />} onClick={() => navigate('/support/new?attach=open')}>
+          <Button variant="outlined" startIcon={<AddIcon />} onClick={() => navigate('/support/new?attach=open')}>
             בקשה לפתיחת אתר
           </Button>
-          <Button variant="contained" color="secondary" startIcon={<AddIcon />} onClick={() => navigate('/support/new?attach=change')}>
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => navigate('/support/new?attach=change')}>
             בקשה לשינוי (חסום/פתוח)
           </Button>
         </Box>
       </Box>
 
-      <Paper>
-        <Box className="card-header-accent" sx={{ px: 2, pt: 2, pb: 1 }}>
-          <Typography variant="h6" sx={{ fontWeight: 600 }}>רשימת בקשות</Typography>
+      <Paper className="paper-table">
+        <Box className="card-header-accent spectrum-alt2" sx={{ px: 2, pt: 2, pb: 1 }}>
+          <Typography className="section-title">רשימת בקשות</Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center', p: 2, borderBottom: 1, borderColor: 'divider' }}>
           <TextField
             size="small"
-            placeholder="חיפוש כתובת"
+            placeholder={PLACEHOLDERS.search}
             value={search}
             onChange={(e) => { setSearch(e.target.value); setPage(0); }}
             sx={{ minWidth: 180 }}
@@ -242,37 +243,37 @@ const MyRequestsPage: React.FC = () => {
           <Table size="small">
             <TableHead>
               <TableRow>
-                <TableCell sortDirection={sortBy === 'created_at' ? sortOrder : false}>
+                <TableCell align="left" sortDirection={sortBy === 'created_at' ? sortOrder : false}>
                   <TableSortLabel active={sortBy === 'created_at'} direction={sortBy === 'created_at' ? sortOrder : 'asc'} onClick={() => handleSort('created_at')}>
                     תאריך
                   </TableSortLabel>
                 </TableCell>
-                <TableCell sortDirection={sortBy === 'request_type' ? sortOrder : false}>
+                <TableCell align="center" sortDirection={sortBy === 'request_type' ? sortOrder : false}>
                   <TableSortLabel active={sortBy === 'request_type'} direction={sortBy === 'request_type' ? sortOrder : 'asc'} onClick={() => handleSort('request_type')}>
                     סוג
                   </TableSortLabel>
                 </TableCell>
-                <TableCell sortDirection={sortBy === 'status' ? sortOrder : false}>
+                <TableCell align="center" sortDirection={sortBy === 'status' ? sortOrder : false}>
                   <TableSortLabel active={sortBy === 'status'} direction={sortBy === 'status' ? sortOrder : 'asc'} onClick={() => handleSort('status')}>
                     סטטוס
                   </TableSortLabel>
                 </TableCell>
-                <TableCell>כתובת</TableCell>
-                <TableCell>פעולה</TableCell>
-                <TableCell align="left">פעולות</TableCell>
+                <TableCell align="right">כתובת</TableCell>
+                <TableCell align="center">פעולה</TableCell>
+                <TableCell align="center">פעולות</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {loading ? (
                 <TableRow><TableCell colSpan={6}>טוען...</TableCell></TableRow>
               ) : requests.length === 0 ? (
-                <TableRow><TableCell colSpan={6}>אין בקשות. הוסף בקשה חדשה למעלה.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={6}>{EMPTY_STATE.noRequests}</TableCell></TableRow>
               ) : (
                 requests.map((r) => (
                   <TableRow key={r.id} hover sx={{ '&:hover': { bgcolor: 'action.selected' } }}>
-                    <TableCell>{formatDate(r.created_at)}</TableCell>
-                    <TableCell>{TYPE_LABELS[r.request_type] || r.request_type}</TableCell>
-                    <TableCell>
+                    <TableCell align="left">{formatDate(r.created_at)}</TableCell>
+                    <TableCell align="center">{TYPE_LABELS[r.request_type] || r.request_type}</TableCell>
+                    <TableCell align="center">
                       <Chip
                         label={STATUS_LABELS[r.status] || r.status}
                         size="small"
@@ -281,22 +282,23 @@ const MyRequestsPage: React.FC = () => {
                       />
                     </TableCell>
                     <TableCell
+                      align="right"
                       sx={{
                         maxWidth: 400,
                         overflowX: 'auto',
                         whiteSpace: 'nowrap',
                         scrollbarWidth: 'thin',
-                        scrollbarColor: '#2F6CFF #E4E7EC',
+                        scrollbarColor: '#1e3a5f #e2e8f0',
                         '&::-webkit-scrollbar': { height: 8 },
-                        '&::-webkit-scrollbar-track': { background: '#E4E7EC', borderRadius: 8 },
-                        '&::-webkit-scrollbar-thumb': { background: '#2F6CFF', borderRadius: 8, border: '2px solid #E4E7EC' },
-                        '&::-webkit-scrollbar-thumb:hover': { background: '#2555d9' },
+                        '&::-webkit-scrollbar-track': { background: '#e2e8f0', borderRadius: 8 },
+                        '&::-webkit-scrollbar-thumb': { background: '#1e3a5f', borderRadius: 8, border: '2px solid #e2e8f0' },
+                        '&::-webkit-scrollbar-thumb:hover': { background: '#152a45' },
                       }}
                     >
                       {r.url || (r.domain_pattern || '') + (r.path_pattern || '') || '—'}
                     </TableCell>
-                    <TableCell>{r.action || '—'}</TableCell>
-                    <TableCell align="left">
+                    <TableCell align="center">{r.action || '—'}</TableCell>
+                    <TableCell align="center">
                       {canDelete(r) && (
                         <IconButton size="small" color="error" onClick={() => setDeleteConfirm(r.id)} title="מחק">
                           <DeleteIcon />

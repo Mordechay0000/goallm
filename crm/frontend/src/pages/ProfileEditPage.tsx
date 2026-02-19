@@ -22,6 +22,7 @@ import type { UserUpdate, PasswordChange } from '../api/auth';
 import { PasswordField } from '../components/PasswordField';
 import { FormErrors } from '../components/FormErrors';
 import { validatePhone } from '../utils/validation';
+import { PAGE_DESCRIPTIONS, COPY_ACTIONS } from '../brand';
 
 const ALLOWED = 'image/jpeg,image/png,image/gif,image/webp';
 const MAX_MB = 5;
@@ -257,16 +258,16 @@ const ProfileEditPage: React.FC = () => {
   };
 
   return (
-    <Container maxWidth="md" sx={{ mt: 4, mb: 4 }}>
-      <Box sx={{ mb: 3 }}>
+    <Container maxWidth="md" sx={{ mt: 4, mb: 4 }} className="container-content">
+      <Box className="page-title-section" sx={{ mb: 3 }}>
         <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/')} sx={{ mb: 1 }}>
-          חזרה
+          {COPY_ACTIONS.back}
         </Button>
         <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
           עריכת פרופיל
         </Typography>
         <Typography variant="body2" color="text.secondary">
-          עדכון פרטים אישיים, תמונת פרופיל וסיסמה
+          {PAGE_DESCRIPTIONS.profile}
         </Typography>
       </Box>
 
@@ -277,8 +278,8 @@ const ProfileEditPage: React.FC = () => {
       )}
 
       {/* Profile Information */}
-      <Paper sx={{ p: 3, mb: 3 }}>
-        <Typography variant="h6" gutterBottom>
+      <Paper className="paper-form" sx={{ mb: 3 }}>
+        <Typography className="section-title-sm" gutterBottom>
           פרטים אישיים
         </Typography>
         <Divider sx={{ my: 2 }} />
@@ -448,8 +449,8 @@ const ProfileEditPage: React.FC = () => {
       </Paper>
 
       {/* Change Password */}
-      <Paper sx={{ p: 3 }}>
-        <Typography variant="h6" gutterBottom>
+      <Paper className="paper-form">
+        <Typography className="section-title-sm" gutterBottom>
           שינוי סיסמה
         </Typography>
         <Divider sx={{ my: 2 }} />

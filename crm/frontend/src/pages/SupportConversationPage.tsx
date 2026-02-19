@@ -275,7 +275,7 @@ const MessageBlock: React.FC<{
           ...(fromUser
             ? {
                 borderColor: 'primary.main',
-                bgcolor: 'rgba(166, 78, 255, 0.06)',
+                bgcolor: 'rgba(91, 33, 182, 0.06)',
                 p: 2,
               }
             : {
@@ -518,8 +518,8 @@ const SupportConversationPage: React.FC<{ isAdmin?: boolean }> = ({ isAdmin }) =
   }
 
   return (
-    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }} className="wrapper-content">
-      <Box sx={{ mb: 3 }}>
+    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }} className="page-section container-content">
+      <Box className="page-title-section" sx={{ mb: 3 }}>
         <Link component="button" variant="body2" onClick={handleBack} sx={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 0.5, mb: 1 }}>
           <ArrowBackIcon fontSize="small" /> חזרה
         </Link>

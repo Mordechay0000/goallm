@@ -197,8 +197,8 @@ const TrafficViewPage: React.FC = () => {
   const ended = data.ended_at ? new Date(data.ended_at * 1000).toLocaleString('he-IL') : '—';
 
   return (
-    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
-      <Box sx={{ mb: 3 }}>
+    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }} className="page-section container-content">
+      <Box className="page-title-section" sx={{ mb: 3 }}>
         <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
           צפייה בהקלטת תעבורה
         </Typography>
@@ -321,11 +321,11 @@ const TrafficViewPage: React.FC = () => {
                       overflowX: 'auto',
                       whiteSpace: 'nowrap',
                       scrollbarWidth: 'thin',
-                      scrollbarColor: '#2F6CFF #E4E7EC',
+                      scrollbarColor: '#1e3a5f #e2e8f0',
                       '&::-webkit-scrollbar': { height: 8 },
-                      '&::-webkit-scrollbar-track': { background: '#E4E7EC', borderRadius: 8 },
-                      '&::-webkit-scrollbar-thumb': { background: '#2F6CFF', borderRadius: 8, border: '2px solid #E4E7EC' },
-                      '&::-webkit-scrollbar-thumb:hover': { background: '#2555d9' },
+                      '&::-webkit-scrollbar-track': { background: '#e2e8f0', borderRadius: 8 },
+                      '&::-webkit-scrollbar-thumb': { background: '#1e3a5f', borderRadius: 8, border: '2px solid #e2e8f0' },
+                      '&::-webkit-scrollbar-thumb:hover': { background: '#152a45' },
                     }}
                   >
                     {row.url}

@@ -1,36 +1,47 @@
-/* Design language: Hierarchy, Contrast, 8pt Spacing, Brand Accent */
+/* ============================================================
+   שפת עיצוב ממותגת — ניהול הסינון
+   Deep Blue + AI Violet | Apple clarity + Google accessibility
+   חל על כל הדפים, תיבות דו־שיח והמערכת.
+   ============================================================ */
+
 :root {
-  font-family: 'Heebo', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: 'Rubik', 'Assistant', -apple-system, BlinkMacSystemFont, sans-serif;
   line-height: 1.6;
-  font-weight: 500;
+  font-weight: 400;
   color-scheme: light;
-  color: #1A1A1A;
-  background-color: #F7F8FA;
+  color: #334155;
+  background-color: #f8fafc;
 
-  /* פלטת צבעים */
-  --primary: #0D1A3B;
-  --accent: #2F6CFF;
-  --background: #FFFFFF;
-  --background-subtle: #F7F8FA;
-  --border: #E4E7EC;
-  --border-table: #E5E7EB;
-  --text-heading: #0D1A3B;
-  --text-body: #1A1A1A;
-  --text-secondary: #6B7280;
+  /* —— צבעי מותג —— */
+  --brand-deep-blue: #1e3a5f;
+  --brand-deep-blue-light: #2d4a6f;
+  --brand-deep-blue-dark: #152a45;
+  --brand-violet: #5b21b6;
+  --brand-violet-light: #6d28d9;
+  --brand-electric: #2563eb;
+  --brand-electric-hover: #1d4ed8;
+  --brand-white: #ffffff;
+  --brand-bg: #f8fafc;
+  --brand-border: #e2e8f0;
+  --brand-text: #0f172a;
+  --brand-text-body: #334155;
+  --brand-text-secondary: #64748b;
+  --brand-icon: #334155;
 
-  /* 8pt Spacing System (8/16/24/32 + 12) */
+  /* —— 8px Grid (Spacing System) —— */
   --space-8: 8px;
-  --space-12: 12px;
   --space-16: 16px;
   --space-24: 24px;
   --space-32: 32px;
+  --space-40: 40px;
+  --space-48: 48px;
 
-  /* כותרת דף – מרווחים עקביים */
-  --page-title-margin-bottom: 24px;
-  --page-section-margin: 32px;
+  /* —— צללים —— */
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.04);
+  --shadow-card-hover: 0 4px 12px rgba(0, 0, 0, 0.08);
 
-  /* גרדיאנט AI: 40–50% רוחב, fade רך — Accent Highlight לכרטיסים פעילים */
-  --ai-spectrum: linear-gradient(to right, transparent 0%, #4A90FF 22%, #FF7ABD 38%, #FFA15E 52%, #F9E67A 65%, #45E68B 78%, transparent 100%);
+  /* —— גרדיאנט עדין (3–5% opacity) — כותרות מרכזיות בלבד —— */
+  --gradient-subtle: linear-gradient(135deg, rgba(30, 58, 95, 0.04) 0%, rgba(91, 33, 182, 0.04) 100%);
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -38,47 +49,161 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* כותרת כרטיס עם קו AI דק (40–50% רוחב, fade בשני הצדדים) */
+/* —— כותרת סקשן —— */
+.section-title {
+  font-family: 'Assistant', 'Rubik', sans-serif !important;
+  font-size: 1.25rem !important;
+  font-weight: 600 !important;
+  color: var(--brand-text) !important;
+  letter-spacing: -0.01em;
+}
+.section-title-sm {
+  font-family: 'Assistant', 'Rubik', sans-serif !important;
+  font-size: 1.125rem !important;
+  font-weight: 600 !important;
+  color: var(--brand-text) !important;
+}
+
+/* —— כותרת דף (ברורה, דידקטית) —— */
+.page-title-section {
+  margin-top: 0;
+  margin-bottom: var(--space-24);
+  padding-top: 0;
+}
+.page-title-section h1,
+.page-title-section .MuiTypography-h5 {
+  font-family: 'Assistant', 'Rubik', sans-serif !important;
+  font-size: 1.75rem !important;
+  font-weight: 600 !important;
+  color: var(--brand-text) !important;
+  margin-bottom: var(--space-8);
+}
+.page-title-section .MuiTypography-body2 {
+  color: var(--brand-text-secondary);
+  font-weight: 500;
+  margin-top: var(--space-8);
+}
+
+/* —— גרדיאנט עדין לכותרות מרכזיות (onboarding / מסך ראשי) —— */
+.brand-gradient-subtle {
+  background: var(--gradient-subtle);
+  border-radius: 12px;
+}
+
+/* —— קו מפריד עדין (במקום פס צבעוני) —— */
 .card-header-accent {
   position: relative;
-  padding-bottom: var(--space-12);
-  margin-bottom: var(--space-12);
+  padding-bottom: var(--space-16);
+  margin-bottom: var(--space-16);
 }
 .card-header-accent::after {
   content: '';
   position: absolute;
   bottom: 0;
-  right: 25%;
-  left: 25%;
+  right: 0;
+  left: 0;
   height: 2px;
-  background: var(--ai-spectrum);
+  background: var(--brand-border);
+  border-radius: 1px;
+}
+.card-header-accent.spectrum-alt1::after,
+.card-header-accent.spectrum-alt2::after {
+  background: var(--brand-border);
+}
+
+/* —— חתימת סיידבר (קו עדין) —— */
+.brand-signature {
+  position: relative;
+}
+.brand-signature::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  left: 0;
+  height: 2px;
+  background: var(--brand-border);
+  border-radius: 1px;
+}
+.brand-signature-inline {
+  display: inline-block;
+  height: 2px;
+  min-width: 32px;
+  margin-top: 4px;
+  background: var(--brand-border);
   border-radius: 1px;
 }
 
-/* כרטיס פעיל/נבחר – Accent Highlight עם גרדיאנט עדין */
-.card-active,
-.card-selected {
-  border-color: rgba(47, 108, 255, 0.35) !important;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(47, 108, 255, 0.15) !important;
+/* —— מרווחים (8px grid) —— */
+.page-section {
+  margin-bottom: var(--space-32);
 }
-.card-active .card-header-accent::after,
-.card-selected .card-header-accent::after {
-  opacity: 1;
-  height: 3px;
+.page-section:last-child {
+  margin-bottom: 0;
+}
+.block-gap { gap: var(--space-24); }
+.section-gap { margin-bottom: var(--space-32); }
+.section-gap-lg { margin-bottom: var(--space-48); }
+
+/* —— טפסים —— */
+.paper-form {
+  padding: var(--space-24) !important;
+  max-width: 100%;
+  border-radius: 16px;
+}
+.paper-form .card-header-accent {
+  margin-bottom: var(--space-16);
 }
 
-/* אזור כותרת דף – Consistency (מרווחים 8pt) */
-.page-title-section {
-  margin-bottom: var(--page-title-margin-bottom);
+/* —— טבלאות (מסודרות, פינות עגולות) —— */
+.paper-table {
+  border-top: 2px solid var(--brand-border) !important;
+  background-color: var(--brand-bg) !important;
+  overflow: hidden;
+  border-radius: 16px;
 }
-.page-title-section h1,
-.page-title-section .MuiTypography-h5 {
-  font-weight: 700;
-  color: var(--text-heading);
+.paper-table:hover {
+  box-shadow: var(--shadow-card-hover) !important;
 }
-.page-title-section .MuiTypography-body2 {
-  color: var(--text-secondary);
-  margin-top: var(--space-8);
+.paper-table .MuiTableContainer-root {
+  background: var(--brand-white);
+  border-top: 1px solid var(--brand-border);
+}
+
+/* —— כרטיס פעיל/נבחר —— */
+.card-active,
+.card-selected {
+  border-color: var(--brand-electric) !important;
+  box-shadow: var(--shadow-card-hover), 0 0 0 1px rgba(37, 99, 235, 0.2) !important;
+}
+
+/* —— טבלאות: stripe עדין, header ברור —— */
+.MuiTableBody-root .MuiTableRow-root:nth-of-type(even) {
+  background-color: #fafafa;
+}
+.MuiTableBody-root .MuiTableRow-root:nth-of-type(even):hover {
+  background-color: rgba(30, 58, 95, 0.04) !important;
+}
+.MuiTableCell-root {
+  border-left: 1px solid rgba(0, 0, 0, 0.06);
+  padding-left: 16px !important;
+  padding-right: 16px !important;
+}
+[dir='rtl'] .MuiTableCell-root {
+  border-left: none;
+  border-right: 1px solid rgba(0, 0, 0, 0.06);
+}
+.MuiTableCell-root:first-of-type {
+  border-left: none;
+}
+[dir='rtl'] .MuiTableCell-root:first-of-type {
+  border-right: none;
+}
+.MuiTableCell-head {
+  background-color: var(--brand-bg) !important;
+  font-weight: 600 !important;
+  color: var(--brand-text);
+  border-bottom: 2px solid var(--brand-border) !important;
 }
 
 body {
@@ -91,38 +216,119 @@ body {
 
 a {
   font-weight: 500;
-  color: var(--accent);
+  color: var(--brand-electric);
   text-decoration: none;
 }
 a:hover {
-  color: #2555d9;
+  color: var(--brand-electric-hover);
 }
 
-/* AppBar — רקע בהיר כמו שאר האתר, טקסט ואייקונים כהים */
+/* —— Container (max-width, padding desktop) —— */
+.container-content {
+  max-width: 1400px;
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
+}
+@media (min-width: 1200px) {
+  .container-content {
+    padding-left: var(--space-32);
+    padding-right: var(--space-32);
+  }
+}
+
+/* —— AppBar —— */
 .MuiAppBar-root {
-  background-color: #eef2f8 !important;
-  color: #0D1A3B !important;
-  border-bottom: 1px solid #E4E7EC !important;
+  background-color: var(--brand-white) !important;
+  color: var(--brand-deep-blue) !important;
+  border-bottom: 1px solid var(--brand-border) !important;
 }
 .MuiAppBar-root .MuiTypography-root,
 .MuiAppBar-root .MuiIconButton-root {
-  color: #0D1A3B !important;
+  color: var(--brand-deep-blue) !important;
 }
 .MuiAppBar-root .MuiIconButton-root:hover {
-  background-color: rgba(47, 108, 255, 0.08) !important;
+  background-color: rgba(30, 58, 95, 0.06) !important;
 }
 
-/* כפתורי פעולה — עומק (shadow 8%) + hover ברור */
+/* —— כפתורים (התאמה לצבעי מותג) —— */
 .MuiButton-contained,
 .MuiButton-containedPrimary {
-  background-color: var(--accent) !important;
-  color: #fff !important;
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.08) !important;
+  background-color: var(--brand-electric) !important;
+  color: var(--brand-white) !important;
+  box-shadow: var(--shadow-card) !important;
 }
 .MuiButton-contained:hover,
 .MuiButton-containedPrimary:hover {
-  background-color: #2555d9 !important;
-  box-shadow: 0 5px 16px rgba(47, 108, 255, 0.28) !important;
+  background-color: var(--brand-electric-hover) !important;
+  box-shadow: var(--shadow-card-hover) !important;
 }
 
-/* אייקונים — outline בגוון חשמלי (מטופל ב-theme) */
+/* —— מודל: אנימציית כניסה עדינה —— */
+@keyframes dialogScaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.MuiDialog-paper {
+  animation: dialogScaleIn 0.2s ease-out;
+}
+
+/* —— Alert / Toast: fade-in —— */
+@keyframes alertFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.MuiAlert-root {
+  animation: alertFadeIn 0.15s ease-out;
+}
+
+/* —— Empty state (טקסט עידוד עדין) —— */
+.empty-state-title {
+  font-family: 'Assistant', 'Rubik', sans-serif;
+  font-weight: 600;
+  color: var(--brand-text);
+  margin-bottom: var(--space-8);
+}
+.empty-state-description {
+  color: var(--brand-text-secondary);
+  font-size: 0.9375rem;
+}
+
+/* —— טעינה בסגנון Apple (קו דק כחול־סגול) —— */
+@keyframes brandProgress {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+.brand-loading-bar {
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 3px;
+  background: var(--brand-border);
+  z-index: 9999;
+  overflow: hidden;
+}
+.brand-loading-bar::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 25%;
+  height: 100%;
+  background: linear-gradient(90deg, var(--brand-deep-blue) 0%, var(--brand-violet) 100%);
+  border-radius: 0 2px 2px 0;
+  animation: brandProgress 1.2s ease-in-out infinite;
+}

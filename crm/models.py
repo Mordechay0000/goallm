@@ -355,6 +355,11 @@ class ResolverTestUrlBody(BaseModel):
     type: str = Field(default="html", pattern="^(html|image)$")
 
 
+class AllowedFileUrlBody(BaseModel):
+    """Request body for add/remove allowed file download URL. Admin only."""
+    url: str = Field(..., min_length=1)
+
+
 # Support tickets (פניות משתמשים)
 class SupportAttachmentItem(BaseModel):
     name: str

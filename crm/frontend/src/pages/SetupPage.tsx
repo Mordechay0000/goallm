@@ -7,7 +7,6 @@ import { Container, Paper, Typography, Box, CircularProgress } from '@mui/materi
 import { useNavigate } from 'react-router-dom';
 import { authApi } from '../api/auth';
 import RegisterWizard from './RegisterWizard';
-import { aiSpectrumGradient } from '../theme';
 
 const setupMode = {
   title: 'הרשמת מנהל מערכת',
@@ -53,10 +52,10 @@ const SetupPage: React.FC = () => {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          background: 'linear-gradient(180deg, #F7F8FA 0%, #EEF2F8 100%)',
+          backgroundColor: 'background.default',
         }}
       >
-        <CircularProgress />
+        <CircularProgress sx={{ color: 'primary.main' }} />
       </Box>
     );
   }
@@ -69,7 +68,7 @@ const SetupPage: React.FC = () => {
     <Box
       sx={{
         minHeight: '100vh',
-        background: 'linear-gradient(180deg, #F7F8FA 0%, #EEF2F8 50%, #fff 100%)',
+        backgroundColor: 'background.default',
         pt: 2,
         pb: 4,
       }}
@@ -77,6 +76,7 @@ const SetupPage: React.FC = () => {
       <Container maxWidth="md">
         <Paper
           elevation={0}
+          className="brand-gradient-subtle"
           sx={{
             p: 4,
             mb: 3,
@@ -87,16 +87,6 @@ const SetupPage: React.FC = () => {
             overflow: 'hidden',
           }}
         >
-          <Box
-            sx={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              right: 0,
-              height: 4,
-              background: aiSpectrumGradient,
-            }}
-          />
           <Typography
             component="h1"
             variant="h4"
@@ -114,7 +104,7 @@ const SetupPage: React.FC = () => {
             color="text.secondary"
             sx={{ textAlign: 'center', maxWidth: 480, mx: 'auto' }}
           >
-            אין עדיין משתמשים במערכת. הרשם כמנהל – רק החשבון הראשון יוגדר כמנהל ויוכל לנהל משתמשים והגדרות.
+            {setupMode.subtitle}
           </Typography>
         </Paper>
         <RegisterWizard setupMode={setupMode} />

@@ -32,6 +32,7 @@ import {
 import { useProfilesStore } from '../store/profilesStore';
 import { rulesApi } from '../api/rules';
 import { schedulesApi } from '../api/schedules';
+import { BRAND, EMPTY_STATE, PAGE_DESCRIPTIONS } from '../brand';
 
 type ProfileOrder = 'asc' | 'desc';
 type ProfileSortBy = 'name' | 'mode';
@@ -85,15 +86,15 @@ const HomePage: React.FC = () => {
   }, [profiles, loadStats]);
 
   return (
-    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+    <Container maxWidth="lg" sx={{ mb: 4 }} className="page-section">
       <Box>
       {/* Page Header */}
-      <Box sx={{ mb: 3 }}>
+      <Box className="page-title-section" sx={{ mb: 3 }}>
         <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
-          ברוך הבא
+          {BRAND.welcomeTitle}
         </Typography>
         <Typography variant="body2" color="text.secondary">
-          סיכום ההגדרות והמספרים שלך
+          {PAGE_DESCRIPTIONS.home}
         </Typography>
       </Box>
 
@@ -143,10 +144,10 @@ const HomePage: React.FC = () => {
       </Box>
 
       {/* Active Profile */}
-      <Paper sx={{ mb: 4 }}>
+      <Paper sx={{ mb: 4 }} className="page-section">
         <Box sx={{ p: 3 }}>
-          <Box className="card-header-accent" sx={{ mb: 3 }}>
-            <Typography variant="h6" sx={{ fontWeight: 600 }}>
+          <Box className="card-header-accent spectrum-alt1" sx={{ mb: 3 }}>
+            <Typography className="section-title">
               הפרופיל שפעיל כרגע
             </Typography>
           </Box>
@@ -189,13 +190,13 @@ const HomePage: React.FC = () => {
           ) : (
             <Box>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                עדיין לא הגדרת פרופיל. אפשר ליצור אחד ולבחור אילו אתרים לחסום ואילו לפתוח.
+                {EMPTY_STATE.noProfiles}
               </Typography>
               <Button
                 variant="contained"
                 onClick={() => navigate('/profiles')}
               >
-                ליצור פרופיל חדש
+                צור פרופיל חדש
               </Button>
             </Box>
           )}
@@ -204,10 +205,10 @@ const HomePage: React.FC = () => {
 
       {/* Profiles List */}
       {profiles.length > 0 && (
-        <Paper>
+        <Paper className="paper-table">
           <Box sx={{ p: 3 }}>
-            <Box className="card-header-accent" sx={{ mb: 3 }}>
-              <Typography variant="h6" sx={{ fontWeight: 600 }}>
+            <Box className="card-header-accent spectrum-alt2" sx={{ mb: 3 }}>
+              <Typography className="section-title">
                 כל הפרופילים שלך
               </Typography>
             </Box>
@@ -254,7 +255,7 @@ const HomePage: React.FC = () => {
                       return (
                         <TableRow>
                           <TableCell colSpan={4} align="center">
-                            {profiles.length === 0 ? 'עדיין אין פרופילים' : 'לא נמצאו תוצאות'}
+                            {profiles.length === 0 ? EMPTY_STATE.noProfiles : EMPTY_STATE.noResults}
                           </TableCell>
                         </TableRow>
                       );

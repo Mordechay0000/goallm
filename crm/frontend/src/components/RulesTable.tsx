@@ -205,9 +205,9 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
         <input type="file" ref={fileInputRef} accept=".csv" style={{ display: 'none' }} onChange={handleImportCsv} />
       </Box>
       {/* Add Rule Form */}
-      <Paper sx={{ p: 2, mb: 2 }} style={rulesLocked ? { opacity: 0.7, pointerEvents: 'none' } : undefined}>
-        <Box className="card-header-accent" sx={{ mb: 2 }}>
-          <Typography variant="h6" sx={{ fontWeight: 600 }}>הוספת כלל</Typography>
+      <Paper className="paper-form" sx={{ mb: 2 }} style={rulesLocked ? { opacity: 0.7, pointerEvents: 'none' } : undefined}>
+        <Box className="card-header-accent spectrum-alt1" sx={{ mb: 2 }}>
+          <Typography className="section-title-sm">הוספת כלל</Typography>
         </Box>
         <form onSubmit={handleFormSubmit}>
           <Box sx={{ mb: 2 }}>
@@ -283,9 +283,9 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
       </Paper>
 
       {/* Rules Table */}
-      <Paper>
-        <Box className="card-header-accent" sx={{ px: 2, pt: 2, pb: 1 }}>
-          <Typography variant="h6" sx={{ fontWeight: 600 }}>כללי הסינון</Typography>
+      <Paper className="paper-table">
+        <Box className="card-header-accent spectrum-alt2" sx={{ px: 2, pt: 2, pb: 1 }}>
+          <Typography className="section-title">כללי הסינון</Typography>
         </Box>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, px: 2, pt: 2, pb: 1 }}>
           <TextField
@@ -386,11 +386,11 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
                       overflowX: 'auto',
                       whiteSpace: 'nowrap',
                       scrollbarWidth: 'thin',
-                      scrollbarColor: '#2F6CFF #E4E7EC',
+                      scrollbarColor: '#1e3a5f #e2e8f0',
                       '&::-webkit-scrollbar': { height: 8 },
-                      '&::-webkit-scrollbar-track': { background: '#E4E7EC', borderRadius: 8 },
-                      '&::-webkit-scrollbar-thumb': { background: '#2F6CFF', borderRadius: 8, border: '2px solid #E4E7EC' },
-                      '&::-webkit-scrollbar-thumb:hover': { background: '#2555d9' },
+                      '&::-webkit-scrollbar-track': { background: '#e2e8f0', borderRadius: 8 },
+                      '&::-webkit-scrollbar-thumb': { background: '#1e3a5f', borderRadius: 8, border: '2px solid #e2e8f0' },
+                      '&::-webkit-scrollbar-thumb:hover': { background: '#152a45' },
                     }}
                   >
                     <code>{formatRuleDisplay(rule)}</code>

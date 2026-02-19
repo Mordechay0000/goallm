@@ -10,6 +10,7 @@ import {
   AppBar,
   Toolbar,
   List,
+  ListSubheader,
   Typography,
   Divider,
   IconButton,
@@ -37,12 +38,15 @@ import {
   Link as LinkIcon,
   QuestionAnswer as QuestionAnswerIcon,
   Build as BuildIcon,
+  InsertDriveFile as InsertDriveFileIcon,
 } from '@mui/icons-material';
 import { useAuthStore } from '../store/authStore';
 import { getAvatarUrl } from '../api/auth';
 import { supportApi } from '../api/support';
+import { BRAND } from '../brand';
+import BrandLogo from './BrandLogo';
 
-const DRAWER_WIDTH = 260;
+const DRAWER_WIDTH = 212;
 
 interface NavItem {
   label: string;
@@ -136,22 +140,32 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const drawer = (
     <Box>
       <Toolbar
+        className="brand-signature"
         sx={{
-          minHeight: '64px !important',
-          borderBottom: '1px solid',
-          borderColor: 'divider',
+          minHeight: '72px !important',
+          flexDirection: 'column',
+          alignItems: 'flex-start',
+          justifyContent: 'center',
+          px: 1.5,
+          pt: 1.5,
+          pb: 1.5,
+          borderBottom: 'none',
         }}
       >
-        <Typography variant="h6" noWrap component="div" sx={{ fontWeight: 600, fontSize: '1.1rem' }}>
-          ההגדרות שלי
+        <BrandLogo showName size="sidebar" />
+        <Typography
+          variant="caption"
+          sx={{ color: 'text.secondary', fontWeight: 500, mt: 0.5 }}
+        >
+          {BRAND.tagline}
         </Typography>
       </Toolbar>
       <Divider />
-      <List sx={{ pt: 2, pb: 2 }}>
+      <List sx={{ pt: 1, pb: 1 }} subheader={<ListSubheader component="div" sx={{ lineHeight: 2, fontWeight: 600, fontSize: '0.75rem', color: 'text.secondary', letterSpacing: '0.02em' }}>ניווט</ListSubheader>}>
         {navItems.map((item) => {
           const showSupportBadge = item.path === '/support' && (supportStats.tickets_with_replies ?? 0) > 0;
           return (
-            <ListItem key={item.path} disablePadding sx={{ mb: 0.25 }}>
+            <ListItem key={item.path} disablePadding sx={{ mb: 0 }}>
               <ListItemButton
                 selected={isActive(item.path)}
                 onClick={() => {
@@ -159,16 +173,17 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   setMobileOpen(false);
                 }}
                 sx={{
-                  minHeight: 52,
-                  py: 1.25,
+                  minHeight: 48,
+                  py: 1,
                   px: 2,
                   '&.Mui-selected': {
                     borderRight: '3px solid',
-                    borderColor: 'secondary.main',
+                    borderColor: 'primary.main',
+                    boxShadow: 'inset 0 0 24px rgba(30, 58, 95, 0.08)',
                   },
                 }}
               >
-                <ListItemIcon sx={{ minWidth: 44, mr: 1.25 }}>
+                <ListItemIcon sx={{ minWidth: 44, mr: 1.5 }}>
                   {showSupportBadge ? (
                     <Badge badgeContent={supportStats.tickets_with_replies} color="primary">
                       {item.icon}
@@ -184,8 +199,9 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         })}
         {user?.is_admin && (
           <>
-            <Divider sx={{ my: 2 }} />
-            <ListItem disablePadding sx={{ mb: 0.25 }}>
+            <Divider sx={{ my: 1 }} />
+            <List sx={{ pt: 0, pb: 1 }} subheader={<ListSubheader component="div" sx={{ lineHeight: 2, fontWeight: 600, fontSize: '0.75rem', color: 'text.secondary', letterSpacing: '0.02em' }}>ניהול</ListSubheader>}>
+            <ListItem disablePadding sx={{ mb: 0 }}>
               <ListItemButton
                 selected={isActive('/admin/users')}
                 onClick={() => {
@@ -193,16 +209,17 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   setMobileOpen(false);
                 }}
                 sx={{
-                  minHeight: 52,
-                  py: 1.25,
+                  minHeight: 48,
+                  py: 1,
                   px: 2,
                   '&.Mui-selected': {
                     borderRight: '3px solid',
-                    borderColor: 'secondary.main',
+                    borderColor: 'primary.main',
+                    boxShadow: 'inset 0 0 24px rgba(30, 58, 95, 0.08)',
                   },
                 }}
               >
-                <ListItemIcon sx={{ minWidth: 44, mr: 1.25 }}>
+                <ListItemIcon sx={{ minWidth: 44, mr: 1.5 }}>
                   <PeopleIcon />
                 </ListItemIcon>
                 <ListItemText
@@ -214,7 +231,7 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 />
               </ListItemButton>
             </ListItem>
-            <ListItem disablePadding sx={{ mb: 0.25 }}>
+            <ListItem disablePadding sx={{ mb: 0 }}>
               <ListItemButton
                 selected={isActive('/admin/requests')}
                 onClick={() => {
@@ -222,16 +239,17 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   setMobileOpen(false);
                 }}
                 sx={{
-                  minHeight: 52,
-                  py: 1.25,
+                  minHeight: 48,
+                  py: 1,
                   px: 2,
                   '&.Mui-selected': {
                     borderRight: '3px solid',
-                    borderColor: 'secondary.main',
+                    borderColor: 'primary.main',
+                    boxShadow: 'inset 0 0 24px rgba(30, 58, 95, 0.08)',
                   },
                 }}
               >
-                <ListItemIcon sx={{ minWidth: 44, mr: 1.25 }}>
+                <ListItemIcon sx={{ minWidth: 44, mr: 1.5 }}>
                   <SecurityIcon />
                 </ListItemIcon>
                 <ListItemText
@@ -243,7 +261,7 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 />
               </ListItemButton>
             </ListItem>
-            <ListItem disablePadding sx={{ mb: 0.25 }}>
+            <ListItem disablePadding sx={{ mb: 0 }}>
               <ListItemButton
                 selected={isActive('/admin/global-rules')}
                 onClick={() => {
@@ -251,16 +269,17 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   setMobileOpen(false);
                 }}
                 sx={{
-                  minHeight: 52,
-                  py: 1.25,
+                  minHeight: 48,
+                  py: 1,
                   px: 2,
                   '&.Mui-selected': {
                     borderRight: '3px solid',
-                    borderColor: 'secondary.main',
+                    borderColor: 'primary.main',
+                    boxShadow: 'inset 0 0 24px rgba(30, 58, 95, 0.08)',
                   },
                 }}
               >
-                <ListItemIcon sx={{ minWidth: 44, mr: 1.25 }}>
+                <ListItemIcon sx={{ minWidth: 44, mr: 1.5 }}>
                   <PublicIcon />
                 </ListItemIcon>
                 <ListItemText
@@ -272,7 +291,37 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 />
               </ListItemButton>
             </ListItem>
-            <ListItem disablePadding sx={{ mb: 0.25 }}>
+            <ListItem disablePadding sx={{ mb: 0 }}>
+              <ListItemButton
+                selected={isActive('/admin/global-files')}
+                onClick={() => {
+                  navigate('/admin/global-files');
+                  setMobileOpen(false);
+                }}
+                sx={{
+                  minHeight: 48,
+                  py: 1,
+                  px: 2,
+                  '&.Mui-selected': {
+                    borderRight: '3px solid',
+                    borderColor: 'primary.main',
+                    boxShadow: 'inset 0 0 24px rgba(30, 58, 95, 0.08)',
+                  },
+                }}
+              >
+                <ListItemIcon sx={{ minWidth: 44, mr: 1.5 }}>
+                  <InsertDriveFileIcon />
+                </ListItemIcon>
+                <ListItemText
+                  primary="רשימת הקבצים הגלובלית (אדמין)"
+                  primaryTypographyProps={{
+                    fontSize: '0.95rem',
+                    fontWeight: isActive('/admin/global-files') ? 600 : 400,
+                  }}
+                />
+              </ListItemButton>
+            </ListItem>
+            <ListItem disablePadding sx={{ mb: 0 }}>
               <ListItemButton
                 selected={isActive('/admin/filter-switches')}
                 onClick={() => {
@@ -280,16 +329,17 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   setMobileOpen(false);
                 }}
                 sx={{
-                  minHeight: 52,
-                  py: 1.25,
+                  minHeight: 48,
+                  py: 1,
                   px: 2,
                   '&.Mui-selected': {
                     borderRight: '3px solid',
-                    borderColor: 'secondary.main',
+                    borderColor: 'primary.main',
+                    boxShadow: 'inset 0 0 24px rgba(30, 58, 95, 0.08)',
                   },
                 }}
               >
-                <ListItemIcon sx={{ minWidth: 44, mr: 1.25 }}>
+                <ListItemIcon sx={{ minWidth: 44, mr: 1.5 }}>
                   <TuneIcon />
                 </ListItemIcon>
                 <ListItemText
@@ -301,7 +351,7 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 />
               </ListItemButton>
             </ListItem>
-            <ListItem disablePadding sx={{ mb: 0.25 }}>
+            <ListItem disablePadding sx={{ mb: 0 }}>
               <ListItemButton
                 selected={isActive('/admin/support')}
                 onClick={() => {
@@ -309,16 +359,17 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   setMobileOpen(false);
                 }}
                 sx={{
-                  minHeight: 52,
-                  py: 1.25,
+                  minHeight: 48,
+                  py: 1,
                   px: 2,
                   '&.Mui-selected': {
                     borderRight: '3px solid',
-                    borderColor: 'secondary.main',
+                    borderColor: 'primary.main',
+                    boxShadow: 'inset 0 0 24px rgba(30, 58, 95, 0.08)',
                   },
                 }}
               >
-                <ListItemIcon sx={{ minWidth: 44, mr: 1.25 }}>
+                <ListItemIcon sx={{ minWidth: 44, mr: 1.5 }}>
                   {(supportStats.admin_tickets_with_replies ?? 0) > 0 ? (
                     <Badge badgeContent={supportStats.admin_tickets_with_replies} color="primary">
                       <QuestionAnswerIcon />
@@ -336,6 +387,7 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 />
               </ListItemButton>
             </ListItem>
+            </List>
           </>
         )}
       </List>
@@ -362,6 +414,20 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           >
             <MenuIcon />
           </IconButton>
+          <Typography
+            variant="h6"
+            component="div"
+            sx={{
+              fontWeight: 700,
+              fontSize: '1.1rem',
+              color: 'primary.main',
+              letterSpacing: '-0.02em',
+              display: { xs: 'none', sm: 'block' },
+              mr: 2,
+            }}
+          >
+            {BRAND.appName}
+          </Typography>
           <Box sx={{ flexGrow: 1 }} />
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
             <Typography variant="body2" color="text.secondary" sx={{ display: { xs: 'none', sm: 'block' } }}>
@@ -457,13 +523,15 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         sx={{
           flexGrow: 1,
           p: 3,
+          pt: 0,
           width: { sm: `calc(100% - ${DRAWER_WIDTH}px)` },
           backgroundColor: 'background.default',
           minHeight: '100vh',
         }}
+        className="main-content"
       >
         <Toolbar sx={{ minHeight: '64px !important' }} />
-        {children}
+        <Box sx={{ pt: 3 }} className="container-content">{children}</Box>
       </Box>
     </Box>
   );

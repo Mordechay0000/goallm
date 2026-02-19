@@ -1547,6 +1547,19 @@ def sync_allowed_file_downloads_to_core() -> None:
         logger.warning("sync_allowed_file_downloads_to_core failed: %s", e)
 
 
+def remove_allowed_file_url_crm(url: str) -> bool:
+    """Remove a URL from the CRM global allowed-file list. Returns True if a row was deleted. Call sync after."""
+    url = (url or "").strip()
+    if not url:
+        return False
+    cursor = db_connection.execute("DELETE FROM allowed_file_downloads WHERE url = ?", (url,))
+    db_connection.commit()
+    deleted = cursor.rowcount > 0
+    if deleted:
+        sync_allowed_file_downloads_to_core()
+    return deleted
+
+
 def approve_rule_request(request_id: int, profile_id: Optional[int] = None, resolved_by_user_id: Optional[int] = None) -> Dict:
     """Admin approves a request: add or update rule in global list. For file requests, add URL to allowed_file_downloads (separate from sites)."""
     req = get_rule_request(request_id)

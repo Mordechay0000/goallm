@@ -6,6 +6,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Container,
+  Divider,
   Paper,
   Typography,
   Button,
@@ -42,6 +43,7 @@ import type { RuleRequest, RuleRequestUpdate } from '../api/ruleRequests';
 import { adminApi } from '../api/admin';
 import { TagInput } from '../components/TagInput';
 import { validateDomainOrUrl, processUrlInput } from '../utils/validation';
+import { PAGE_DESCRIPTIONS, PLACEHOLDERS } from '../brand';
 
 const STATUS_LABELS: Record<string, string> = {
   pending: 'ממתין',
@@ -307,13 +309,13 @@ const AdminRequestsPage: React.FC = () => {
   };
 
   return (
-    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
-      <Box sx={{ mb: 3 }}>
+    <Container maxWidth="lg" sx={{ mb: 4 }} className="page-section container-content">
+      <Box className="page-title-section" sx={{ mb: 3 }}>
         <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
-          בקשות משתמשים
+          בקשות שהתקבלו
         </Typography>
         <Typography variant="body2" color="text.secondary">
-          בקשות לפתיחת אתרים ולשינוי כללים – אישור או דחייה (אדמין).
+          {PAGE_DESCRIPTIONS.adminRequests}
         </Typography>
       </Box>
 
@@ -321,7 +323,7 @@ const AdminRequestsPage: React.FC = () => {
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}>
           <TextField
             size="small"
-            placeholder="חיפוש (כתובת, דומיין)..."
+            placeholder={PLACEHOLDERS.search}
             value={search}
             onChange={handleSearchChange}
             sx={{ minWidth: 220 }}
@@ -361,11 +363,14 @@ const AdminRequestsPage: React.FC = () => {
       {loading && requests.length === 0 ? (
         <Typography>טוען...</Typography>
       ) : (
-        <Paper>
-          <Box className="card-header-accent" sx={{ px: 2, pt: 2, pb: 1 }}>
-            <Typography variant="h6" sx={{ fontWeight: 600 }}>בקשות שהתקבלו</Typography>
-          </Box>
-          <TableContainer>
+        <>
+          <Divider sx={{ my: 2 }} />
+          <Paper className="paper-table">
+            <Box className="card-header-accent" sx={{ px: 2, pt: 2, pb: 1 }}>
+              <Typography className="section-title">בקשות שהתקבלו</Typography>
+            </Box>
+            <Divider sx={{ mx: 2 }} />
+            <TableContainer>
             <Table size="small">
               <TableHead>
                 <TableRow>
@@ -418,11 +423,11 @@ const AdminRequestsPage: React.FC = () => {
                       overflowX: 'auto',
                       whiteSpace: 'nowrap',
                       scrollbarWidth: 'thin',
-                      scrollbarColor: '#2F6CFF #E4E7EC',
+                      scrollbarColor: '#1e3a5f #e2e8f0',
                       '&::-webkit-scrollbar': { height: 8 },
-                      '&::-webkit-scrollbar-track': { background: '#E4E7EC', borderRadius: 8 },
-                      '&::-webkit-scrollbar-thumb': { background: '#2F6CFF', borderRadius: 8, border: '2px solid #E4E7EC' },
-                      '&::-webkit-scrollbar-thumb:hover': { background: '#2555d9' },
+                      '&::-webkit-scrollbar-track': { background: '#e2e8f0', borderRadius: 8 },
+                      '&::-webkit-scrollbar-thumb': { background: '#1e3a5f', borderRadius: 8, border: '2px solid #e2e8f0' },
+                      '&::-webkit-scrollbar-thumb:hover': { background: '#152a45' },
                     }}
                   >
                     {r.url || (r.domain_pattern || '') + (r.path_pattern || '') || '—'}
@@ -488,7 +493,8 @@ const AdminRequestsPage: React.FC = () => {
                 </Box>
               )}
             </Box>
-        </Paper>
+          </Paper>
+        </>
       )}
 
       {/* Approve: adds rule to global list (or for file requests just marks as approved) */}

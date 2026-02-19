@@ -431,7 +431,8 @@ def set_allowed_file_urls(urls: List[str]) -> None:
 
 
 def is_file_url_allowed(url: str) -> bool:
-    """Return True if this URL is in the global allowed file-download list (approved by admin)."""
+    """Return True if this URL is in the global allowed file-download list (approved by admin).
+    Matches exact URL or URL without query string (so allowed https://example.com/f.pdf allows https://example.com/f.pdf?token=...)."""
     url = (url or "").strip()
     if not url:
         return False
@@ -439,7 +440,19 @@ def is_file_url_allowed(url: str) -> bool:
         "SELECT 1 FROM allowed_file_downloads WHERE url = ? LIMIT 1",
         (url,),
     )
-    return cursor.fetchone() is not None
+    if cursor.fetchone() is not None:
+        return True
+    # Allow match by base URL without query string (many servers add ?params to download URLs)
+    if "?" in url:
+        base_url = url.split("?", 1)[0].strip()
+        if base_url:
+            cursor = db_connection.execute(
+                "SELECT 1 FROM allowed_file_downloads WHERE url = ? LIMIT 1",
+                (base_url,),
+            )
+            if cursor.fetchone() is not None:
+                return True
+    return False
 
 
 def _tags_to_str(tags: Optional[List[str]]) -> Optional[str]:
