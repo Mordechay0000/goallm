@@ -21,7 +21,6 @@ const textPrimary = '#0f172a';
 const textBody = '#334155';
 const textSecondary = '#64748b';
 const iconDefault = '#334155';       /* אייקונים: אפור כהה / כחול כהה */
-const iconAccent = electricBlue;     /* צבע רק בפעולות מרכזיות */
 
 /* —— צללים (Apple עדין + Google מפוזר) —— */
 const shadowCard = '0 1px 3px rgba(0, 0, 0, 0.04)';

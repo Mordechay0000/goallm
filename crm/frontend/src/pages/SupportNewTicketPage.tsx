@@ -165,7 +165,7 @@ const SupportNewTicketPage: React.FC = () => {
   const canSubmit = subject.trim() && (attach !== null ? (attach === 'file' ? fileDescription.trim() && fileUrl.trim() : url.trim() && content.trim()) : content.trim());
 
   return (
-    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }} className="wrapper-content">
+    <Container maxWidth="lg" sx={{ mt: { xs: 2, sm: 4 }, mb: 4, px: { xs: 2 } }} className="wrapper-content">
       <Box sx={{ mb: 3 }}>
         <Link component="button" variant="body2" onClick={() => navigate('/support')} sx={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 0.5, mb: 1 }}>
           <ArrowBackIcon fontSize="small" /> חזרה

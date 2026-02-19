@@ -109,7 +109,7 @@ const AdminAllowedFilesPage: React.FC = () => {
   };
 
   return (
-    <Container maxWidth="lg" sx={{ mb: 4 }} className="page-section container-content">
+    <Container maxWidth="lg" sx={{ mb: 4, px: { xs: 0 } }} className="page-section container-content">
       <Box className="page-title-section" sx={{ mb: 3 }}>
         <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
           רשימת הקבצים הגלובלית
@@ -126,10 +126,11 @@ const AdminAllowedFilesPage: React.FC = () => {
         <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, px: 2, pt: 1.5, pb: 1.5, borderBottom: '1px solid', borderColor: 'divider' }}>
           <TextField
             size="small"
+            fullWidth
             placeholder={PLACEHOLDERS.search}
             value={search}
             onChange={(e) => { setSearch(e.target.value); setPage(0); }}
-            sx={{ minWidth: 260 }}
+            sx={{ minWidth: { xs: '100%', sm: 260 } }}
             InputProps={{
               startAdornment: (
                 <InputAdornment position="start">
@@ -138,7 +139,7 @@ const AdminAllowedFilesPage: React.FC = () => {
               ),
             }}
           />
-          <Button variant="contained" startIcon={<AddIcon />} onClick={openAdd}>
+          <Button variant="contained" startIcon={<AddIcon sx={{ display: { xs: 'none', sm: 'inline-flex' } }} />} onClick={openAdd} fullWidth sx={{ minWidth: { sm: 'auto' } }}>
             הוסף כתובת קובץ
           </Button>
         </Box>

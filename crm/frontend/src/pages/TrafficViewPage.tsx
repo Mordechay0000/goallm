@@ -197,7 +197,7 @@ const TrafficViewPage: React.FC = () => {
   const ended = data.ended_at ? new Date(data.ended_at * 1000).toLocaleString('he-IL') : '—';
 
   return (
-    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }} className="page-section container-content">
+    <Container maxWidth="lg" sx={{ mt: { xs: 2, sm: 4 }, mb: 4, px: { xs: 0 } }} className="page-section container-content">
       <Box className="page-title-section" sx={{ mb: 3 }}>
         <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
           צפייה בהקלטת תעבורה

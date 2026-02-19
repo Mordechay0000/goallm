@@ -412,8 +412,8 @@ const RegisterWizard: React.FC<RegisterWizardProps> = ({ setupMode }) => {
   };
 
   return (
-    <Container maxWidth="md" sx={{ mt: 4, mb: 4 }} className="page-section" onKeyDown={handleKeyDown}>
-      <Paper className="paper-form" sx={{ p: 4 }}>
+    <Container maxWidth="md" sx={{ mt: { xs: 2, sm: 4 }, mb: 4, px: { xs: 2 } }} className="page-section" onKeyDown={handleKeyDown}>
+      <Paper className="paper-form" sx={{ p: { xs: 2, sm: 4 } }}>
         <Box className="page-title-section" sx={{ mb: setupMode ? 1 : 3 }}>
           <Typography variant="h5" component="h1" gutterBottom sx={{ fontWeight: 600 }}>
             {setupMode ? setupMode.title : 'יצירת חשבון חדש'}

@@ -146,7 +146,7 @@ const ProfilesPage: React.FC = () => {
   };
 
   return (
-    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+    <Container maxWidth="lg" sx={{ mt: { xs: 2, sm: 4 }, mb: 4, px: { xs: 2 } }}>
       {managedUserId != null && managedUserPhone && (
         <Alert
           severity="info"

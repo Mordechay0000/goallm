@@ -185,7 +185,7 @@ const RegisterPage: React.FC = () => {
   };
 
   return (
-    <Container maxWidth="sm" sx={{ mt: 4, mb: 4 }}>
+    <Container maxWidth="sm" sx={{ mt: { xs: 2, sm: 4 }, mb: 4, px: { xs: 2 } }}>
       <Paper sx={{ p: 4 }}>
         <Typography variant="h4" align="center" gutterBottom>
           הרשמה למערכת

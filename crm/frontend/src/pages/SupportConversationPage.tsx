@@ -506,7 +506,7 @@ const SupportConversationPage: React.FC<{ isAdmin?: boolean }> = ({ isAdmin }) =
 
   if (loading || !ticket) {
     return (
-      <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+      <Container maxWidth="lg" sx={{ mt: { xs: 2, sm: 4 }, mb: 4, px: { xs: 2 } }}>
         <Link component="button" variant="body2" onClick={handleBack} sx={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 0.5, mb: 2 }}>
           <ArrowBackIcon fontSize="small" /> חזרה
         </Link>
@@ -518,7 +518,7 @@ const SupportConversationPage: React.FC<{ isAdmin?: boolean }> = ({ isAdmin }) =
   }
 
   return (
-    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }} className="page-section container-content">
+    <Container maxWidth="lg" sx={{ mt: { xs: 2, sm: 4 }, mb: 4, px: { xs: 2 } }} className="page-section container-content">
       <Box className="page-title-section" sx={{ mb: 3 }}>
         <Link component="button" variant="body2" onClick={handleBack} sx={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 0.5, mb: 1 }}>
           <ArrowBackIcon fontSize="small" /> חזרה
@@ -577,7 +577,7 @@ const SupportConversationPage: React.FC<{ isAdmin?: boolean }> = ({ isAdmin }) =
           }
         />
         {showEditCopyForm && editCopySnapshot && (
-          <Box sx={{ mb: 2, ml: 6, p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 1, bgcolor: 'background.paper' }}>
+          <Box sx={{ mb: 2, ml: { xs: 0, sm: 6 }, p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 1, bgcolor: 'background.paper' }}>
             <Typography variant="subtitle2" sx={{ mb: 1 }}>עותק ערוך של הבקשה – שמירה תשלח כתגובה חדשה</Typography>
             {editCopySnapshot.request_type === 'file' ? (
               <>

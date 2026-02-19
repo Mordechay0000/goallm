@@ -196,10 +196,10 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
         </Alert>
       )}
       <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mb: 2 }}>
-        <Button variant="outlined" size="small" startIcon={<DownloadIcon />} onClick={handleExportCsv} disabled={rulesLocked}>
+        <Button variant="outlined" size="small" startIcon={<DownloadIcon sx={{ display: { xs: 'none', sm: 'inline-flex' } }} />} onClick={handleExportCsv} disabled={rulesLocked}>
           ייצא CSV
         </Button>
-        <Button variant="outlined" size="small" startIcon={<UploadIcon />} onClick={() => fileInputRef.current?.click()} disabled={importing || rulesLocked}>
+        <Button variant="outlined" size="small" startIcon={<UploadIcon sx={{ display: { xs: 'none', sm: 'inline-flex' } }} />} onClick={() => fileInputRef.current?.click()} disabled={importing || rulesLocked}>
           {importing ? 'מייבא...' : 'ייבא CSV'}
         </Button>
         <input type="file" ref={fileInputRef} accept=".csv" style={{ display: 'none' }} onChange={handleImportCsv} />
@@ -248,8 +248,8 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
           </Box>
         </Box>
 
-        <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
-          <FormControl sx={{ minWidth: 120 }}>
+        <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 2, mb: 2 }}>
+          <FormControl sx={{ minWidth: { xs: '100%', sm: 120 } }}>
             <InputLabel>פעולה</InputLabel>
             <Select
               value={newAction}
@@ -290,11 +290,12 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
         <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, px: 2, pt: 2, pb: 1 }}>
           <TextField
             size="small"
-            placeholder="בדוק URL – איזה כלל חל? (משתמש באותה לוגיקה כמו הסינון)"
+            fullWidth
+            placeholder="בדוק URL – איזה כלל חל?"
             value={checkUrl}
             onChange={(e) => { setCheckUrl(e.target.value); setCheckResult(null); setCheckError(null); }}
             onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleCheckUrl())}
-            sx={{ minWidth: 320 }}
+            sx={{ minWidth: { xs: '100%', sm: 320 } }}
           />
           <Button variant="outlined" size="small" onClick={() => handleCheckUrl()} disabled={!checkUrl.trim() || checkResult === 'loading'}>
             {checkResult === 'loading' ? 'בודק...' : 'בדוק'}
@@ -324,10 +325,11 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
         <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, px: 2, pb: 2 }}>
           <TextField
             size="small"
+            fullWidth
             placeholder="חיפוש כללים (כתובת, דומיין)..."
             value={search}
             onChange={(e) => { setSearch(e.target.value); setPage(0); }}
-            sx={{ minWidth: 240 }}
+            sx={{ minWidth: { xs: '100%', sm: 240 } }}
             InputProps={{
               startAdornment: (
                 <InputAdornment position="start">

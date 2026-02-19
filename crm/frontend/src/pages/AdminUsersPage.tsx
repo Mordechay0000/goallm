@@ -126,7 +126,7 @@ const AdminUsersPage: React.FC = () => {
   }
 
   return (
-    <Container maxWidth="lg" sx={{ mb: 4 }} className="page-section container-content">
+    <Container maxWidth="lg" sx={{ mb: 4, px: { xs: 0 } }} className="page-section container-content">
       <Box className="page-title-section" sx={{ mb: 3 }}>
         <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
           ניהול משתמשים
@@ -136,13 +136,14 @@ const AdminUsersPage: React.FC = () => {
         </Typography>
       </Box>
       <Paper className="paper-table">
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 2, px: 2, pt: 2, pb: 1.5, borderBottom: '1px solid', borderColor: 'divider' }}>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 2, px: { xs: 2, sm: 2 }, pt: 2, pb: 1.5, borderBottom: '1px solid', borderColor: 'divider' }}>
           <TextField
             size="small"
+            fullWidth
             placeholder={PLACEHOLDERS.search}
             value={search}
             onChange={handleSearchChange}
-            sx={{ minWidth: 260 }}
+            sx={{ minWidth: { xs: '100%', sm: 260 } }}
             InputProps={{
               startAdornment: (
                 <InputAdornment position="start">

@@ -309,7 +309,7 @@ const AdminRequestsPage: React.FC = () => {
   };
 
   return (
-    <Container maxWidth="lg" sx={{ mb: 4 }} className="page-section container-content">
+    <Container maxWidth="lg" sx={{ mb: 4, px: { xs: 0 } }} className="page-section container-content">
       <Box className="page-title-section" sx={{ mb: 3 }}>
         <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
           בקשות שהתקבלו
@@ -319,14 +319,15 @@ const AdminRequestsPage: React.FC = () => {
         </Typography>
       </Box>
 
-      <Paper sx={{ p: 2, mb: 2 }}>
+      <Paper sx={{ p: { xs: 2, sm: 2 }, mb: 2 }}>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}>
           <TextField
             size="small"
+            fullWidth
             placeholder={PLACEHOLDERS.search}
             value={search}
             onChange={handleSearchChange}
-            sx={{ minWidth: 220 }}
+            sx={{ minWidth: { xs: '100%', sm: 220 } }}
             InputProps={{
               startAdornment: (
                 <InputAdornment position="start">

@@ -69,16 +69,17 @@ const SetupPage: React.FC = () => {
       sx={{
         minHeight: '100vh',
         backgroundColor: 'background.default',
-        pt: 2,
+        pt: { xs: 2, sm: 3 },
         pb: 4,
+        px: { xs: 2, sm: 0 },
       }}
     >
-      <Container maxWidth="md">
+      <Container maxWidth="md" sx={{ px: { xs: 0 } }}>
         <Paper
           elevation={0}
           className="brand-gradient-subtle"
           sx={{
-            p: 4,
+            p: { xs: 2, sm: 4 },
             mb: 3,
             border: '1px solid',
             borderColor: 'divider',

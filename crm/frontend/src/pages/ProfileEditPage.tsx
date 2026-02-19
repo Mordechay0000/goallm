@@ -258,7 +258,7 @@ const ProfileEditPage: React.FC = () => {
   };
 
   return (
-    <Container maxWidth="md" sx={{ mt: 4, mb: 4 }} className="container-content">
+    <Container maxWidth="md" sx={{ mt: { xs: 2, sm: 4 }, mb: 4, px: { xs: 2 } }} className="container-content">
       <Box className="page-title-section" sx={{ mb: 3 }}>
         <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/')} sx={{ mb: 1 }}>
           {COPY_ACTIONS.back}
@@ -278,7 +278,7 @@ const ProfileEditPage: React.FC = () => {
       )}
 
       {/* Profile Information */}
-      <Paper className="paper-form" sx={{ mb: 3 }}>
+      <Paper className="paper-form" sx={{ mb: 3, p: { xs: 2, sm: 3 } }}>
         <Typography className="section-title-sm" gutterBottom>
           פרטים אישיים
         </Typography>

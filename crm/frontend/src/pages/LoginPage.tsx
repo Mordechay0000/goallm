@@ -154,8 +154,8 @@ const LoginPage: React.FC = () => {
   };
 
   return (
-    <Container maxWidth="sm" sx={{ mt: 4, mb: 4 }} className="page-section">
-      <Paper className="paper-form" sx={{ p: 4 }}>
+    <Container maxWidth="sm" sx={{ mt: { xs: 2, sm: 4 }, mb: 4, px: { xs: 2 } }} className="page-section">
+      <Paper className="paper-form" sx={{ p: { xs: 2, sm: 4 } }}>
         <Box className="page-title-section">
           <Typography variant="h5" component="h1" align="center" gutterBottom sx={{ fontWeight: 600, mb: 1 }}>
             כניסה לחשבון שלי

@@ -404,7 +404,7 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         }}
         elevation={0}
       >
-        <Toolbar sx={{ minHeight: '64px !important' }}>
+        <Toolbar sx={{ minHeight: { xs: 56, sm: 64 } }}>
           <IconButton
             color="inherit"
             aria-label="open drawer"
@@ -419,10 +419,9 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
             component="div"
             sx={{
               fontWeight: 700,
-              fontSize: '1.1rem',
+              fontSize: { xs: '1rem', sm: '1.1rem' },
               color: 'primary.main',
               letterSpacing: '-0.02em',
-              display: { xs: 'none', sm: 'block' },
               mr: 2,
             }}
           >
@@ -494,7 +493,8 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
             display: { xs: 'block', sm: 'none' },
             '& .MuiDrawer-paper': {
               boxSizing: 'border-box',
-              width: DRAWER_WIDTH,
+              width: 280,
+              maxWidth: '85vw',
               borderLeft: '1px solid',
               borderColor: 'divider',
             },
@@ -522,7 +522,7 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         component="main"
         sx={{
           flexGrow: 1,
-          p: 3,
+          p: { xs: 2, sm: 3 },
           pt: 0,
           width: { sm: `calc(100% - ${DRAWER_WIDTH}px)` },
           backgroundColor: 'background.default',
@@ -530,8 +530,8 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         }}
         className="main-content"
       >
-        <Toolbar sx={{ minHeight: '64px !important' }} />
-        <Box sx={{ pt: 3 }} className="container-content">{children}</Box>
+        <Toolbar sx={{ minHeight: { xs: 56, sm: 64 } }} />
+        <Box sx={{ pt: { xs: 2, sm: 3 } }} className="container-content">{children}</Box>
       </Box>
     </Box>
   );

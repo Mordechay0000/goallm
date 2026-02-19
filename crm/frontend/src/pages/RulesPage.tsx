@@ -46,15 +46,15 @@ const RulesPage: React.FC = () => {
   }, [profileId]);
 
   if (loading) {
-    return <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>טוען...</Container>;
+    return <Container maxWidth="lg" sx={{ mt: { xs: 2, sm: 4 }, mb: 4, px: { xs: 2 } }}>טוען...</Container>;
   }
 
   if (!profile) {
-    return <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>פרופיל לא נמצא</Container>;
+    return <Container maxWidth="lg" sx={{ mt: { xs: 2, sm: 4 }, mb: 4, px: { xs: 2 } }}>פרופיל לא נמצא</Container>;
   }
 
   return (
-    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+    <Container maxWidth="lg" sx={{ mt: { xs: 2, sm: 4 }, mb: 4, px: { xs: 2 } }}>
       <Box sx={{ mb: 3 }}>
         <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/profiles')} color="secondary" variant="outlined" sx={{ mb: 1 }}>
           חזרה לפרופילים

@@ -179,7 +179,7 @@ const MyRequestsPage: React.FC = () => {
   const canDelete = (r: RuleRequest) => r.status === 'pending';
 
   return (
-    <Container maxWidth="lg" sx={{ mb: 4 }} className="page-section container-content">
+    <Container maxWidth="lg" sx={{ mb: 4, px: { xs: 0 } }} className="page-section container-content">
       <Box className="page-title-section" sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 2, mb: 3 }}>
         <Box>
           <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>

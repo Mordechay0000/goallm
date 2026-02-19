@@ -86,7 +86,7 @@ const HomePage: React.FC = () => {
   }, [profiles, loadStats]);
 
   return (
-    <Container maxWidth="lg" sx={{ mb: 4 }} className="page-section">
+    <Container maxWidth="lg" sx={{ mb: 4, px: { xs: 0 } }} className="page-section">
       <Box>
       {/* Page Header */}
       <Box className="page-title-section" sx={{ mb: 3 }}>
@@ -170,10 +170,11 @@ const HomePage: React.FC = () => {
                   ? 'כל האתרים חסומים – פותח רק את האתרים שתוסיף'
                   : 'כל האתרים פתוחים – חוסם רק את האתרים שתוסיף'}
               </Typography>
-              <Box sx={{ display: 'flex', gap: 2 }}>
+              <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, flexWrap: 'wrap', gap: 2 }}>
                 <Button
                   variant="contained"
                   onClick={() => navigate('/profiles')}
+                  sx={{ width: { xs: '100%', sm: 'auto' } }}
                 >
                   לערוך את ההגדרות
                 </Button>
@@ -182,6 +183,7 @@ const HomePage: React.FC = () => {
                   onClick={() => navigate('/schedules', { 
                     state: { openDialog: true, profileId: currentProfile.id } 
                   })}
+                  sx={{ width: { xs: '100%', sm: 'auto' } }}
                 >
                   להגדיר שעות פעילות
                 </Button>
@@ -216,10 +218,11 @@ const HomePage: React.FC = () => {
             <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 2, mb: 2 }}>
               <TextField
                 size="small"
+                fullWidth
                 placeholder="לחפש לפי שם..."
                 value={profileSearch}
                 onChange={(e) => { setProfileSearch(e.target.value); setProfilePage(0); }}
-                sx={{ minWidth: 240 }}
+                sx={{ minWidth: { xs: '100%', sm: 240 } }}
                 InputProps={{
                   startAdornment: (
                     <InputAdornment position="start">
@@ -285,21 +288,23 @@ const HomePage: React.FC = () => {
                             size="small"
                           />
                         </TableCell>
-                        <TableCell align="right">
-                          <Button
-                            size="small"
-                            onClick={() => navigate('/profiles')}
-                          >
-                            לערוך
-                          </Button>
-                          <Button
-                            size="small"
-                            onClick={() => navigate('/schedules', { 
-                              state: { openDialog: true, profileId: profile.id } 
-                            })}
-                          >
-                            שעות פעילות
-                          </Button>
+                        <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+                          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, justifyContent: 'flex-end' }}>
+                            <Button
+                              size="small"
+                              onClick={() => navigate('/profiles')}
+                            >
+                              לערוך
+                            </Button>
+                            <Button
+                              size="small"
+                              onClick={() => navigate('/schedules', { 
+                                state: { openDialog: true, profileId: profile.id } 
+                              })}
+                            >
+                              שעות פעילות
+                            </Button>
+                          </Box>
                         </TableCell>
                       </TableRow>
                     ));

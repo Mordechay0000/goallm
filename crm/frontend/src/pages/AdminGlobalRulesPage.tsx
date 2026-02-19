@@ -40,7 +40,7 @@ import { Add as AddIcon, Delete as DeleteIcon, Edit as EditIcon, ExpandMore as E
 import { adminApi, type GlobalRule, type GlobalRuleCreate, type GlobalRuleUpdate } from '../api/admin';
 import { TagInput } from '../components/TagInput';
 import { validateDomainOrUrl, processUrlInput } from '../utils/validation';
-import { PAGE_DESCRIPTIONS, PLACEHOLDERS } from '../brand';
+import { PAGE_DESCRIPTIONS } from '../brand';
 
 const ACTION_LABELS: Record<string, string> = { block: 'חסום', allow: 'אפשר' };
 
@@ -260,7 +260,7 @@ const AdminGlobalRulesPage: React.FC = () => {
   const paginatedRules = sortedRules.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
 
   return (
-    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }} className="page-section container-content">
+    <Container maxWidth="lg" sx={{ mt: { xs: 2, sm: 4 }, mb: 4, px: { xs: 0 } }} className="page-section container-content">
       {editRuleIdError && (
         <Alert severity="error" onClose={() => setEditRuleIdError(null)} sx={{ mb: 2 }}>
           {editRuleIdError}
