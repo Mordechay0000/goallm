@@ -20,7 +20,7 @@ from core.filters.image.embedded_image_filter import filter_embedded_images_in_h
 from core.filters.text.text_filter import filter_text_content, _encode_debug_b64
 from core.filters.image.image_status_manager import get_image_with_status
 from core.policy.policy_loader import get_policy_resolver
-from core.policy.policy_database import get_profile_mode, get_filter_switches, is_file_url_allowed
+from core.policy.policy_database import get_profile_mode, get_filter_switches
 from data.constants import CRM_FRONTEND_URL
 
 logger = logging.getLogger(__name__)
@@ -247,20 +247,30 @@ def process_http_response(flow: http.HTTPFlow) -> None:
     # HTML/document requests
     if _is_html_response(flow):
         rule = None
-        if switches.get("url_policy", True):
+        replaced = False
+        if flow.metadata.get("policy_handled_in_request"):
+            # Policy already applied at request time (e.g. document navigation block for SPA).
+            replaced = True
+            logger.debug("HTML response: policy already applied in request, skipped")
+        elif switches.get("url_policy", True):
             replaced, rule = _apply_site_policy_for_html(flow, user_id)
             logger.debug("HTML response: replaced=%s rule=%s", replaced, (rule.get("domain") if rule else None))
-            if replaced:
-                return
+            # When replaced (block/send-for-review), do not return: continue so we inject surf widget into the replacement page.
         else:
             logger.debug("URL policy filter disabled - passing HTML through policy check")
         # Text filter (independent: run when switch on; if we have a rule also respect rule's text_filter_enabled)
         body_to_send = None
+        if replaced:
+            # Replaced page (block/send-for-review): use it as body so we inject surf widget below; skip text filter for our own pages.
+            try:
+                body_to_send = flow.response.content
+            except ValueError:
+                body_to_send = flow.response.raw_content
         text_switch_on = switches.get("text_filter", True)
         rule_text_ok = (rule is None) or rule.get("text_filter_enabled", True)
-        text_filter_on = text_switch_on and rule_text_ok
+        text_filter_on = text_switch_on and rule_text_ok and not replaced
         has_content = bool(flow.response.raw_content)
-        logger.debug("text_filter check: switch=%s rule_ok=%s has_content=%s content_len=%s", text_switch_on, rule_text_ok, has_content, len(flow.response.raw_content) if flow.response.raw_content else 0)
+        logger.debug("text_filter check: switch=%s rule_ok=%s replaced=%s has_content=%s content_len=%s", text_switch_on, rule_text_ok, replaced, has_content, len(flow.response.raw_content) if flow.response.raw_content else 0)
         if text_filter_on and has_content:
             try:
                 try:
@@ -340,10 +350,21 @@ def process_http_response(flow: http.HTTPFlow) -> None:
                     if part.startswith("charset="):
                         enc = part.split("=", 1)[1].strip().strip('"')
                         break
-            from core.proxy.surf_widget import inject_surf_widget
-            body_to_send = inject_surf_widget(
-                body_to_send, url, user_id, rule, encoding=enc
-            )
+            if switches.get("surf_widget", True):
+                from core.proxy.surf_widget import inject_surf_widget, get_surf_user_is_admin
+                is_admin = get_surf_user_is_admin(user_id)
+                body_before_len = len(body_to_send)
+                body_to_send = inject_surf_widget(
+                    body_to_send, url, user_id, rule, encoding=enc, is_admin=is_admin
+                )
+                logger.info(
+                    "surf_widget: injected url=%s user_id=%s is_admin=%s body_before=%s body_after=%s",
+                    url[:80] if url else "",
+                    user_id,
+                    is_admin,
+                    body_before_len,
+                    len(body_to_send),
+                )
             flow.response.headers.pop("transfer-encoding", None)
             flow.response.headers.pop("content-encoding", None)
             flow.response.raw_content = body_to_send
@@ -401,11 +422,8 @@ def process_http_response(flow: http.HTTPFlow) -> None:
                 logger.warning("Text filter failed for text/json %s: %s", url, e, exc_info=True)
         return
 
-    # File download (non-image): require send-for-review unless URL is in allowed list
+    # File download (non-image): always return send-for-review page instead of the file
     if _is_file_download_response(flow) and not _is_content_type_already_filtered(flow):
-        if is_file_url_allowed(url):
-            logger.info("File download URL is in allowed list, passing through - URL: %s", url)
-            return
         if get_filter_switches().get("file_download_filter", True):
             file_url = url
             filename = _get_filename_from_response(flow) or "קובץ"
