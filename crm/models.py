@@ -95,32 +95,52 @@ class RuleCreate(BaseModel):
     
     @validator('url')
     def validate_url(cls, v):
-        """Remove protocol and normalize URL."""
-        # Remove http:// or https://
+        """Remove protocol, strip www. from domain, and normalize URL."""
         v = v.strip()
         if v.startswith('http://'):
             v = v[7:]
         elif v.startswith('https://'):
             v = v[8:]
-        
-        # Check if starts with *.
         if v.startswith('*.'):
-            # This will be handled by include_subdomains
-            pass
-        
-        # Split domain and path
+            v = v[2:]
+            prefix = '*.'
+        else:
+            prefix = ''
         if '/' in v:
             parts = v.split('/', 1)
-            domain = parts[0]
+            domain = parts[0].lower().rstrip('.')
             path = '/' + parts[1] if parts[1] else '/'
         else:
-            domain = v
+            domain = v.lower().rstrip('.')
             path = None
-        
         if not domain:
             raise ValueError("URL חייב לכלול דומיין")
-        
+        if domain.startswith('www.'):
+            domain = domain[4:]
+        v = prefix + domain + (path or '')
         return v
+
+
+def _normalize_rule_url(v: str) -> str:
+    """Strip protocol and www. from URL for rule storage."""
+    v = v.strip()
+    if v.startswith("http://"):
+        v = v[7:]
+    elif v.startswith("https://"):
+        v = v[8:]
+    prefix = "*." if v.startswith("*.") else ""
+    if v.startswith("*."):
+        v = v[2:]
+    if "/" in v:
+        parts = v.split("/", 1)
+        domain = parts[0].lower().rstrip(".")
+        path = "/" + parts[1] if parts[1] else "/"
+    else:
+        domain = v.lower().rstrip(".")
+        path = ""
+    if domain.startswith("www."):
+        domain = domain[4:]
+    return prefix + domain + path
 
 
 class RuleUpdate(BaseModel):
@@ -128,6 +148,12 @@ class RuleUpdate(BaseModel):
     action: Optional[str] = Field(None, pattern="^(allow|block)$")
     include_subdomains: Optional[bool] = None
     tags: Optional[List[str]] = None
+
+    @validator("url")
+    def normalize_url(cls, v):
+        if v is None or not str(v).strip():
+            return v
+        return _normalize_rule_url(str(v))
 
 
 class RuleResponse(BaseModel):
@@ -167,18 +193,29 @@ class GlobalRuleCreate(BaseModel):
 
     @validator('url')
     def validate_url(cls, v):
+        """Remove protocol, strip www. from domain, and normalize URL."""
         v = v.strip()
         if v.startswith('http://'):
             v = v[7:]
         elif v.startswith('https://'):
             v = v[8:]
+        if v.startswith('*.'):
+            v = v[2:]
+            prefix = '*.'
+        else:
+            prefix = ''
         if '/' in v:
             parts = v.split('/', 1)
-            domain = parts[0]
+            domain = parts[0].lower().rstrip('.')
+            path = '/' + parts[1] if parts[1] else '/'
         else:
-            domain = v
+            domain = v.lower().rstrip('.')
+            path = None
         if not domain:
             raise ValueError("URL חייב לכלול דומיין")
+        if domain.startswith('www.'):
+            domain = domain[4:]
+        v = prefix + domain + (path or '')
         return v
 
 
@@ -190,6 +227,12 @@ class GlobalRuleUpdate(BaseModel):
     text_filter_enabled: Optional[bool] = None
     image_filter_enabled: Optional[bool] = None
     file_filter_enabled: Optional[bool] = None
+
+    @validator("url")
+    def normalize_url(cls, v):
+        if v is None or not str(v).strip():
+            return v
+        return _normalize_rule_url(str(v))
 
 
 class GlobalRuleResponse(BaseModel):

@@ -401,8 +401,16 @@ def _normalize_path_component(path: str) -> str:
     return result.rstrip("/") if result != "/" else "/"
 
 
+def _strip_www_domain(domain: str) -> str:
+    """Remove leading www. from domain so www.example.com -> example.com."""
+    d = (domain or "").strip().lower()
+    if d.startswith("www."):
+        return d[4:]
+    return d
+
+
 def _normalize_url(url: str) -> str:
-    """Full URL normalization: protocol, *, lowercase, dots, slashes, path."""
+    """Full URL normalization: protocol, *, lowercase, dots, slashes, path; strip www. from domain."""
     url = (url or "").strip()
     if url.startswith("https://"):
         url = url[8:]
@@ -416,6 +424,7 @@ def _normalize_url(url: str) -> str:
         while ".." in domain:
             domain = domain.replace("..", ".")
         domain = ".".join(p for p in domain.split(".") if p)
+        domain = _strip_www_domain(domain)
         path = _normalize_path_component(path)
         url = domain + path
     else:
@@ -423,6 +432,7 @@ def _normalize_url(url: str) -> str:
         while ".." in domain:
             domain = domain.replace("..", ".")
         domain = ".".join(p for p in domain.split(".") if p)
+        domain = _strip_www_domain(domain)
         url = domain
     while len(url) > 1 and url.endswith("/"):
         url = url[:-1]
@@ -864,6 +874,68 @@ def ensure_global_block_rule_for_url(
         url=url,
         action="block",
         include_subdomains=False,
+        created_by_user_id=updated_by_user_id,
+    )
+
+
+def create_or_update_global_rule_surf(
+    url: str,
+    action: str,
+    scope: str,
+    updated_by_user_id: Optional[int] = None,
+) -> Dict:
+    """
+    Create or update a global rule from the surf widget (admin only).
+    action: "allow" | "block"
+    scope: "domain_only" | "domain_and_subdomains" | "exact_url"
+    - domain_only: rule for domain only (path /)
+    - domain_and_subdomains: rule for *.domain (path /)
+    - exact_url: rule for exact domain + path
+    If a rule with the same (domain_pattern, path, include_subdomains) exists, update its action.
+    """
+    url = (url or "").strip()
+    if not url:
+        raise ValueError("חסרה כתובת")
+    if "://" not in url:
+        url = "https://" + url
+    url = _normalize_url(url)
+    domain, path, _ = parse_url(url)
+    if not domain:
+        raise ValueError("לא ניתן לפרש את הכתובת")
+    path = path or "/"
+    path_val = path if path and path != "/" else "/"
+    if scope == "exact_url":
+        domain_pattern = domain
+        path_pattern = path_val
+        include_subdomains = False
+    elif scope == "domain_only":
+        domain_pattern = domain
+        path_pattern = "/"
+        include_subdomains = False
+    elif scope == "domain_and_subdomains":
+        domain_pattern = f"*.{domain}" if not domain.startswith("*.") else domain
+        path_pattern = "/"
+        include_subdomains = True
+    else:
+        raise ValueError("היקף לא תקין (domain_only, domain_and_subdomains, exact_url)")
+    if action not in ("allow", "block"):
+        raise ValueError("פעולה לא תקינה (allow, block)")
+    rule_id = _global_rule_exists(domain_pattern, path_pattern if path_pattern != "/" else None, include_subdomains)
+    if rule_id:
+        return update_global_rule(
+            rule_id,
+            action=action,
+            updated_by_user_id=updated_by_user_id,
+        )
+    # Build URL for create_global_rule: it uses parse_url so we pass a URL that yields the same domain_pattern/path
+    if include_subdomains:
+        build_url = "https://*." + domain
+    else:
+        build_url = "https://" + domain + (path_pattern if path_pattern != "/" else "")
+    return create_global_rule(
+        url=build_url,
+        action=action,
+        include_subdomains=include_subdomains,
         created_by_user_id=updated_by_user_id,
     )
 
