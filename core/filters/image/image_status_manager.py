@@ -184,8 +184,8 @@ def get_image_with_status(
         )
         mark_pending(h, image_url, image_mime_type, w, hi)
         size = (w, hi) if (w and hi) else None
-        out = get_checking_image(image_mime_type, size)
-        logger.info("Returning CHECKING image for new image (hash: %s)", h8)
+        out = get_checking_image(image_mime_type, size, image_data)
+        logger.info("Returning CHECKING image (blurred 5x5) for new image (hash: %s)", h8)
         return out, None, "checking"
 
     status = info["status"]
@@ -203,14 +203,14 @@ def get_image_with_status(
     size = (sw, sh) if (sw and sh) else None
 
     if status == "blocked":
-        logger.info("Returning BLOCKED image for hash %s", h8)
-        return get_blocked_image(mime, size), None, "blocked"
+        logger.info("Returning BLOCKED image (blurred 3x3) for hash %s", h8)
+        return get_blocked_image(mime, size, image_data), None, "blocked"
     if status == "allowed":
         logger.info("Returning original image for hash %s", h8)
         return image_data, None, "allowed"
     if status == "pending":
-        logger.info("Returning CHECKING image for pending hash %s", h8)
-        return get_checking_image(mime, size), None, "pending"
+        logger.info("Returning CHECKING image (blurred 5x5) for pending hash %s", h8)
+        return get_checking_image(mime, size, image_data), None, "pending"
 
     logger.warning("Unknown status %r for hash %s, returning ERROR image", status, h8)
-    return get_error_image(mime, size), None, "error"
+    return get_error_image(mime, size, image_data), None, "error"
