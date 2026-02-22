@@ -4,7 +4,7 @@ FastAPI application for CRM system.
 from fastapi import FastAPI, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Request, File, UploadFile, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse, HTMLResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -16,6 +16,7 @@ import csv
 import io
 from pathlib import Path
 import asyncio
+import time
 
 from .models import (
     UserCreate, UserResponse, UserUpdate, PasswordChange, LoginRequest,
@@ -44,7 +45,7 @@ from .services import (
     count_my_tickets_with_replies, count_all_tickets_with_replies,
     count_my_tickets_with_unread_replies, count_all_tickets_with_unread_replies,
     mark_support_ticket_read, delete_support_ticket,
-    get_global_rules, get_global_rule, create_global_rule, update_global_rule, delete_global_rule, resolve_global_rule_for_url, find_and_update_global_rule_to_block, ensure_global_block_rule_for_url,
+    get_global_rules, get_global_rule, create_global_rule, update_global_rule, delete_global_rule, resolve_global_rule_for_url, find_and_update_global_rule_to_block, ensure_global_block_rule_for_url, create_or_update_global_rule_surf,
     list_bindings_for_user, add_ip_binding, remove_ip_binding, sync_ip_bindings_to_core, touch_ip_binding,
     get_user_id_for_ip,
 )
@@ -61,7 +62,14 @@ from .verification import (
 from .uploads import validate_avatar_file, save_avatar
 from .support_uploads import save_support_file
 from .security import validate_password_strength
-from data.constants import CRM_PROXY_SECRET, DEFAULT_API_HOST, DEFAULT_API_PORT
+from data.constants import (
+    CRM_PROXY_SECRET,
+    DEFAULT_API_HOST,
+    DEFAULT_API_PORT,
+    FILTER_CERT_DIR,
+    FILTER_DIAGNOSTIC_HOST_ALIAS,
+)
+from data.landing_pages import DIAGNOSTIC_HTML_TEMPLATE
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +194,87 @@ async def root():
 async def bind_spa():
     """Serve SPA for bind flow (proxy redirects unbound IPs here)."""
     return _serve_spa()
+
+
+@app.get("/diagnostic", response_class=HTMLResponse)
+async def diagnostic_page(request: Request):
+    """
+    דף אבחון סינון – מסך אחד. כניסה מכלים: ?from=tools מציגה לחצן חזרה לכלים.
+    """
+    from_tools = request.query_params.get("from") == "tools"
+    origin = (request.headers.get("origin") or "").strip().rstrip("/")
+    if not origin and request.headers.get("referer"):
+        try:
+            from urllib.parse import urlparse
+            origin = urlparse(request.headers["referer"]).scheme + "://" + urlparse(request.headers["referer"]).netloc
+        except Exception:
+            pass
+    back_href = (origin + "/tools") if origin else "/tools"
+    back_to_tools_html = (
+        f'<div class="back-to-tools"><a href="{back_href}">← חזרה לכלים</a></div>'
+        if from_tools
+        else ""
+    )
+    server_time = int(time.time())
+    client_ip = _client_ip(request)
+    bound_user_id = get_user_id_for_ip(client_ip) if client_ip else None
+    connection_filtered = "true" if bound_user_id is not None else "false"
+    filter_check_url = "/diagnostic/check"
+    cert_base_url = "/diagnostic/cert"
+    html = DIAGNOSTIC_HTML_TEMPLATE.replace("{server_time}", str(server_time))
+    html = html.replace("{connection_filtered}", connection_filtered)
+    html = html.replace("{filter_check_url}", filter_check_url)
+    html = html.replace("{cert_base_url}", cert_base_url)
+    html = html.replace("{back_to_tools_html}", back_to_tools_html)
+    return HTMLResponse(
+        content=html,
+        media_type="text/html; charset=utf-8",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "no-cache"},
+    )
+
+
+@app.get("/diagnostic/check")
+async def diagnostic_check(request: Request):
+    """בדיקה האם החיבור מסונן (IP משויך למשתמש). מחזיר JSON עם filtered: true/false."""
+    client_ip = _client_ip(request)
+    bound_user_id = get_user_id_for_ip(client_ip) if client_ip else None
+    return {"filtered": bound_user_id is not None}
+
+
+def _cert_file_for_os(os_param: str, user_agent: str) -> tuple[str, str]:
+    """מחזיר (filename, content_type) לפי os_param או User-Agent."""
+    ua = (user_agent or "").lower()
+    if os_param == "windows" or (not os_param and ("windows" in ua or "win" in ua)):
+        return "mitmproxy-ca-cert.p12", "application/x-pkcs12"
+    if os_param == "android" or (not os_param and "android" in ua):
+        return "mitmproxy-ca-cert.cer", "application/x-x509-ca-cert"
+    return "mitmproxy-ca-cert.pem", "application/x-pem-file"
+
+
+@app.get("/diagnostic/cert")
+async def diagnostic_cert(
+    request: Request,
+    os: Optional[str] = Query(None, description="windows|mac|android|ios|linux"),
+):
+    """הורדת תעודת האבטחה של mitmproxy לפי מערכת ההפעלה."""
+    cert_dir = Path(FILTER_CERT_DIR)
+    filename, content_type = _cert_file_for_os((os or "").strip().lower(), request.headers.get("user-agent") or "")
+    path = cert_dir / filename
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="קובץ התעודה לא נמצא")
+    try:
+        body = path.read_bytes()
+    except OSError as e:
+        logger.warning("Cannot read cert file %s: %s", path, e)
+        raise HTTPException(status_code=500, detail="שגיאה בקריאת קובץ התעודה")
+    return Response(
+        content=body,
+        media_type=content_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 # ========== Auth Endpoints ==========
@@ -802,8 +891,7 @@ async def create_schedule_endpoint(
             schedule_data.from_time,
             schedule_data.to_time
         )
-        sync_uid = managed_user_id if (current_user.get("is_admin") and managed_user_id is not None) else current_user["id"]
-        sync_crm_rules_to_core(sync_uid)
+        sync_crm_rules_to_core(profile["user_id"])
         await manager.broadcast({"type": "schedule_created", "profile_id": profile_id, "schedule_id": schedule["id"]})
         return ScheduleResponse(**schedule)
     except ValueError as e:
@@ -833,8 +921,7 @@ async def update_schedule_endpoint(
             from_time=schedule_data.from_time,
             to_time=schedule_data.to_time
         )
-        sync_uid = managed_user_id if (current_user.get("is_admin") and managed_user_id is not None) else current_user["id"]
-        sync_crm_rules_to_core(sync_uid)
+        sync_crm_rules_to_core(profile["user_id"])
         await manager.broadcast({"type": "schedule_updated", "schedule_id": schedule_id, "profile_id": schedule["profile_id"]})
         return ScheduleResponse(**updated)
     except ValueError as e:
@@ -858,8 +945,7 @@ async def delete_schedule_endpoint(
     
     deleted = delete_schedule(schedule_id)
     if deleted:
-        sync_uid = managed_user_id if (current_user.get("is_admin") and managed_user_id is not None) else current_user["id"]
-        sync_crm_rules_to_core(sync_uid)
+        sync_crm_rules_to_core(profile["user_id"])
         await manager.broadcast({"type": "schedule_deleted", "schedule_id": schedule_id, "profile_id": schedule["profile_id"]})
     else:
         raise HTTPException(status_code=404, detail="תזמון לא נמצא")
@@ -978,7 +1064,7 @@ async def admin_update_filter_switches(
         if k in allowed and isinstance(v, bool):
             switches[k] = v
     if not switches:
-        raise HTTPException(status_code=400, detail="נא לשלוח לפחות מתג אחד (url_policy, text_filter, image_filter, embedded_image_filter, file_download_filter)")
+        raise HTTPException(status_code=400, detail="נא לשלוח לפחות מתג אחד (url_policy, text_filter, image_filter, embedded_image_filter, file_download_filter, surf_widget)")
     set_filter_switches(switches, updated_by_user_id=admin.get("id"))
     from core.policy.policy_database import get_filter_switches
     return get_filter_switches()
@@ -1163,7 +1249,9 @@ async def surf_widget_update_rule_to_block(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
     token = body.get("token")
-    rule_domain = (body.get("rule_domain") or "").strip()
+    rule_domain = (body.get("rule_domain") or "").strip().lower()
+    if rule_domain.startswith("www."):
+        rule_domain = rule_domain[4:]
     rule_path = (body.get("rule_path") or "/").strip() or "/"
     if not token:
         raise HTTPException(status_code=401, detail="Missing token")
@@ -1185,6 +1273,192 @@ async def surf_widget_update_rule_to_block(request: Request):
         return {"success": True, "reload": True}
     except ValueError as e:
         return {"success": False, "error": str(e)}
+
+
+@app.post("/api/surf-widget/quick-rule")
+async def surf_widget_quick_rule(request: Request):
+    """Create or update a global rule: allow/block with scope (domain_only, domain_and_subdomains, exact_url). Admin only (verified via token)."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    token = body.get("token")
+    url = (body.get("url") or "").strip()
+    action = (body.get("action") or "").strip().lower()
+    scope = (body.get("scope") or "").strip().lower()
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing token")
+    if not url:
+        raise HTTPException(status_code=400, detail="Missing url")
+    if action not in ("allow", "block"):
+        raise HTTPException(status_code=400, detail="action must be allow or block")
+    if scope not in ("domain_only", "domain_and_subdomains", "exact_url"):
+        raise HTTPException(status_code=400, detail="scope must be domain_only, domain_and_subdomains, or exact_url")
+    ctx = _verify_surf_token(token)
+    if not ctx:
+        raise HTTPException(status_code=401, detail="Token invalid or expired")
+    user = get_user_by_id(ctx["user_id"])
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    if user.get("is_admin") is not True:
+        raise HTTPException(status_code=403, detail="הרשאת מנהל נדרשת")
+    try:
+        rule = create_or_update_global_rule_surf(
+            url=url,
+            action=action,
+            scope=scope,
+            updated_by_user_id=user.get("id"),
+        )
+        sync_crm_rules_to_core(None)
+        # טקסט לתצוגה ב-toast בווידג'ט
+        domain = str(rule.get("domain_pattern") or "").strip()
+        path = str(rule.get("path_pattern") or "/").strip() or "/"
+        try:
+            action_heb = "חסימה" if rule.get("action") == "block" else "פתיחה"
+            if domain.startswith("*."):
+                scope_heb = "דומיין + תת-דומיינים"
+            elif path != "/":
+                scope_heb = "כתובת ישירה"
+            else:
+                scope_heb = "רק הדומיין"
+            rule_display = f"{action_heb}: {domain}{path if path != '/' else ''} ({scope_heb})"
+        except Exception:
+            rule_display = "נוסף בהצלחה"
+        return {"success": True, "rule_display": rule_display, "rule": {"domain_pattern": domain, "path_pattern": path, "action": rule.get("action")}}
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
+
+
+def _surf_rule_apply_logic(token: str, url: str, action: str, scope: str):
+    """Shared logic: verify token, check admin, create/update rule. Returns (success, rule_display_or_error, rule_dict_or_none)."""
+    ctx = _verify_surf_token(token)
+    if not ctx:
+        return False, "טוקן לא תקף או שפג תוקפו", None
+    user = get_user_by_id(ctx["user_id"])
+    if not user:
+        return False, "משתמש לא נמצא", None
+    if user.get("is_admin") is not True:
+        return False, "הרשאת מנהל נדרשת", None
+    action = (action or "").strip().lower()
+    scope = (scope or "").strip().lower()
+    if action not in ("allow", "block"):
+        return False, "פעולה חייבת להיות allow או block", None
+    if scope not in ("domain_only", "domain_and_subdomains", "exact_url"):
+        return False, "היקף לא תקף", None
+    try:
+        rule = create_or_update_global_rule_surf(
+            url=url,
+            action=action,
+            scope=scope,
+            updated_by_user_id=user.get("id"),
+        )
+        sync_crm_rules_to_core(None)
+        domain = str(rule.get("domain_pattern") or "").strip()
+        path = str(rule.get("path_pattern") or "/").strip() or "/"
+        try:
+            action_heb = "חסימה" if rule.get("action") == "block" else "פתיחה"
+            if domain.startswith("*."):
+                scope_heb = "דומיין + תת-דומיינים"
+            elif path != "/":
+                scope_heb = "כתובת ישירה"
+            else:
+                scope_heb = "רק הדומיין"
+            rule_display = f"{action_heb}: {domain}{path if path != '/' else ''} ({scope_heb})"
+        except Exception:
+            rule_display = "נוסף בהצלחה"
+        return True, rule_display, rule
+    except ValueError as e:
+        return False, str(e), None
+
+
+def _escape_html(s: str) -> str:
+    if not s:
+        return ""
+    return (
+        str(s)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+@app.get("/surf-rule-apply", response_class=HTMLResponse)
+async def surf_rule_apply_page(
+    token: str = Query(..., description="Surf token"),
+    url: str = Query(..., description="URL to apply rule for"),
+    action: str = Query(..., description="allow or block"),
+    scope: str = Query(..., description="domain_only, domain_and_subdomains, exact_url"),
+):
+    """Apply quick-rule and show result in a new page (opened from surf widget 'החל' button)."""
+    success, message, rule = _surf_rule_apply_logic(token, url, action, scope)
+    msg_esc = _escape_html(message)
+    if success and rule:
+        domain = _escape_html(str(rule.get("domain_pattern") or ""))
+        path = _escape_html(str(rule.get("path_pattern") or "/"))
+        act = rule.get("action") or "allow"
+        state_heb = "חסימה" if act == "block" else "פתיחה"
+        inc = rule.get("include_subdomains")
+        if domain.startswith("*."):
+            scope_heb = "דומיין + תת-דומיינים"
+        elif path and path != "/":
+            scope_heb = "כתובת ישירה"
+        else:
+            scope_heb = "רק הדומיין"
+        url_esc = _escape_html(url or "")
+        title = "הכלל נוסף בהצלחה"
+        content = f"""
+  <p class="ok">הכלל נשמר במערכת.</p>
+  <div class="rule-box">
+    <h2 class="rule-title">פרטי הכלל</h2>
+    <table class="rule-table">
+      <tr><td class="label">מצב</td><td>{_escape_html(state_heb)}</td></tr>
+      <tr><td class="label">דומיין</td><td>{domain}</td></tr>
+      <tr><td class="label">נתיב</td><td>{path}</td></tr>
+      <tr><td class="label">היקף</td><td>{_escape_html(scope_heb)}</td></tr>
+      <tr><td class="label">כתובת מקור</td><td class="url-cell">{url_esc}</td></tr>
+    </table>
+    <p class="rule-summary">{msg_esc}</p>
+  </div>"""
+    else:
+        title = "שגיאה"
+        content = f"""
+  <p class="err">הפעולה נכשלה.</p>
+  <div class="error-box">
+    <h2 class="error-title">פרטי השגיאה</h2>
+    <p class="error-msg">{msg_esc}</p>
+  </div>"""
+    html_content = f"""<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{_escape_html(title)}</title>
+  <style>
+    body {{ font-family: system-ui, -apple-system, sans-serif; margin: 2rem; max-width: 520px; line-height: 1.5; color: #1a1a1a; }}
+    .ok {{ color: #16a34a; font-weight: 600; }}
+    .err {{ color: #dc2626; font-weight: 600; }}
+    .rule-box, .error-box {{ margin-top: 1.25rem; padding: 1rem 1.25rem; border-radius: 12px; text-align: right; }}
+    .rule-box {{ background: #f0fdf4; border: 1px solid #bbf7d0; }}
+    .error-box {{ background: #fef2f2; border: 1px solid #fecaca; }}
+    .rule-title, .error-title {{ margin: 0 0 0.75rem; font-size: 1rem; font-weight: 600; color: #0D1A3B; }}
+    .rule-table {{ width: 100%; border-collapse: collapse; }}
+    .rule-table td {{ padding: 0.4rem 0.5rem 0.4rem 0; vertical-align: top; }}
+    .rule-table .label {{ color: #64748b; font-weight: 500; width: 7em; }}
+    .rule-table .url-cell {{ word-break: break-all; font-size: 0.9em; }}
+    .rule-summary {{ margin: 0.75rem 0 0; padding-top: 0.75rem; border-top: 1px solid #bbf7d0; font-size: 0.95rem; color: #166534; }}
+    .error-msg {{ margin: 0; font-size: 1rem; color: #b91c1c; }}
+    .close-link {{ display: inline-block; margin-top: 1.5rem; padding: 0.5rem 1rem; background: #0D1A3B; color: #fff; text-decoration: none; border-radius: 8px; font-weight: 500; }}
+    .close-link:hover {{ background: #1e3a5f; }}
+  </style>
+</head>
+<body>
+  <h1>{_escape_html(title)}</h1>
+  {content}
+  <a href="#" class="close-link" onclick="window.close(); return false;">סגור חלון</a>
+</body>
+</html>"""
+    return HTMLResponse(html_content)
 
 
 @app.post("/api/rule-requests", response_model=RuleRequestResponse, status_code=status.HTTP_201_CREATED)
@@ -1816,7 +2090,9 @@ async def admin_surf_update_rule_to_block(
         body = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
-    rule_domain = (body.get("rule_domain") or "").strip()
+    rule_domain = (body.get("rule_domain") or "").strip().lower()
+    if rule_domain.startswith("www."):
+        rule_domain = rule_domain[4:]
     rule_path = (body.get("rule_path") or "/").strip() or "/"
     if not rule_domain:
         raise HTTPException(status_code=400, detail="חסר rule_domain")
@@ -2085,6 +2361,20 @@ async def admin_list_traffic_recording_views(
     return {"views": rows}
 
 
+@app.get("/api/internal/surf-user-info")
+async def internal_surf_user_info(
+    user_id: int = Query(..., description="User ID bound to the surfer IP"),
+    secret: str = Query(..., description="CRM_PROXY_SECRET"),
+):
+    """Return { is_admin } for the given user. Called by proxy when injecting surf widget. Requires CRM_PROXY_SECRET."""
+    if not CRM_PROXY_SECRET or secret != CRM_PROXY_SECRET:
+        raise HTTPException(status_code=403, detail="גישה נדחתה")
+    user = get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"is_admin": user.get("is_admin") is True}
+
+
 @app.post("/api/internal/touch-ip")
 async def internal_touch_ip(request: Request):
     """Update last_used_at for an IP binding. Called by proxy. Requires CRM_PROXY_SECRET."""
@@ -2112,6 +2402,7 @@ async def spa_catch_all(full_path: str, request: Request):
     This allows direct navigation / refresh on routes like /schedules to work.
     """
     # Do NOT intercept API / static / uploads / websocket / internal paths
+    # Note: /diagnostic is handled by a specific route above, so it won't reach here
     protected_prefixes = (
         "api/",
         "static/",
