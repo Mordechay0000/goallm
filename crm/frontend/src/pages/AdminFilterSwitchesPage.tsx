@@ -21,6 +21,7 @@ const FILTER_LABELS: Record<keyof FilterSwitches, string> = {
   image_filter: 'סינון תמונות – החלפת תמונות (כתובת ישירה) לפי ניתוח',
   embedded_image_filter: 'סינון תמונות מוטמעות – תמונות data: בתוך HTML',
   file_download_filter: 'סינון הורדות קבצים – שליחה לבדיקה עם תיאור הקובץ',
+  surf_widget: 'סרגל דיווח (ווידג׳ט) – דחיפת תגית דיווח ומנהל לדפים',
 };
 
 const DEFAULT_SWITCHES: FilterSwitches = {
@@ -29,6 +30,7 @@ const DEFAULT_SWITCHES: FilterSwitches = {
   image_filter: true,
   embedded_image_filter: true,
   file_download_filter: true,
+  surf_widget: true,
 };
 
 const AdminFilterSwitchesPage: React.FC = () => {

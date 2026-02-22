@@ -42,7 +42,7 @@ import { ruleRequestsApi } from '../api/ruleRequests';
 import type { RuleRequest, RuleRequestUpdate } from '../api/ruleRequests';
 import { adminApi } from '../api/admin';
 import { TagInput } from '../components/TagInput';
-import { validateDomainOrUrl, processUrlInput } from '../utils/validation';
+import { validateDomainOrUrl, processUrlInput, normalizeUrlForRule, WWW_NORMALIZED_MESSAGE } from '../utils/validation';
 import { PAGE_DESCRIPTIONS, PLACEHOLDERS } from '../brand';
 
 const STATUS_LABELS: Record<string, string> = {
@@ -231,7 +231,8 @@ const AdminRequestsPage: React.FC = () => {
 
   const saveEditThenOpenApprove = async () => {
     if (!editDialog) return;
-    const err = validateDomainOrUrl(editUrl);
+    const { normalized, hadWww } = normalizeUrlForRule(editUrl);
+    const err = validateDomainOrUrl(normalized);
     if (err) {
       setEditUrlError(err);
       return;
@@ -239,7 +240,7 @@ const AdminRequestsPage: React.FC = () => {
     setSaving(true);
     try {
       const data: RuleRequestUpdate = {
-        url: editUrl.trim(),
+        url: normalized,
         action: editAction,
         include_subdomains: editIncludeSubdomains,
         tags: editTags.length > 0 ? editTags : undefined,
@@ -252,6 +253,7 @@ const AdminRequestsPage: React.FC = () => {
       setEditDialog(null);
       await loadRequests();
       setApproveDialog(reqToApprove);
+      if (hadWww) alert(WWW_NORMALIZED_MESSAGE);
     } catch (e: unknown) {
       const ax = e as { response?: { data?: { detail?: string } } };
       alert(ax?.response?.data?.detail || 'שגיאה בשמירה');
@@ -262,8 +264,9 @@ const AdminRequestsPage: React.FC = () => {
 
   const handleSaveEdit = async () => {
     if (!editDialog) return;
+    const { normalized, hadWww } = normalizeUrlForRule(editUrl);
     if (editDialog.request_type !== 'file') {
-      const err = validateDomainOrUrl(editUrl);
+      const err = validateDomainOrUrl(normalized);
       if (err) {
         setEditUrlError(err);
         return;
@@ -273,7 +276,7 @@ const AdminRequestsPage: React.FC = () => {
     try {
       if (editDialog.approved_rule_id) {
         await adminApi.updateGlobalRule(editDialog.approved_rule_id, {
-          url: editUrl.trim(),
+          url: normalized,
           action: editAction,
           include_subdomains: editIncludeSubdomains,
           tags: editTags.length > 0 ? editTags : undefined,
@@ -283,7 +286,7 @@ const AdminRequestsPage: React.FC = () => {
         });
       } else {
         const data: RuleRequestUpdate = {
-          url: editUrl.trim(),
+          url: normalized,
           action: editAction,
           include_subdomains: editIncludeSubdomains,
           tags: editTags.length > 0 ? editTags : undefined,
@@ -295,6 +298,7 @@ const AdminRequestsPage: React.FC = () => {
       }
       setEditDialog(null);
       await loadRequests();
+      if (hadWww) alert(WWW_NORMALIZED_MESSAGE);
     } catch (e: unknown) {
       const ax = e as { response?: { data?: { detail?: string } } };
       alert(ax?.response?.data?.detail || 'שגיאה בשמירה');

@@ -40,7 +40,7 @@ import { Add as AddIcon, Delete as DeleteIcon, Search as SearchIcon } from '@mui
 import { ruleRequestsApi } from '../api/ruleRequests';
 import type { RuleRequest, RuleRequestCreate } from '../api/ruleRequests';
 import { TagInput } from '../components/TagInput';
-import { validateDomainOrUrl, processUrlInput } from '../utils/validation';
+import { validateDomainOrUrl, processUrlInput, normalizeUrlForRule, WWW_NORMALIZED_MESSAGE } from '../utils/validation';
 import { PAGE_DESCRIPTIONS, EMPTY_STATE, PLACEHOLDERS } from '../brand';
 
 const STATUS_LABELS: Record<string, string> = {
@@ -135,7 +135,8 @@ const MyRequestsPage: React.FC = () => {
     e.preventDefault();
     setError('');
     setUrlError('');
-    const urlErr = validateDomainOrUrl(url);
+    const { normalized, hadWww } = normalizeUrlForRule(url);
+    const urlErr = validateDomainOrUrl(normalized);
     if (urlErr) {
       setUrlError(urlErr);
       return;
@@ -144,7 +145,7 @@ const MyRequestsPage: React.FC = () => {
     try {
       const data: RuleRequestCreate = {
         request_type: requestType,
-        url: url.trim(),
+        url: normalized,
         action,
         include_subdomains: includeSubdomains,
         tags: tags.length > 0 ? tags : undefined,
@@ -152,6 +153,7 @@ const MyRequestsPage: React.FC = () => {
       await ruleRequestsApi.create(data);
       setDialogOpen(false);
       await loadRequests();
+      if (hadWww) alert(WWW_NORMALIZED_MESSAGE);
     } catch (err: unknown) {
       const ax = err as { response?: { data?: { detail?: string } }; message?: string };
       setError(ax?.response?.data?.detail || ax?.message || 'שגיאה בשליחת הבקשה');

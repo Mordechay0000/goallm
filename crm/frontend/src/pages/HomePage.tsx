@@ -30,7 +30,7 @@ import {
   Search as SearchIcon,
 } from '@mui/icons-material';
 import { useProfilesStore } from '../store/profilesStore';
-import { rulesApi } from '../api/rules';
+import { rulesApi, resolverApi } from '../api/rules';
 import { schedulesApi } from '../api/schedules';
 import { BRAND, EMPTY_STATE, PAGE_DESCRIPTIONS } from '../brand';
 
@@ -50,6 +50,12 @@ const HomePage: React.FC = () => {
   const [profilePage, setProfilePage] = React.useState(0);
   const [profileRowsPerPage, setProfileRowsPerPage] = React.useState(10);
   const [profileSearch, setProfileSearch] = React.useState('');
+  /** הפרופיל שפעיל כרגע לפי תזמון (מהשרת) – משמש להצגת "פעיל" נכון */
+  const [activeBySchedule, setActiveBySchedule] = React.useState<{
+    profile_id: number | null;
+    profile_name: string | null;
+    mode: string;
+  } | null>(null);
 
   const loadStats = React.useCallback(async () => {
     try {
@@ -84,6 +90,25 @@ const HomePage: React.FC = () => {
       loadStats();
     }
   }, [profiles, loadStats]);
+
+  const refreshActiveProfile = React.useCallback(() => {
+    resolverApi.getActiveState().then((res) => {
+      setActiveBySchedule({
+        profile_id: res.profile_id ?? null,
+        profile_name: res.profile_name ?? null,
+        mode: res.mode ?? 'whitelist',
+      });
+    }).catch(() => setActiveBySchedule(null));
+  }, []);
+
+  useEffect(() => {
+    refreshActiveProfile();
+  }, [profiles, refreshActiveProfile]);
+
+  useEffect(() => {
+    const interval = setInterval(refreshActiveProfile, 60_000);
+    return () => clearInterval(interval);
+  }, [refreshActiveProfile]);
 
   return (
     <Container maxWidth="lg" sx={{ mb: 4, px: { xs: 0 } }} className="page-section">
@@ -152,7 +177,44 @@ const HomePage: React.FC = () => {
             </Typography>
           </Box>
           <Divider sx={{ mb: 3 }} />
-          {currentProfile ? (
+          {(activeBySchedule?.profile_id != null && (activeBySchedule.profile_name != null || profiles.length > 0)) ? (
+            <Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
+                <Typography variant="body1" sx={{ fontWeight: 500 }}>
+                  {activeBySchedule.profile_name ?? profiles.find(p => p.id === activeBySchedule.profile_id)?.name ?? 'פרופיל'}
+                </Typography>
+                <Chip
+                  label={activeBySchedule.mode === 'whitelist' ? 'הכל חסום – אוסיף פתיחות' : 'הכל פתוח – אוסיף חסימות'}
+                  color={activeBySchedule.mode === 'whitelist' ? 'default' : 'secondary'}
+                  size="small"
+                  variant="outlined"
+                />
+              </Box>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                {activeBySchedule.mode === 'whitelist'
+                  ? 'כל האתרים חסומים – פותח רק את האתרים שתוסיף'
+                  : 'כל האתרים פתוחים – חוסם רק את האתרים שתוסיף'}
+              </Typography>
+              <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, flexWrap: 'wrap', gap: 2 }}>
+                <Button
+                  variant="contained"
+                  onClick={() => navigate('/profiles')}
+                  sx={{ width: { xs: '100%', sm: 'auto' } }}
+                >
+                  לערוך את ההגדרות
+                </Button>
+                <Button
+                  variant="outlined"
+                  onClick={() => navigate('/schedules', { 
+                    state: { openDialog: true, profileId: activeBySchedule.profile_id } 
+                  })}
+                  sx={{ width: { xs: '100%', sm: 'auto' } }}
+                >
+                  להגדיר שעות פעילות
+                </Button>
+              </Box>
+            </Box>
+          ) : currentProfile ? (
             <Box>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
                 <Typography variant="body1" sx={{ fontWeight: 500 }}>
@@ -275,10 +337,10 @@ const HomePage: React.FC = () => {
                         <TableCell>{profile.name}</TableCell>
                         <TableCell>
                           <Chip
-                            label={profile.is_default ? 'פעיל' : 'לא פעיל'}
-                            color={profile.is_default ? 'secondary' : 'default'}
+                            label={activeBySchedule?.profile_id === profile.id ? 'פעיל' : 'לא פעיל'}
+                            color={activeBySchedule?.profile_id === profile.id ? 'secondary' : 'default'}
                             size="small"
-                            variant={profile.is_default ? 'filled' : 'outlined'}
+                            variant={activeBySchedule?.profile_id === profile.id ? 'filled' : 'outlined'}
                           />
                         </TableCell>
                         <TableCell>

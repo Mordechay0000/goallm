@@ -16,14 +16,38 @@ import {
 import {
   Traffic as TrafficIcon,
   Build as BuildIcon,
+  Security as SecurityIcon,
 } from '@mui/icons-material';
 
+function getDiagnosticHref(): string {
+  const base = import.meta.env.VITE_API_URL?.replace(/\/$/, "");
+  const origin = base
+    ? new URL(base + "/").origin
+    : import.meta.env.DEV
+      ? "http://127.0.0.1:8000"
+      : typeof window !== "undefined"
+        ? window.location.origin
+        : "";
+  return origin ? `${origin}/diagnostic?from=tools` : "/diagnostic?from=tools";
+}
+
+const DIAGNOSTIC_HREF = getDiagnosticHref();
+
 const tools = [
+  {
+    id: 'diagnostic',
+    title: 'בדיקת סינון',
+    description: 'בדיקת חיבור לשרת הסינון, שעון ותעודת אבטחה. זמין גם לאורחים ללא התחברות.',
+    path: DIAGNOSTIC_HREF,
+    isExternal: true,
+    icon: <SecurityIcon color="primary" sx={{ fontSize: 40 }} />,
+  },
   {
     id: 'traffic',
     title: 'הקלטת תעבורה',
     description: 'צפייה בכתובות שגלשת אליהן עם מצב (פתוח, חסום, חוסר בתעודת אבטחה ועוד)',
     path: '/tools/traffic',
+    isExternal: false,
     icon: <TrafficIcon color="primary" sx={{ fontSize: 40 }} />,
   },
 ];
@@ -47,8 +71,10 @@ const ToolsPage: React.FC = () => {
           <Grid size={{ xs: 12, sm: 6, md: 4 }} key={tool.id}>
             <Card variant="outlined" sx={{ height: '100%' }}>
               <CardActionArea
-                onClick={() => navigate(tool.path)}
-                sx={{ height: '100%', display: 'block', textAlign: 'right' }}
+                component={tool.isExternal ? 'a' : 'div'}
+                href={tool.isExternal ? tool.path : undefined}
+                onClick={tool.isExternal ? undefined : () => navigate(tool.path)}
+                sx={{ height: '100%', display: 'block', textAlign: 'right', textDecoration: 'none', color: 'inherit' }}
               >
                 <CardContent sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1 }}>
                   <Box sx={{ color: 'primary.main' }}>{tool.icon}</Box>

@@ -22,6 +22,7 @@ import {
 import { ArrowBack as ArrowBackIcon } from '@mui/icons-material';
 import { ruleRequestsApi } from '../api/ruleRequests';
 import { TagInput } from '../components/TagInput';
+import { normalizeUrlForRule, WWW_NORMALIZED_MESSAGE, validateDomainOrUrl } from '../utils/validation';
 
 const RequestChangePage: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -46,38 +47,53 @@ const RequestChangePage: React.FC = () => {
   useEffect(() => {
     if (urlFromQuery) {
       try {
-        setUrl(decodeURIComponent(urlFromQuery).replace(/^https?:\/\//, '').trim());
+        const decoded = decodeURIComponent(urlFromQuery).replace(/^https?:\/\//, '').trim();
+        setUrl(normalizeUrlForRule(decoded).normalized);
       } catch {
-        setUrl(urlFromQuery);
+        setUrl(normalizeUrlForRule(urlFromQuery).normalized);
       }
     } else if (domainFromQuery || pathFromQuery) {
-      setUrl((domainFromQuery || '') + (pathFromQuery || '/'));
+      const combined = (domainFromQuery || '') + (pathFromQuery || '/');
+      setUrl(normalizeUrlForRule(combined).normalized);
     }
     if (actionFromQuery === 'allow' || actionFromQuery === 'block') setAction(actionFromQuery);
     if ((domainFromQuery || '').startsWith('*.')) setIncludeSubdomains(true);
     else if (includeSubdomainsFromQuery === '1' || includeSubdomainsFromQuery.toLowerCase() === 'true') setIncludeSubdomains(true);
     if (tagsFromQuery) setTags(tagsFromQuery.split(',').map((t) => t.trim()).filter(Boolean));
-    if (requestUrlFromQuery) setRequestUrl(requestUrlFromQuery);
+    if (requestUrlFromQuery) {
+      try {
+        setRequestUrl(decodeURIComponent(requestUrlFromQuery));
+      } catch {
+        setRequestUrl(requestUrlFromQuery);
+      }
+    }
   }, [urlFromQuery, domainFromQuery, pathFromQuery, actionFromQuery, includeSubdomainsFromQuery, tagsFromQuery, requestUrlFromQuery]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    if (!url.trim()) {
+    const { normalized, hadWww } = normalizeUrlForRule(url.trim());
+    if (!normalized) {
       setError('נא להזין כתובת');
+      return;
+    }
+    const urlErr = validateDomainOrUrl(normalized);
+    if (urlErr) {
+      setError(urlErr);
       return;
     }
     setLoading(true);
     try {
       await ruleRequestsApi.create({
         request_type: 'change',
-        url: url.trim(),
+        url: normalized,
         action,
         include_subdomains: includeSubdomains,
         tags: tags.length > 0 ? tags : undefined,
         request_url: requestUrl.trim() || undefined,
       });
       setSuccess(true);
+      if (hadWww) alert(WWW_NORMALIZED_MESSAGE);
     } catch (err: unknown) {
       const ax = err as { response?: { data?: { detail?: string } }; message?: string };
       setError(ax?.response?.data?.detail || ax?.message || 'שגיאה בשליחת הבקשה');
@@ -116,13 +132,25 @@ const RequestChangePage: React.FC = () => {
           <Typography variant="h6">פרטי הבקשה</Typography>
         </Box>
         <form onSubmit={handleSubmit}>
+          {requestUrl && (
+            <TextField
+              fullWidth
+              label="כתובת מלאה"
+              value={requestUrl}
+              disabled
+              size="small"
+              sx={{ mb: 2 }}
+              helperText="הכתובת עם הנתיב שהמשתמש ניסה לגשת אליה (לצפייה בלבד, ללא נורמליזציה)"
+            />
+          )}
           <TextField
             fullWidth
-            label="כתובת אתר"
+            label="כתובת אתר (לכלל)"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             placeholder="example.com או *.example.com/path"
             required
+            helperText="פרוטוקול ו־www. יוסרו אוטומטית"
             sx={{ mb: 2 }}
           />
           <FormControl fullWidth sx={{ mb: 2 }}>

@@ -507,9 +507,9 @@ const SupportConversationPage: React.FC<{ isAdmin?: boolean }> = ({ isAdmin }) =
   if (loading || !ticket) {
     return (
       <Container maxWidth="lg" sx={{ mt: { xs: 2, sm: 4 }, mb: 4, px: { xs: 2 } }}>
-        <Link component="button" variant="body2" onClick={handleBack} sx={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 0.5, mb: 2 }}>
-          <ArrowBackIcon fontSize="small" /> חזרה
-        </Link>
+        <Button startIcon={<ArrowBackIcon />} onClick={handleBack} color="secondary" variant="outlined" sx={{ mb: 2 }}>
+          חזרה לרשימת הפניות
+        </Button>
         <Box sx={{ py: 4, textAlign: 'center', color: 'text.secondary' }}>
           {loading ? 'טוען...' : 'פנייה לא נמצאה'}
         </Box>
@@ -520,9 +520,9 @@ const SupportConversationPage: React.FC<{ isAdmin?: boolean }> = ({ isAdmin }) =
   return (
     <Container maxWidth="lg" sx={{ mt: { xs: 2, sm: 4 }, mb: 4, px: { xs: 2 } }} className="page-section container-content">
       <Box className="page-title-section" sx={{ mb: 3 }}>
-        <Link component="button" variant="body2" onClick={handleBack} sx={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 0.5, mb: 1 }}>
-          <ArrowBackIcon fontSize="small" /> חזרה
-        </Link>
+        <Button startIcon={<ArrowBackIcon />} onClick={handleBack} color="secondary" variant="outlined" sx={{ mb: 1 }}>
+          חזרה לרשימת הפניות
+        </Button>
         <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
           #{ticket.id} · {ticket.subject}
         </Typography>

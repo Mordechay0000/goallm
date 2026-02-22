@@ -39,7 +39,7 @@ import {
 import { Add as AddIcon, Delete as DeleteIcon, Edit as EditIcon, ExpandMore as ExpandMoreIcon, Search as SearchIcon } from '@mui/icons-material';
 import { adminApi, type GlobalRule, type GlobalRuleCreate, type GlobalRuleUpdate } from '../api/admin';
 import { TagInput } from '../components/TagInput';
-import { validateDomainOrUrl, processUrlInput } from '../utils/validation';
+import { validateDomainOrUrl, processUrlInput, normalizeUrlForRule, WWW_NORMALIZED_MESSAGE } from '../utils/validation';
 import { PAGE_DESCRIPTIONS } from '../brand';
 
 const ACTION_LABELS: Record<string, string> = { block: 'חסום', allow: 'אפשר' };
@@ -169,8 +169,8 @@ const AdminGlobalRulesPage: React.FC = () => {
   };
 
   const handleSave = async () => {
-    const u = url.trim();
-    const err = validateDomainOrUrl(u);
+    const { normalized, hadWww } = normalizeUrlForRule(url.trim());
+    const err = validateDomainOrUrl(normalized);
     if (err) {
       setUrlError(err);
       return;
@@ -182,15 +182,16 @@ const AdminGlobalRulesPage: React.FC = () => {
       const imgf = isAllow ? imageFilterEnabled : undefined;
       const filef = isAllow ? fileFilterEnabled : undefined;
       if (editingId) {
-        const data: GlobalRuleUpdate = { url: u, action, include_subdomains: includeSubdomains, tags: tags.length ? tags : undefined, text_filter_enabled: tf, image_filter_enabled: imgf, file_filter_enabled: filef };
+        const data: GlobalRuleUpdate = { url: normalized, action, include_subdomains: includeSubdomains, tags: tags.length ? tags : undefined, text_filter_enabled: tf, image_filter_enabled: imgf, file_filter_enabled: filef };
         await adminApi.updateGlobalRule(editingId, data);
       } else {
-        const data: GlobalRuleCreate = { url: u, action, include_subdomains: includeSubdomains, tags: tags.length ? tags : undefined, text_filter_enabled: tf, image_filter_enabled: imgf, file_filter_enabled: filef };
+        const data: GlobalRuleCreate = { url: normalized, action, include_subdomains: includeSubdomains, tags: tags.length ? tags : undefined, text_filter_enabled: tf, image_filter_enabled: imgf, file_filter_enabled: filef };
         await adminApi.createGlobalRule(data);
       }
       setDialogOpen(false);
       setUrlError('');
       await loadRules();
+      if (hadWww) alert(WWW_NORMALIZED_MESSAGE);
     } catch (e: unknown) {
       const msg = e && typeof e === 'object' && 'response' in e && (e as { response?: { data?: { detail?: string } } }).response?.data?.detail;
       alert(msg || 'שגיאה בשמירה');
@@ -435,7 +436,7 @@ const AdminGlobalRulesPage: React.FC = () => {
             }}
             placeholder="example.com או *.example.com/path"
             error={!!urlError}
-            helperText={urlError || "פרוטוקול ו־*. יוסרו אוטומטית"}
+            helperText={urlError || "פרוטוקול, www. ו־*. יוסרו אוטומטית"}
             sx={{ mt: 1 }}
           />
           <FormControl fullWidth sx={{ mt: 2 }}>

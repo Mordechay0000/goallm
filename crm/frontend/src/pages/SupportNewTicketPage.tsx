@@ -24,7 +24,7 @@ import type { AttachedRequestSnapshot } from '../api/support';
 import SupportAttachBar from '../components/SupportAttachBar';
 import { TagInput } from '../components/TagInput';
 import { parseUrl } from '../utils/urlParser';
-import { processUrlInput } from '../utils/validation';
+import { processUrlInput, normalizeUrlForRule, WWW_NORMALIZED_MESSAGE } from '../utils/validation';
 
 type AttachType = 'open' | 'change' | 'file' | null;
 
@@ -61,11 +61,11 @@ const SupportNewTicketPage: React.FC = () => {
       setAttach(attachFromQuery);
       try {
         const decodedUrl = decodeURIComponent(urlFromQuery || '').replace(/^https?:\/\//, '').trim();
-        setUrl(decodedUrl);
+        setUrl(normalizeUrlForRule(decodedUrl).normalized);
         const decodedRequestUrl = decodeURIComponent(requestUrlFromQuery || '').trim();
         setRequestUrl(decodedRequestUrl);
       } catch {
-        setUrl(urlFromQuery);
+        setUrl(normalizeUrlForRule(urlFromQuery).normalized);
         setRequestUrl(requestUrlFromQuery);
       }
       setSubject(attachFromQuery === 'open' ? 'בקשה לפתיחת אתר' : 'בקשה לשינוי');
@@ -89,7 +89,7 @@ const SupportNewTicketPage: React.FC = () => {
     setUrl(cleaned);
   };
 
-  /** Paste in "כתובת אתר": extract domain → כתובת אתר, full URL → כתובת מלאה. */
+  /** Paste in "כתובת אתר": extract domain → כתובת אתר (normalized, no www), full URL → כתובת מלאה (unchanged). */
   const handleWebsiteUrlPaste = (e: React.ClipboardEvent) => {
     const pasted = (e.clipboardData.getData('text') || '').trim();
     if (!pasted) return;
@@ -98,11 +98,15 @@ const SupportNewTicketPage: React.FC = () => {
     if (setSubdomains) setIncludeSubdomains(true);
     const hasProtocol = pasted.includes('://');
     const hasPath = cleaned.includes('/');
+    // כתובת מלאה – כפי שהמשתמש ניסה לגשת (ללא נורמליזציה, כולל www אם יש)
     if (hasPath || hasProtocol) {
       setRequestUrl(cleaned);
-      setUrl(hasPath ? parseUrl(cleaned).domain : cleaned);
+      const domainPart = hasPath ? parseUrl(cleaned).domain : cleaned;
+      const { normalized } = normalizeUrlForRule(domainPart);
+      setUrl(normalized);
     } else {
-      setUrl(cleaned);
+      const { normalized } = normalizeUrlForRule(cleaned);
+      setUrl(normalized);
     }
   };
 
@@ -132,7 +136,8 @@ const SupportNewTicketPage: React.FC = () => {
     try {
       let attached_request: AttachedRequestSnapshot | undefined;
       if (attach === 'open' || attach === 'change') {
-        const urlForRule = includeSubdomains && !url.trim().startsWith('*.') ? `*.${url.trim()}` : url.trim();
+        const { normalized: urlNormalized, hadWww } = normalizeUrlForRule(url.trim());
+        const urlForRule = includeSubdomains && !urlNormalized.startsWith('*.') ? `*.${urlNormalized}` : urlNormalized;
         attached_request = {
           request_type: attach,
           url: urlForRule,
@@ -141,6 +146,7 @@ const SupportNewTicketPage: React.FC = () => {
           include_subdomains: includeSubdomains,
           tags: tags.length > 0 ? tags : undefined,
         };
+        if (hadWww) alert(WWW_NORMALIZED_MESSAGE);
       } else if (attach === 'file') {
         attached_request = {
           request_type: 'file',

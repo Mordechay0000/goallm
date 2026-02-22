@@ -118,6 +118,7 @@ export interface FilterSwitches {
   image_filter: boolean;
   embedded_image_filter: boolean;
   file_download_filter: boolean;
+  surf_widget: boolean;
 }
 
 export interface GlobalRule {

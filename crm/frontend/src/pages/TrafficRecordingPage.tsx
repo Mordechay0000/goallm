@@ -38,7 +38,9 @@ import {
   Stop as StopIcon,
   ContentCopy as CopyIcon,
   OpenInNew as OpenInNewIcon,
+  ArrowBack as ArrowBackIcon,
 } from '@mui/icons-material';
+import { useNavigate } from 'react-router-dom';
 import { trafficApi, stopTrafficOnPageUnload, type TrafficLogEntry } from '../api/traffic';
 import { useAuthStore } from '../store/authStore';
 import { adminApi, type GlobalRule } from '../api/admin';
@@ -93,6 +95,7 @@ function statusIcon(status: string) {
 }
 
 const TrafficRecordingPage: React.FC = () => {
+  const navigate = useNavigate();
   const { user } = useAuthStore();
   const isAdmin = Boolean(user?.is_admin);
   const [recording, setRecording] = useState(false);
@@ -185,6 +188,7 @@ const TrafficRecordingPage: React.FC = () => {
     return () => {
       window.removeEventListener('beforeunload', stopOnUnload);
       window.removeEventListener('pagehide', stopOnUnload);
+      if (recordingRef.current) stopTrafficOnPageUnload();
     };
   }, []);
 
@@ -286,6 +290,9 @@ const TrafficRecordingPage: React.FC = () => {
   return (
     <Container maxWidth="lg" sx={{ mt: { xs: 2, sm: 4 }, mb: 4, px: { xs: 0 } }} className="page-section container-content">
       <Box className="page-title-section" sx={{ mb: 3 }}>
+        <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/tools')} color="secondary" variant="outlined" sx={{ mb: 1 }}>
+          חזרה לכלים
+        </Button>
         <Typography variant="h5" component="h1" sx={{ fontWeight: 600, mb: 1 }}>
           הקלטת תעבורה
         </Typography>

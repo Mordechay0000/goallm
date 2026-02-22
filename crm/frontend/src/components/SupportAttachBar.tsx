@@ -93,6 +93,7 @@ export const SupportAttachBar: React.FC<SupportAttachBarProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [trafficRecording, setTrafficRecording] = useState(false);
   const [trafficLoading, setTrafficLoading] = useState(false);
+  const trafficStartedHereRef = useRef(false);
 
   useEffect(() => {
     if (!error) return;
@@ -106,7 +107,12 @@ export const SupportAttachBar: React.FC<SupportAttachBarProps> = ({
     };
     fetchTrafficStatus();
     const id = setInterval(fetchTrafficStatus, 5000);
-    return () => clearInterval(id);
+    return () => {
+      clearInterval(id);
+      if (trafficStartedHereRef.current) {
+        trafficApi.stop().catch(() => {});
+      }
+    };
   }, []);
 
   const handleTrafficRecording = async () => {
@@ -114,12 +120,14 @@ export const SupportAttachBar: React.FC<SupportAttachBarProps> = ({
     setTrafficLoading(true);
     try {
       if (trafficRecording) {
+        trafficStartedHereRef.current = false;
         const { share_token } = await trafficApi.stop();
         const viewUrl = trafficApi.getViewUrl(share_token);
         appendOrAttach('הקלטת תעבורה', viewUrl, true);
         setTrafficRecording(false);
       } else {
         await trafficApi.start();
+        trafficStartedHereRef.current = true;
         setTrafficRecording(true);
       }
     } catch (err) {

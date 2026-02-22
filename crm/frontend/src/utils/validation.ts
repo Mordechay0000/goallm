@@ -98,12 +98,44 @@ export function normalizeUrlForInput(url: string): string {
 }
 
 /**
- * Process URL input on type/paste: strip protocol (http/https), strip *. prefix.
- * When *. is found, returns setSubdomains: true so caller can check the subdomains checkbox.
+ * Normalize URL for rules: strip protocol and strip www. from domain.
+ * Returns normalized URL and whether the original had www. (so UI can show a message).
  */
-export function processUrlInput(value: string): { cleaned: string; setSubdomains?: boolean } {
+export function normalizeUrlForRule(input: string): { normalized: string; hadWww: boolean } {
+  if (!input || !input.trim()) return { normalized: '', hadWww: false };
+  let v = input.trim();
+  if (v.startsWith('https://')) v = v.substring(8);
+  else if (v.startsWith('http://')) v = v.substring(7);
+  let hadWww = false;
+  let prefix = '';
+  if (v.startsWith('*.')) {
+    prefix = '*.';
+    v = v.substring(2);
+  }
+  const slashIdx = v.indexOf('/');
+  const domainPart = slashIdx >= 0 ? v.substring(0, slashIdx) : v;
+  const rest = slashIdx >= 0 ? v.substring(slashIdx) : '';
+  const domain = domainPart.toLowerCase();
+  let normalizedDomain = domain;
+  if (domain.startsWith('www.')) {
+    normalizedDomain = domain.substring(4);
+    hadWww = true;
+  }
+  const normalized = prefix + normalizedDomain + rest;
+  return { normalized, hadWww };
+}
+
+/** Message to show when user entered www. and we normalized it */
+export const WWW_NORMALIZED_MESSAGE = 'ההתייחסות ל-www. היא כמו בלי www – הכלל נשמר ללא www.';
+
+/**
+ * Process URL input on type/paste: strip protocol (http/https), strip *. prefix, strip www. from domain.
+ * When *. is found, returns setSubdomains: true. When www. was stripped, returns hadWww: true.
+ */
+export function processUrlInput(value: string): { cleaned: string; setSubdomains?: boolean; hadWww?: boolean } {
   let v = value;
   let setSubdomains: boolean | undefined;
+  let hadWww = false;
 
   if (v.startsWith('https://')) v = v.substring(8);
   else if (v.startsWith('http://')) v = v.substring(7);
@@ -113,5 +145,13 @@ export function processUrlInput(value: string): { cleaned: string; setSubdomains
     setSubdomains = true;
   }
 
-  return { cleaned: v, setSubdomains };
+  const slashIdx = v.indexOf('/');
+  const domainPart = slashIdx >= 0 ? v.substring(0, slashIdx) : v;
+  const rest = slashIdx >= 0 ? v.substring(slashIdx) : '';
+  if (domainPart.toLowerCase().startsWith('www.')) {
+    v = domainPart.substring(4).toLowerCase() + rest;
+    hadWww = true;
+  }
+
+  return { cleaned: v, setSubdomains, hadWww };
 }

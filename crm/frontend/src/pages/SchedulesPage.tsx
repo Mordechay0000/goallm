@@ -33,7 +33,7 @@ import {
   TablePagination,
   InputAdornment,
 } from '@mui/material';
-import { Delete as DeleteIcon, Add as AddIcon, Search as SearchIcon } from '@mui/icons-material';
+import { Delete as DeleteIcon, Add as AddIcon, Search as SearchIcon, Edit as EditIcon } from '@mui/icons-material';
 import { schedulesApi } from '../api/schedules';
 import { profilesApi } from '../api/profiles';
 import { useProfilesStore } from '../store/profilesStore';
@@ -51,6 +51,7 @@ const SchedulesPage: React.FC = () => {
   const [schedules, setSchedules] = useState<ScheduleWithProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddDialog, setShowAddDialog] = useState(false);
+  const [editingSchedule, setEditingSchedule] = useState<ScheduleWithProfile | null>(null);
   const [selectedProfileId, setSelectedProfileId] = useState<number | ''>('');
   const [selectedDays, setSelectedDays] = useState<number[]>([]);
   const [useHours, setUseHours] = useState(false);
@@ -165,6 +166,37 @@ const SchedulesPage: React.FC = () => {
     }
   };
 
+  const openEditDialog = (schedule: ScheduleWithProfile) => {
+    setEditingSchedule(schedule);
+    setSelectedProfileId(schedule.profile_id);
+    setSelectedDays(getDaysList(schedule.days_bitmask));
+    setUseHours(!!(schedule.from_time || schedule.to_time));
+    setFromTime(schedule.from_time || '18:00');
+    setToTime(schedule.to_time || '22:00');
+    setShowAddDialog(true);
+  };
+
+  const handleUpdateSchedule = async () => {
+    if (!editingSchedule || selectedDays.length === 0) return;
+    try {
+      await schedulesApi.update(editingSchedule.id, {
+        days: selectedDays,
+        from_time: useHours ? fromTime : undefined,
+        to_time: useHours ? toTime : undefined,
+      });
+      setShowAddDialog(false);
+      setEditingSchedule(null);
+      setSelectedDays([]);
+      setSelectedProfileId('');
+      setUseHours(false);
+      setFromTime('18:00');
+      setToTime('22:00');
+      fetchAllSchedules();
+    } catch (error: unknown) {
+      alert(`שגיאה: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
   const toggleDay = (day: number) => {
     setSelectedDays((prev) =>
       prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]
@@ -183,11 +215,18 @@ const SchedulesPage: React.FC = () => {
 
   const handleDialogClose = () => {
     setShowAddDialog(false);
+    setEditingSchedule(null);
     setSelectedDays([]);
     setUseHours(false);
     setFromTime('18:00');
     setToTime('22:00');
     // Don't reset selectedProfileId if it was set from navigation
+  };
+
+  const isEditMode = editingSchedule != null;
+  const handleSubmitSchedule = () => {
+    if (isEditMode) handleUpdateSchedule();
+    else handleAddSchedule();
   };
 
   if (loading && schedules.length === 0) {
@@ -327,8 +366,17 @@ const SchedulesPage: React.FC = () => {
                         <TableCell align="center">
                           <IconButton
                             size="small"
+                            color="primary"
+                            onClick={() => openEditDialog(schedule)}
+                            title="ערוך תזמון"
+                          >
+                            <EditIcon />
+                          </IconButton>
+                          <IconButton
+                            size="small"
                             color="error"
                             onClick={() => handleDeleteSchedule(schedule.id)}
+                            title="מחק תזמון"
                           >
                             <DeleteIcon />
                           </IconButton>
@@ -360,12 +408,12 @@ const SchedulesPage: React.FC = () => {
         </TableContainer>
       </Paper>
 
-      {/* Add Schedule Dialog */}
+      {/* Add / Edit Schedule Dialog */}
       <Dialog open={showAddDialog} onClose={handleDialogClose} maxWidth="sm" fullWidth>
-        <DialogTitle>תזמון חדש</DialogTitle>
+        <DialogTitle>{isEditMode ? 'עריכת תזמון' : 'תזמון חדש'}</DialogTitle>
         <DialogContent>
           <Box sx={{ mb: 3, mt: 2 }}>
-            <FormControl fullWidth sx={{ mb: 3 }} required>
+            <FormControl fullWidth sx={{ mb: 3 }} required disabled={isEditMode}>
               <InputLabel>פרופיל</InputLabel>
               <Select
                 value={selectedProfileId}
@@ -438,10 +486,10 @@ const SchedulesPage: React.FC = () => {
           <Button onClick={handleDialogClose}>ביטול</Button>
           <Button
             variant="contained"
-            onClick={handleAddSchedule}
+            onClick={handleSubmitSchedule}
             disabled={selectedDays.length === 0 || !selectedProfileId}
           >
-            הוסף
+            {isEditMode ? 'עדכן' : 'הוסף'}
           </Button>
         </DialogActions>
       </Dialog>

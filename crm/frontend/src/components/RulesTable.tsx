@@ -37,7 +37,7 @@ import type { Rule } from '../api/rules';
 import { rulesApi, resolverApi } from '../api/rules';
 import type { ResolverTestUrlResponse } from '../api/rules';
 import { formatRuleDisplay } from '../utils/urlParser';
-import { validateDomainOrUrl, processUrlInput } from '../utils/validation';
+import { validateDomainOrUrl, processUrlInput, normalizeUrlForRule, WWW_NORMALIZED_MESSAGE } from '../utils/validation';
 
 interface RulesTableProps {
   profileId: number;
@@ -83,15 +83,15 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
 
   const handleAddRule = async () => {
     if (!newUrl.trim()) return;
-    const err = validateDomainOrUrl(newUrl);
+    const { normalized, hadWww } = normalizeUrlForRule(newUrl);
+    const err = validateDomainOrUrl(normalized);
     if (err) {
       setUrlError(err);
       return;
     }
-    
     try {
       await rulesApi.create(profileId, {
-        url: newUrl,
+        url: normalized,
         action: newAction,
         include_subdomains: includeSubdomains,
         tags: newTagsList.length > 0 ? newTagsList : undefined,
@@ -102,6 +102,7 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
       setNewAction('block');
       setUrlError('');
       onRefresh();
+      if (hadWww) alert(WWW_NORMALIZED_MESSAGE);
     } catch (err: unknown) {
       alert(`שגיאה: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -217,7 +218,7 @@ export const RulesTable: React.FC<RulesTableProps> = ({ profileId, rules, onRefr
               value={newUrl}
               onChange={(e) => handleUrlChange(e.target.value)}
               placeholder="example.com/path או *.example.com"
-              helperText={urlError || "הזן כתובת מלאה. פרוטוקול ו־*. יוסרו אוטומטית"}
+              helperText={urlError || "הזן כתובת מלאה. פרוטוקול, www. ו־*. יוסרו אוטומטית"}
               error={!!urlError}
               sx={{ mb: 1 }}
               onKeyDown={(e) => {

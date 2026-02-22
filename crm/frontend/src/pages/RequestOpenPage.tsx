@@ -22,6 +22,7 @@ import {
 import { ArrowBack as ArrowBackIcon } from '@mui/icons-material';
 import { ruleRequestsApi } from '../api/ruleRequests';
 import { TagInput } from '../components/TagInput';
+import { normalizeUrlForRule, WWW_NORMALIZED_MESSAGE, validateDomainOrUrl } from '../utils/validation';
 
 const RequestOpenPage: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -41,10 +42,10 @@ const RequestOpenPage: React.FC = () => {
   useEffect(() => {
     if (urlFromQuery) {
       try {
-        const decoded = decodeURIComponent(urlFromQuery);
-        setUrl(decoded.replace(/^https?:\/\//, '').trim());
+        const decoded = decodeURIComponent(urlFromQuery).replace(/^https?:\/\//, '').trim();
+        setUrl(normalizeUrlForRule(decoded).normalized);
       } catch {
-        setUrl(urlFromQuery);
+        setUrl(normalizeUrlForRule(urlFromQuery).normalized);
       }
     }
     if (actionFromQuery === 'allow' || actionFromQuery === 'block') setAction(actionFromQuery);
@@ -55,20 +56,27 @@ const RequestOpenPage: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    if (!url.trim()) {
+    const { normalized, hadWww } = normalizeUrlForRule(url.trim());
+    if (!normalized) {
       setError('נא להזין כתובת');
+      return;
+    }
+    const urlErr = validateDomainOrUrl(normalized);
+    if (urlErr) {
+      setError(urlErr);
       return;
     }
     setLoading(true);
     try {
       await ruleRequestsApi.create({
         request_type: 'open',
-        url: url.trim(),
+        url: normalized,
         action,
         include_subdomains: includeSubdomains,
         tags: tags.length > 0 ? tags : undefined,
       });
       setSuccess(true);
+      if (hadWww) alert(WWW_NORMALIZED_MESSAGE);
     } catch (err: unknown) {
       const ax = err as { response?: { data?: { detail?: string } }; message?: string };
       setError(ax?.response?.data?.detail || ax?.message || 'שגיאה בשליחת הבקשה');
@@ -109,11 +117,12 @@ const RequestOpenPage: React.FC = () => {
         <form onSubmit={handleSubmit}>
           <TextField
             fullWidth
-            label="כתובת אתר"
+            label="כתובת אתר (לכלל)"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             placeholder="example.com או *.example.com/path"
             required
+            helperText="פרוטוקול ו־www. יוסרו אוטומטית"
             sx={{ mb: 2 }}
           />
           <FormControl fullWidth sx={{ mb: 2 }}>
