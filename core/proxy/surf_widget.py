@@ -10,24 +10,59 @@ import hashlib
 import hmac
 import html
 import json
+import logging
 import os
 import re
 import time
 from urllib.parse import quote, urlparse
 from typing import Optional, Any
+import urllib.request
 
 from core.flow.site_policy_pages import CRM_API_URL, CRM_FRONTEND_URL
 from data.constants import CRM_PROXY_SECRET, SURF_TOKEN_TTL_SEC
 
+logger = logging.getLogger(__name__)
+
+# Cache is_admin per user_id to avoid calling CRM on every HTML response (TTL 60s).
+_surf_admin_cache: dict[int, tuple[bool, float]] = {}
+_SURF_ADMIN_CACHE_TTL = 60.0
+
+
+def get_surf_user_is_admin(user_id: Optional[int]) -> bool:
+    """Return True if user_id is an admin (for surf widget injection). Uses CRM internal API; on failure returns False."""
+    if user_id is None:
+        return False
+    now = time.time()
+    if user_id in _surf_admin_cache:
+        cached, t = _surf_admin_cache[user_id]
+        if now - t < _SURF_ADMIN_CACHE_TTL:
+            return cached
+    try:
+        base = (CRM_API_URL or "").rstrip("/")
+        url = f"{base}/internal/surf-user-info?user_id={user_id}&secret={quote(CRM_PROXY_SECRET or '', safe='')}"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=2) as r:
+            data = json.loads(r.read().decode())
+            is_admin = data.get("is_admin") is True
+            _surf_admin_cache[user_id] = (is_admin, now)
+            logger.debug("surf_widget: get_surf_user_is_admin user_id=%s -> is_admin=%s", user_id, is_admin)
+            return is_admin
+    except Exception as e:
+        _surf_admin_cache[user_id] = (False, now)
+        logger.warning("surf_widget: get_surf_user_is_admin user_id=%s failed: %s (using is_admin=False)", user_id, e)
+        return False
+
 
 def _url_to_domain_path(url: str) -> tuple[str, str]:
-    """Extract exact domain and path from URL (no subdomains in pattern)."""
+    """Extract exact domain and path from URL (no subdomains in pattern). Normalizes www. -> no www."""
     u = (url or "").strip()
     if not u or "://" not in u:
         return "", "/"
     try:
         p = urlparse(u)
         domain = (p.hostname or "").lower().rstrip(".")
+        if domain.startswith("www."):
+            domain = domain[4:]
         path = (p.path or "").strip() or "/"
         path = "/" + path.lstrip("/") if path != "/" else "/"
         return domain, path
@@ -74,17 +109,22 @@ def inject_surf_widget(
     user_id: Optional[int],
     rule: Optional[dict],
     encoding: str = "utf-8",
+    is_admin: bool = False,
 ) -> bytes:
     """
     Inject the surf widget (tab + panel) and config script before </body>.
     Only injects when user_id is set (bound connection). Preserves encoding.
+    - is_admin=False: only "דיווח" (report) link.
+    - is_admin=True: full panel with admin quick-rule; "החל" opens a new page that applies and shows summary.
     """
     if user_id is None:
+        logger.debug("surf_widget: skip inject (user_id is None) url=%s", (current_url or "")[:80])
         return html_body
 
     try:
         text = html_body.decode(encoding, errors="replace")
-    except Exception:
+    except Exception as e:
+        logger.warning("surf_widget: decode failed url=%s err=%s", (current_url or "")[:80], e)
         return html_body
 
     token = create_surf_token(user_id)
@@ -101,15 +141,122 @@ def inject_surf_widget(
     current_domain, current_path = _url_to_domain_path(current_url)
     current_domain_js = json.dumps(current_domain)
     current_path_js = json.dumps(current_path)
+    # URL for "החל" button: open in new tab to apply rule and show summary
+    surf_rule_apply_base = f"{CRM_FRONTEND_URL.rstrip('/')}/surf-rule-apply?token={quote(token, safe='')}"
+    surf_rule_apply_base_js = json.dumps(surf_rule_apply_base)
 
-    # Inline widget: token-based (IP binding). No iframe.
-    widget_html = f"""<div id="goallm-surf-root"></div>
+    logger.info(
+        "surf_widget: injecting url=%s user_id=%s is_admin=%s mode=%s",
+        (current_url or "")[:80],
+        user_id,
+        is_admin,
+        "full" if is_admin else "minimal",
+    )
+    if not is_admin:
+        # Minimal widget: report only (no admin panel, no fetch).
+        widget_html = f"""<script>
+(function(){{
+  var root = document.createElement("div");
+  root.id = "goallm-surf-root";
+  if (document.body) document.body.appendChild(root);
+  else if (document.documentElement) document.documentElement.appendChild(root);
+  try {{
+  var config = {{ requestChangeUrlAttr: {json.dumps(request_change_url_attr)}, crmFrontend: {crm_frontend} }};
+  if (config.crmFrontend) try {{ window.__goallm_crm_frontend = config.crmFrontend; }} catch (e) {{}}
+  var open = false;
+  root.innerHTML = '<div id="goallm-surf-wrap" style="position:fixed;left:0;top:50%;transform:translateY(-50%);width:' + (open ? '312px' : '32px') + ';z-index:2147483646;font-family:system-ui,-apple-system,sans-serif;font-size:14px;direction:rtl;">' +
+    '<div id="goallm-surf-tab" style="position:absolute;left:0;top:50%;transform:translateY(-50%);width:32px;height:64px;background:#0D1A3B;color:#fff;border-radius:0 8px 8px 0;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:2px 0 8px rgba(0,0,0,0.2);user-select:none;" title="סרגל דיווח">' + (open ? "&#xAB;" : "&#xBB;") + '</div>' +
+    '<div id="goallm-surf-panel" style="display:' + (open ? 'block' : 'none') + ';position:absolute;left:32px;top:0;width:280px;max-width:calc(90vw - 32px);background:#fff;border:1px solid #E4E7EC;border-right:none;border-radius:12px 0 0 12px;box-shadow:-4px 0 20px rgba(0,0,0,0.08);padding:16px;overflow:auto;max-height:80vh;">' +
+    '<div style="font-weight:700;color:#0D1A3B;margin-bottom:12px;">סרגל דיווח</div>' +
+    '<a href="' + config.requestChangeUrlAttr + '" target="_blank" rel="noopener" style="display:block;width:100%;padding:10px 14px;background:#2F6CFF;color:#fff;text-align:center;border-radius:8px;text-decoration:none;font-weight:500;box-sizing:border-box;">דיווח – בקש לחסום את האתר</a>' +
+    '</div></div>';
+  var wrap = document.getElementById("goallm-surf-wrap");
+  var tab = document.getElementById("goallm-surf-tab");
+  var panel = document.getElementById("goallm-surf-panel");
+  if (tab) tab.onclick = function() {{ open = !open; if (wrap) wrap.style.width = open ? "312px" : "32px"; if (panel) panel.style.display = open ? "block" : "none"; tab.innerHTML = open ? "&#xAB;" : "&#xBB;"; }};
+  }} catch (e) {{
+  var errMsg = (e && e.message) ? String(e.message).replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;") : "שגיאה";
+  root.innerHTML = '<div style="position:fixed;left:0;top:50%;transform:translateY(-50%);z-index:2147483646;background:#0D1A3B;color:#fff;padding:12px 16px;border-radius:0 8px 8px 0;font-size:13px;font-family:system-ui;direction:rtl;">סרגל דיווח – שגיאה: ' + errMsg + '</div>';
+  }}
+}})();
+</script>
 <script>
 (function(){{
-  var root = document.getElementById("goallm-surf-root");
-  if (!root) return;
+  var crmBase = (typeof window !== "undefined" && window.__goallm_crm_frontend) ? window.__goallm_crm_frontend : "";
+  if (!crmBase) return;
+  function filenameFromUrl(url) {{
+    try {{
+      var path = (url || "").split("?")[0];
+      if (path && path.indexOf("/") !== -1) path = path.split("/").pop();
+      return (path && path.length) ? decodeURIComponent(path) : "וידאו";
+    }} catch (e) {{ return "וידאו"; }}
+  }}
+  function addButton(video) {{
+    if (video.dataset.goallmSendReview) return;
+    video.dataset.goallmSendReview = "1";
+    var src = video.currentSrc || video.src || "";
+    if (!src && video.querySelector) {{
+      var first = video.querySelector("source");
+      if (first && first.src) src = first.src;
+    }}
+    if (!src || src.indexOf("data:") === 0 || src.indexOf("blob:") === 0) return;
+    var filename = filenameFromUrl(src);
+    var redirect = "/support/new?attach=file&file_url=" + encodeURIComponent(src) + "&filename=" + encodeURIComponent(filename);
+    var href = crmBase.replace(/\\/$/, "") + "/login?redirect=" + encodeURIComponent(redirect);
+    var wrapper = document.createElement("div");
+    wrapper.style.cssText = "position:relative;display:inline-block;max-width:100%;";
+    var parent = video.parentNode;
+    if (parent) {{
+      parent.insertBefore(wrapper, video);
+      wrapper.appendChild(video);
+      var btnWrap = document.createElement("div");
+      btnWrap.style.cssText = "position:absolute;bottom:8px;left:8px;right:8px;z-index:10;display:flex;justify-content:center;pointer-events:none;";
+      var a = document.createElement("a");
+      a.href = href;
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.textContent = "שלח לבדיקה";
+      a.style.cssText = "pointer-events:auto;padding:6px 12px;background:#2F6CFF;color:#fff;border-radius:6px;text-decoration:none;font-size:13px;font-family:system-ui,-apple-system,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,0.2);direction:rtl;";
+      btnWrap.appendChild(a);
+      wrapper.appendChild(btnWrap);
+    }}
+  }}
+  function run() {{
+    try {{
+      document.querySelectorAll("video").forEach(function(v) {{ addButton(v); }});
+    }} catch (e) {{}}
+  }}
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", run);
+  else run();
+  if (typeof MutationObserver !== "undefined" && document.body) {{
+    var obs = new MutationObserver(function(mutations) {{
+      mutations.forEach(function(m) {{
+        if (m.addedNodes)
+          m.addedNodes.forEach(function(n) {{
+            if (n && n.nodeType === 1) {{
+              if (n.tagName === "VIDEO") addButton(n);
+              if (n.querySelectorAll) n.querySelectorAll("video").forEach(addButton);
+            }}
+          });
+      }});
+    }});
+    obs.observe(document.body, {{ childList: true, subtree: true }});
+  }}
+}})();
+</script>"""
+    else:
+        # Full widget: admin panel visible; "החל" opens new page to apply and show summary.
+        widget_html = f"""<script>
+(function(){{
+  var root = document.createElement("div");
+  root.id = "goallm-surf-root";
+  if (document.body) document.body.appendChild(root);
+  else if (document.documentElement) document.documentElement.appendChild(root);
+  try {{
   var config = {{
     crmApi: {crm_api},
+    crmFrontend: {crm_frontend},
+    surfRuleApplyBase: {surf_rule_apply_base_js},
     currentUrl: {current_url_esc},
     token: {token_esc},
     rule: {rule_json},
@@ -129,65 +276,178 @@ def inject_surf_widget(
       '<div id="goallm-surf-panel" style="display:' + (open ? 'block' : 'none') + ';position:absolute;left:32px;top:0;width:280px;max-width:calc(90vw - 32px);background:#fff;border:1px solid #E4E7EC;border-right:none;border-radius:12px 0 0 12px;box-shadow:-4px 0 20px rgba(0,0,0,0.08);padding:16px;overflow:auto;max-height:80vh;">' +
         '<div style="font-weight:700;color:#0D1A3B;margin-bottom:12px;">סרגל דיווח</div>' +
         '<a id="goallm-surf-report-link" href="' + config.requestChangeUrlAttr + '" target="_blank" rel="noopener" style="display:block;width:100%;padding:10px 14px;background:#2F6CFF;color:#fff;text-align:center;border-radius:8px;text-decoration:none;font-weight:500;margin-bottom:12px;box-sizing:border-box;">דיווח – בקש לחסום את האתר</a>' +
-        '<div id="goallm-surf-admin" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid #E4E7EC;">' +
-          '<div style="font-weight:600;color:#0D1A3B;margin-bottom:6px;">הכלל שמאפשר את האתר</div>' +
-          '<div id="goallm-surf-rule-text" style="font-size:13px;color:#1A1A1A;margin-bottom:10px;word-break:break-all;"></div>' +
-          '<button type="button" id="goallm-surf-block-btn" style="width:100%;padding:10px 14px;background:#dc2626;color:#fff;border:none;border-radius:8px;font-weight:500;cursor:pointer;margin-bottom:8px;">חסום את האתר עכשיו</button>' +
-          '<button type="button" id="goallm-surf-update-rule-btn" style="display:none;width:100%;padding:10px 14px;background:#b91c1c;color:#fff;border:none;border-radius:8px;font-weight:500;cursor:pointer;">שנה את הכלל הקיים לחסום</button>' +
+        '<div id="goallm-surf-admin" style="display:block;margin-top:12px;padding-top:12px;border-top:1px solid #E4E7EC;">' +
+          '<div style="font-weight:600;color:#0D1A3B;margin-bottom:8px;">הוסף/עדכן כלל (מנהל)</div>' +
+          '<div id="goallm-surf-quick-step1" style="margin-bottom:10px;">' +
+            '<div style="font-size:12px;color:#5f6368;margin-bottom:6px;">שלב 1 – פעולה:</div>' +
+            '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+              '<button type="button" id="goallm-surf-action-block" style="flex:1;min-width:80px;padding:8px 12px;background:#dc2626;color:#fff;border:none;border-radius:8px;font-weight:500;cursor:pointer;font-size:13px;">חסום</button>' +
+              '<button type="button" id="goallm-surf-action-allow" style="flex:1;min-width:80px;padding:8px 12px;background:#16a34a;color:#fff;border:none;border-radius:8px;font-weight:500;cursor:pointer;font-size:13px;">אפשר</button>' +
+            '</div>' +
+          '</div>' +
+          '<div id="goallm-surf-quick-step2" style="display:none;margin-bottom:10px;">' +
+            '<div style="font-size:12px;color:#5f6368;margin-bottom:6px;">שלב 2 – היקף הכלל:</div>' +
+            '<div style="display:flex;flex-direction:column;gap:6px;">' +
+              '<button type="button" id="goallm-surf-scope-domain" style="width:100%;padding:8px 12px;background:#f1f5f9;color:#0D1A3B;border:1px solid #E4E7EC;border-radius:8px;font-weight:500;cursor:pointer;font-size:13px;text-align:right;">רק הדומיין</button>' +
+              '<button type="button" id="goallm-surf-scope-subdomains" style="width:100%;padding:8px 12px;background:#f1f5f9;color:#0D1A3B;border:1px solid #E4E7EC;border-radius:8px;font-weight:500;cursor:pointer;font-size:13px;text-align:right;">דומיין + תת-דומיינים</button>' +
+              '<button type="button" id="goallm-surf-scope-exact" style="width:100%;padding:8px 12px;background:#f1f5f9;color:#0D1A3B;border:1px solid #E4E7EC;border-radius:8px;font-weight:500;cursor:pointer;font-size:13px;text-align:right;">כתובת ישירה</button>' +
+            '</div>' +
+            '<button type="button" id="goallm-surf-quick-apply" style="display:none;width:100%;padding:10px 14px;background:#2F6CFF;color:#fff;border:none;border-radius:8px;font-weight:500;cursor:pointer;margin-top:8px;">החל</button>' +
+          '</div>' +
         '</div>' +
+        '<div id="goallm-surf-toast" style="display:none;position:fixed;bottom:24px;left:24px;max-width:320px;padding:12px 14px;background:#0D1A3B;color:#fff;border-radius:8px;font-size:13px;line-height:1.4;box-shadow:0 4px 12px rgba(0,0,0,0.25);z-index:2147483647;direction:rtl;text-align:right;"></div>' +
       '</div>' +
     '</div>';
     var wrap = document.getElementById("goallm-surf-wrap");
     var tab = document.getElementById("goallm-surf-tab");
     var panel = document.getElementById("goallm-surf-panel");
     if (tab) tab.onclick = function() {{ open = !open; if (wrap) wrap.style.width = open ? "312px" : "32px"; if (panel) panel.style.display = open ? "block" : "none"; tab.innerHTML = open ? "&#xAB;" : "&#xBB;"; }};
-    var ruleEl = document.getElementById("goallm-surf-rule-text");
-    if (ruleEl) ruleEl.textContent = config.ruleDisplay;
     var adminEl = document.getElementById("goallm-surf-admin");
-    var blockBtn = document.getElementById("goallm-surf-block-btn");
-    var updateRuleBtn = document.getElementById("goallm-surf-update-rule-btn");
-    var ruleDomain = (config.ruleDomain || "").toString().trim();
-    var rulePath = (config.rulePath || "/").toString().trim() || "/";
-    var currentDomain = (config.currentDomain || "").toString().trim();
-    var currentPath = (config.currentPath || "/").toString().trim() || "/";
-    var ruleIsExactMatch = ruleDomain && currentDomain && ruleDomain === currentDomain && rulePath === currentPath;
-    if (blockBtn) blockBtn.onclick = function() {{
-      blockBtn.disabled = true;
-      fetch(config.crmApi + "/api/surf-widget/block", {{
-        method: "POST",
-        headers: {{ "Content-Type": "application/json" }},
-        body: JSON.stringify({{ token: config.token, url: config.currentUrl }})
-      }}).then(function(r) {{ return r.json(); }}).then(function(data) {{
-        if (data.success) {{ alert("האתר נחסם בהצלחה."); window.location.reload(); }}
-        else {{ alert(data.error || "שגיאה בחסימת האתר"); }}
-      }}).catch(function(e) {{ alert('שגיאה: ' + (e.message || 'לא ניתן לחסום')); }}).finally(function() {{ blockBtn.disabled = false; }});
-    }};
-    if (updateRuleBtn && config.rule && ruleDomain && !ruleIsExactMatch) {{
-      updateRuleBtn.style.display = "block";
-      updateRuleBtn.onclick = function() {{
-        updateRuleBtn.disabled = true;
-        fetch(config.crmApi + "/api/surf-widget/update-rule-to-block", {{
-          method: "POST",
-          headers: {{ "Content-Type": "application/json" }},
-          body: JSON.stringify({{ token: config.token, rule_domain: ruleDomain, rule_path: rulePath }})
-        }}).then(function(r) {{ return r.json(); }}).then(function(data) {{
-          if (data.success) {{ alert("הכלל עודכן לחסום בהצלחה."); window.location.reload(); }}
-          else {{ alert(data.error || "שגיאה בעדכון הכלל"); }}
-        }}).catch(function(e) {{ alert('שגיאה: ' + (e.message || 'לא ניתן לעדכן')); }}).finally(function() {{ updateRuleBtn.disabled = false; }});
-      }};
+    var step1 = document.getElementById("goallm-surf-quick-step1");
+    var step2 = document.getElementById("goallm-surf-quick-step2");
+    var applyBtn = document.getElementById("goallm-surf-quick-apply");
+    var quickAction = null;
+    var quickScope = null;
+    function setStep2Visible(show) {{ if (step2) step2.style.display = show ? "block" : "none"; }}
+    function setApplyVisible(show) {{ if (applyBtn) applyBtn.style.display = show ? "block" : "none"; }}
+    function clearScopeSelection() {{
+      quickScope = null;
+      setApplyVisible(false);
+      ["domain", "subdomains", "exact"].forEach(function(s) {{
+        var b = document.getElementById("goallm-surf-scope-" + s);
+        if (b) {{ b.style.background = "#f1f5f9"; b.style.borderColor = "#E4E7EC"; }}
+      }});
     }}
-    fetch(config.crmApi + "/api/surf-widget/context?token=" + encodeURIComponent(config.token))
-      .then(function(r) {{ if (!r.ok) return null; return r.json(); }})
-      .then(function(data) {{
-        if (data && data.hasOwnProperty("is_admin") && data.is_admin === true && adminEl) {{
-          adminEl.style.display = "block";
-        }}
-      }})
-      .catch(function() {{}});
+    function clearActionSelection() {{
+      quickAction = null;
+      var blockB = document.getElementById("goallm-surf-action-block");
+      var allowB = document.getElementById("goallm-surf-action-allow");
+      if (blockB) {{ blockB.style.background = "#dc2626"; }}
+      if (allowB) {{ allowB.style.background = "#16a34a"; }}
+    }}
+    if (document.getElementById("goallm-surf-action-block")) document.getElementById("goallm-surf-action-block").onclick = function() {{
+      quickAction = "block";
+      clearScopeSelection();
+      setStep2Visible(true);
+      this.style.background = "#b91c1c";
+      if (document.getElementById("goallm-surf-action-allow")) document.getElementById("goallm-surf-action-allow").style.background = "#16a34a";
+    }};
+    if (document.getElementById("goallm-surf-action-allow")) document.getElementById("goallm-surf-action-allow").onclick = function() {{
+      quickAction = "allow";
+      clearScopeSelection();
+      setStep2Visible(true);
+      this.style.background = "#15803d";
+      if (document.getElementById("goallm-surf-action-block")) document.getElementById("goallm-surf-action-block").style.background = "#dc2626";
+    }};
+    function selectScope(scope, btnId) {{
+      quickScope = scope;
+      setApplyVisible(true);
+      ["domain", "subdomains", "exact"].forEach(function(s) {{
+        var id = "goallm-surf-scope-" + s;
+        var b = document.getElementById(id);
+        if (b) {{ b.style.background = (id === btnId ? "#e0e7ff" : "#f1f5f9"); b.style.borderColor = (id === btnId ? "#2F6CFF" : "#E4E7EC"); }}
+      }});
+    }}
+    if (document.getElementById("goallm-surf-scope-domain")) document.getElementById("goallm-surf-scope-domain").onclick = function() {{ selectScope("domain_only", "goallm-surf-scope-domain"); }};
+    if (document.getElementById("goallm-surf-scope-subdomains")) document.getElementById("goallm-surf-scope-subdomains").onclick = function() {{ selectScope("domain_and_subdomains", "goallm-surf-scope-subdomains"); }};
+    if (document.getElementById("goallm-surf-scope-exact")) document.getElementById("goallm-surf-scope-exact").onclick = function() {{ selectScope("exact_url", "goallm-surf-scope-exact"); }};
+    var toastEl = document.getElementById("goallm-surf-toast");
+    var toastTimer = null;
+    function showToast(html) {{
+      if (!toastEl) return;
+      if (toastTimer) clearTimeout(toastTimer);
+      toastEl.innerHTML = html;
+      toastEl.style.display = "block";
+      toastTimer = setTimeout(function() {{ toastEl.style.display = "none"; toastTimer = null; }}, 5000);
+    }}
+    if (applyBtn) applyBtn.onclick = function() {{
+      if (!quickAction || !quickScope) {{ showToast("בחר פעולה והיקף"); return; }}
+      var u = config.surfRuleApplyBase + "&url=" + encodeURIComponent(config.currentUrl) + "&action=" + encodeURIComponent(quickAction) + "&scope=" + encodeURIComponent(quickScope);
+      window.open(u, "_blank");
+    }};
+    if (config.crmFrontend) try {{ window.__goallm_crm_frontend = config.crmFrontend; }} catch (e) {{}}
+    }}
+    render();
+  }} catch (e) {{
+    var errMsg = (e && e.message) ? String(e.message).replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;") : "שגיאה";
+    root.innerHTML = '<div style="position:fixed;left:0;top:50%;transform:translateY(-50%);z-index:2147483646;background:#0D1A3B;color:#fff;padding:12px 16px;border-radius:0 8px 8px 0;font-size:13px;font-family:system-ui;direction:rtl;">סרגל דיווח – שגיאה: ' + errMsg + '</div>';
   }}
-  render();
+}})();
+</script>
+<script>
+(function(){{
+  var crmBase = (typeof window !== "undefined" && window.__goallm_crm_frontend) ? window.__goallm_crm_frontend : "";
+  if (!crmBase) return;
+  function filenameFromUrl(url) {{
+    try {{
+      var path = (url || "").split("?")[0];
+      if (path && path.indexOf("/") !== -1) path = path.split("/").pop();
+      return (path && path.length) ? decodeURIComponent(path) : "וידאו";
+    }} catch (e) {{ return "וידאו"; }}
+  }}
+  function addButton(video) {{
+    if (video.dataset.goallmSendReview) return;
+    video.dataset.goallmSendReview = "1";
+    var src = video.currentSrc || video.src || "";
+    if (!src && video.querySelector) {{
+      var first = video.querySelector("source");
+      if (first && first.src) src = first.src;
+    }}
+    if (!src || src.indexOf("data:") === 0 || src.indexOf("blob:") === 0) return;
+    var filename = filenameFromUrl(src);
+    var redirect = "/support/new?attach=file&file_url=" + encodeURIComponent(src) + "&filename=" + encodeURIComponent(filename);
+    var href = crmBase.replace(/\\/$/, "") + "/login?redirect=" + encodeURIComponent(redirect);
+    var wrapper = document.createElement("div");
+    wrapper.style.cssText = "position:relative;display:inline-block;max-width:100%;";
+    var parent = video.parentNode;
+    if (parent) {{
+      parent.insertBefore(wrapper, video);
+      wrapper.appendChild(video);
+      var btnWrap = document.createElement("div");
+      btnWrap.style.cssText = "position:absolute;bottom:8px;left:8px;right:8px;z-index:10;display:flex;justify-content:center;pointer-events:none;";
+      var a = document.createElement("a");
+      a.href = href;
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.textContent = "שלח לבדיקה";
+      a.style.cssText = "pointer-events:auto;padding:6px 12px;background:#2F6CFF;color:#fff;border-radius:6px;text-decoration:none;font-size:13px;font-family:system-ui,-apple-system,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,0.2);direction:rtl;";
+      btnWrap.appendChild(a);
+      wrapper.appendChild(btnWrap);
+    }}
+  }}
+  function run() {{
+    try {{
+      document.querySelectorAll("video").forEach(function(v) {{ addButton(v); }});
+    }} catch (e) {{}}
+  }}
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", run);
+  else run();
+  if (typeof MutationObserver !== "undefined" && document.body) {{
+    var obs = new MutationObserver(function(mutations) {{
+      mutations.forEach(function(m) {{
+        if (m.addedNodes)
+          m.addedNodes.forEach(function(n) {{
+            if (n && n.nodeType === 1) {{
+              if (n.tagName === "VIDEO") addButton(n);
+              if (n.querySelectorAll) n.querySelectorAll("video").forEach(addButton);
+            }}
+          });
+      }});
+    }});
+    obs.observe(document.body, {{ childList: true, subtree: true }});
+  }}
 }})();
 </script>"""
+
+    # Prevent </script> in script body from closing the tag (escape so browser does not end script early)
+    script_open = widget_html.find("<script>")
+    script_close = widget_html.find("</script>")
+    if script_open >= 0 and script_close > script_open:
+        body = widget_html[script_open + 8 : script_close]
+        if "</script>" in body:
+            body = body.replace("</script>", "<\\/script>")
+            widget_html = widget_html[: script_open + 8] + body + widget_html[script_close:]
+            logger.warning("surf_widget: escaped </script> in injected script url=%s", (current_url or "")[:80])
 
     # Insert before </body>; if no </body>, append at end (use lambda so widget_html is not interpreted as re template)
     pattern = re.compile(r"</body\s*>", re.IGNORECASE)
