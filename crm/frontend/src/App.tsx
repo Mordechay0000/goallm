@@ -396,6 +396,7 @@ function App() {
               </ProtectedRoute>
             }
           />
+          <Route path="/tools/diagnostic" element={<Navigate to="/diagnostic" replace />} />
           <Route
             path="/tools"
             element={
