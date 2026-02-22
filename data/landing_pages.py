@@ -146,3 +146,198 @@ UNBOUND_IP_HTML = """<!DOCTYPE html>
   <p>כדי להשתמש בשירות, יש לשייך את המכשיר (כתובת ה-IP) לחשבון במערכת.</p>
 </body>
 </html>"""
+
+# תבנית דף אבחון סינון – מוצג ב־/diagnostic.
+# מקבל: {server_time}, {connection_filtered}, {filter_check_url}, {cert_base_url}, {back_to_tools_html}.
+DIAGNOSTIC_HTML_TEMPLATE = """<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="server-time" content="{server_time}">
+  <meta name="connection-filtered" content="{connection_filtered}">
+  <meta name="filter-check-url" content="{filter_check_url}">
+  <meta name="cert-base-url" content="{cert_base_url}">
+  <title>בדיקת סינון</title>
+  """ + FONT_LINK + """
+  <style>
+    """ + COMMON_STYLES + """
+    body { background: """ + BG_OVERLAY + """ #f0f9ff; }
+    .back-to-tools { margin-bottom: 1.25rem; }
+    .back-to-tools a {
+      display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.95rem; font-weight: 500;
+      color: #0D1A3B; text-decoration: none; border: 1px solid #E4E7EC; padding: 0.5rem 1rem;
+      border-radius: 8px; background: #fff; box-shadow: 0 4px 18px rgba(0, 0, 0, 0.05);
+      transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+    .back-to-tools a:hover { background: #F7F8FA; border-color: #d1d5db; box-shadow: 0 4px 18px rgba(0, 0, 0, 0.08); }
+    .progress-area { margin: 2rem 0; min-height: 140px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+    .spinner { width: 56px; height: 56px; border: 3px solid #E4E7EC; border-top-color: #2F6CFF; border-radius: 50%; animation: spin 0.9s cubic-bezier(0.5, 0, 0.5, 1) infinite; }
+    .spinner-dots { display: flex; gap: 8px; margin-top: 1rem; }
+    .spinner-dots span { width: 8px; height: 8px; background: #2F6CFF; border-radius: 50%; animation: pulse 1.4s ease-in-out infinite both; }
+    .spinner-dots span:nth-child(1) { animation-delay: 0s; }
+    .spinner-dots span:nth-child(2) { animation-delay: 0.2s; }
+    .spinner-dots span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes pulse { 0%, 80%, 100% { transform: scale(0.6); opacity: 0.5; } 40% { transform: scale(1); opacity: 1; } }
+    .progress-text { margin-top: 0.75rem; font-size: 0.95rem; color: #6b7280; }
+    #summary { margin-top: 2rem; padding: 1.25rem 1.5rem; border-radius: 16px; font-weight: 600; font-size: 1.1rem; text-align: center; }
+    #summary.all-ok { background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%); color: #065f46; }
+    #summary.has-issues { background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%); color: #991b1b; }
+    #summary.has-issues { text-align: right; }
+    #summary.has-issues a { color: #1d4ed8; text-decoration: underline; }
+    a.cert-download-link { color: #1d4ed8; text-decoration: underline; }
+    a.cert-download-link:hover { text-decoration: underline; }
+    .not-filtered-msg { margin-top: 1rem; padding: 1rem 1.25rem; border-radius: 16px; font-size: 0.95rem; }
+    .not-filtered-msg.has-issues { background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); color: #92400e; }
+  </style>
+</head>
+<body>
+  <div class="page-wrap">
+    {back_to_tools_html}
+    <div class="status-badge">בדיקת סינון</div>
+    <h1 class="page-head">בדיקת חיבור לסינון</h1>
+
+    <div id="progress-area" class="progress-area">
+      <div class="spinner"></div>
+      <div class="spinner-dots"><span></span><span></span><span></span></div>
+      <div class="progress-text" id="progress-text">בודק אם הגלישה דרך הסינון...</div>
+    </div>
+
+    <div id="summary" style="display:none;"></div>
+    <div id="not-filtered-msg" style="display:none;" class="not-filtered-msg"></div>
+  </div>
+  <script>
+    (function() {
+      var MAX_CLOCK_SKEW_SEC = 60;
+      var CERT_TIMEOUT_MS = 8000;
+      var progressArea = document.getElementById('progress-area');
+      var progressText = document.getElementById('progress-text');
+      var summaryEl = document.getElementById('summary');
+      var notFilteredEl = document.getElementById('not-filtered-msg');
+      var finished = false;
+
+      var filterCheckUrlEl = document.querySelector('meta[name="filter-check-url"]');
+      var certBaseUrlEl = document.querySelector('meta[name="cert-base-url"]');
+      var filterCheckUrl = filterCheckUrlEl ? (filterCheckUrlEl.getAttribute('content') || '').trim() : '';
+      var certBaseUrlRaw = certBaseUrlEl ? (certBaseUrlEl.getAttribute('content') || '').trim().replace(/\/?$/, '') : '';
+      var certBaseUrl = (certBaseUrlRaw && certBaseUrlRaw.indexOf('{') === -1) ? certBaseUrlRaw : (location.origin + '/diagnostic/cert');
+
+      var connectionFilteredEl = document.querySelector('meta[name="connection-filtered"]');
+      var connectionFiltered = connectionFilteredEl ? (connectionFilteredEl.getAttribute('content') || '').toLowerCase() === 'true' : true;
+
+      var osNames = { windows: 'Windows', mac: 'Mac', ios: 'iPhone/iPad', android: 'Android', linux: 'Linux' };
+      function getCertProblemHtml() {
+        var ua = navigator.userAgent || '';
+        var isWin = /Win|Windows/i.test(ua);
+        var isIOS = /iPhone|iPad|iPod/i.test(ua);
+        var isAndroid = /Android/i.test(ua);
+        var isMac = /Mac/i.test(ua) && !/iPhone|iPad/i.test(ua);
+        var os = isWin ? 'windows' : (isIOS ? 'ios' : (isAndroid ? 'android' : (isMac ? 'mac' : 'linux')));
+        var osName = osNames[os] || 'המכשיר שלך';
+        var certUrl = (certBaseUrl || (location.origin + '/diagnostic/cert')) + '?os=' + os;
+        var link = '<a href="' + certUrl + '" download target="_blank" rel="noopener" class="cert-download-link">לחץ כאן להורדת תעודת אבטחה ל־' + osName + '</a>';
+        var hint = '';
+        if (isIOS) hint = 'הורד את הקובץ, התקן את הפרופיל בהגדרות, ואז הפעל אמון בהגדרות > כללי > אודות > תעודות אבטחה.';
+        else if (isAndroid) hint = 'הורד את הקובץ והתקן אותו כתעודת אבטחה בהגדרות המכשיר.';
+        else if (isWin) hint = 'הורד את הקובץ והתקן אותו (למשל בלחיצה כפולה או דרך תחנת השירות).';
+        else if (isMac) hint = 'הורד את הקובץ ופתח אותו – הוא יירשם ב־Keychain.';
+        else hint = 'הורד את הקובץ והתקן אותו כתעודת אבטחה במערכת.';
+        return 'תעודת האבטחה לא מותקנת במכשיר. ' + link + '. ' + hint;
+      }
+
+      function showNotFilteredIfNeeded() {
+        if (!connectionFiltered && notFilteredEl) {
+          notFilteredEl.style.display = 'block';
+          notFilteredEl.className = 'not-filtered-msg has-issues';
+          notFilteredEl.innerHTML = 'החיבור שלך לא מסונן כרגע. שירות הסינון זמין רק כשהמכשיר משויך לחשבון.';
+        }
+      }
+
+      function showResult(isOk, problemText, isCertProblem) {
+        if (finished) return;
+        finished = true;
+        progressArea.style.display = 'none';
+        summaryEl.style.display = 'block';
+        if (isOk) {
+          summaryEl.className = 'all-ok';
+          summaryEl.textContent = 'לא נמצאו בעיות';
+        } else {
+          summaryEl.className = 'has-issues';
+          summaryEl.innerHTML = (isCertProblem ? getCertProblemHtml() : problemText);
+        }
+        showNotFilteredIfNeeded();
+      }
+
+      function setProgressText(txt) { if (progressText) progressText.textContent = txt; }
+
+      function isSameOrigin(checkUrl) {
+        try {
+          var u = new URL(checkUrl);
+          return u.origin === location.origin;
+        } catch (e) { return false; }
+      }
+
+      if (!filterCheckUrl) {
+        setProgressText('בודק שעון ותעודת אבטחה...');
+        runClockAndCertChecks();
+        return;
+      }
+
+      if (!isSameOrigin(filterCheckUrl)) {
+        setProgressText('בודק שעון ותעודת אבטחה...');
+        runClockAndCertChecks();
+        return;
+      }
+
+      fetch(filterCheckUrl, { cache: 'no-store' }).then(function(res) {
+        if (!res.ok) {
+          showResult(false, 'נראה שהגלישה לא עוברת דרך שרת הסינון. נסה לפתוח את הדף מכתובת הסינון (filter.check) או לוודא שהמכשיר מוגדר לגלישה דרך הפרוקסי.', false);
+          return;
+        }
+        return res.json().then(function(data) {
+          if (!data || data.filtered !== true) {
+            showResult(false, 'נראה שהגלישה לא עוברת דרך שרת הסינון. נסה לפתוח את הדף מכתובת הסינון (filter.check) או לוודא שהמכשיר מוגדר לגלישה דרך הפרוקסי.', false);
+            return;
+          }
+          setProgressText('בודק שעון ותעודת אבטחה...');
+          runClockAndCertChecks();
+        }).catch(function() {
+          showResult(false, 'נראה שהגלישה לא עוברת דרך שרת הסינון. נסה לפתוח את הדף מכתובת הסינון (filter.check) או לוודא שהמכשיר מוגדר לגלישה דרך הפרוקסי.', false);
+        });
+      }).catch(function() {
+        showResult(false, 'נראה שהגלישה לא עוברת דרך שרת הסינון. נסה לפתוח את הדף מכתובת הסינון (filter.check) או לוודא שהמכשיר מוגדר לגלישה דרך הפרוקסי.', false);
+      });
+
+      function runClockAndCertChecks() {
+        var serverTimeEl = document.querySelector('meta[name="server-time"]');
+        var serverTime = serverTimeEl ? parseInt(serverTimeEl.getAttribute('content'), 10) : 0;
+        var clientTime = Math.floor(Date.now() / 1000);
+        var skew = serverTime ? Math.abs(clientTime - serverTime) : 0;
+
+        if (!serverTime) {
+          showResult(false, 'לא ניתן להשלים את הבדיקה. נסה לרענן את הדף.', false);
+          return;
+        }
+        if (skew > MAX_CLOCK_SKEW_SEC) {
+          showResult(false, 'השעון במכשיר לא מסונכרן. כוון את השעון בהגדרות המכשיר ונסה שוב.', false);
+          return;
+        }
+
+        setProgressText('בודק תעודת אבטחה (HTTPS)...');
+        var certTimeout = setTimeout(function() {
+          if (!finished) showResult(false, null, true);
+        }, CERT_TIMEOUT_MS);
+
+        fetch('https://example.com', { cache: 'no-store', mode: 'no-cors' }).then(function(res) {
+          clearTimeout(certTimeout);
+          showResult(true);
+        }).catch(function() {
+          clearTimeout(certTimeout);
+          showResult(false, null, true);
+        });
+      }
+    })();
+  </script>
+</body>
+</html>"""

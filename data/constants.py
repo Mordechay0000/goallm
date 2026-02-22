@@ -49,6 +49,13 @@ PROXY_AUTH = (os.environ.get("PROXY_AUTH") or DEFAULT_PROXY_AUTH).strip()
 _raw_bind = (os.environ.get("FILTER_BIND_BASE_URL") or CRM_BASE_URL).strip().rstrip("/")
 FILTER_BIND_BASE_URL = None if _raw_bind.lower() in ("off", "0", "false", "") else _raw_bind
 
+# כתובת ה־host של דף אבחון הסינון – גישה דרך הפרוקסי מפנה ל־CRM/diagnostic.
+FILTER_DIAGNOSTIC_HOST = "1.2.3.4"
+FILTER_DIAGNOSTIC_HOST_ALIAS = "filter.check"
+
+# תיקיית תעודות mitmproxy (להגשת הורדת תעודה מדף האבחון ב־CRM). ברירת מחדל: ~/.mitmproxy
+FILTER_CERT_DIR = os.environ.get("FILTER_CERT_DIR") or os.path.expanduser("~/.mitmproxy")
+
 # תוקף טוקן Surf בשניות – אחרי הזמן הזה הטוקן לא תקף לאימות משתמש מפרוקסי ל-CRM.
 SURF_TOKEN_TTL_SEC = 300
 
