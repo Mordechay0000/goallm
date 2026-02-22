@@ -77,7 +77,7 @@ class URLPolicyResolver:
         return result.rstrip("/") if result != "/" else "/"
 
     def _normalize_url(self, url: str) -> tuple[str, str]:
-        """Normalize URL before matching: scheme, domain (lowercase, collapse ..), path (//, ., ..)."""
+        """Normalize URL before matching: scheme, domain (lowercase, collapse .., strip www.), path+query (//, ., ..)."""
         u = (url or "").strip()
         if "://" not in u:
             u = "https://" + u
@@ -86,7 +86,14 @@ class URLPolicyResolver:
         while ".." in domain:
             domain = domain.replace("..", ".")
         domain = ".".join(p for p in domain.split(".") if p)
-        path = self._normalize_path(parsed.path or "")
+        if domain.startswith("www."):
+            domain = domain[4:]
+        path = parsed.path or ""
+        if parsed.query:
+            path = path + "?" + parsed.query
+        path = self._normalize_path(path)
+        # Lowercase path (and query) so matching is case-insensitive; CRM stores rules with lowercased URL
+        path = path.lower()
 
         self._log(f"Normalized URL -> domain={domain}, path={path}")
         return domain, path
@@ -94,11 +101,17 @@ class URLPolicyResolver:
     # ---------- Matching logic ----------
 
     def _domain_matches(self, rule_domain: str, domain: str) -> bool:
-        if rule_domain.startswith("*."):
-            base = rule_domain[2:]
+        # Normalize rule_domain: treat www. like non-www for matching
+        r = (rule_domain or "").strip()
+        if r.startswith("www."):
+            r = r[4:]
+        if r.startswith("*."):
+            base = r[2:]
+            if base.startswith("www."):
+                base = base[4:]
             match = domain == base or domain.endswith("." + base)
         else:
-            match = domain == rule_domain
+            match = domain == r
 
         self._log(
             f"Domain match check: rule={rule_domain}, target={domain}, result={match}"
@@ -110,7 +123,8 @@ class URLPolicyResolver:
             self._log("Path match: rule has no path -> match=True")
             return True
 
-        rp = rule_path.rstrip("/") if rule_path != "/" else rule_path
+        rp = (rule_path.rstrip("/") if rule_path != "/" else rule_path).lower()
+        path = path.lower()
         if path != "/" and path.endswith("/"):
             path = path[:-1]
         if not path:

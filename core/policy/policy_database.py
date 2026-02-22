@@ -371,7 +371,7 @@ def get_core_resolver_db_path() -> str:
     return str(_db_path)
 
 
-FILTER_SWITCH_KEYS = ("url_policy", "text_filter", "image_filter", "embedded_image_filter", "file_download_filter")
+FILTER_SWITCH_KEYS = ("url_policy", "text_filter", "image_filter", "embedded_image_filter", "file_download_filter", "surf_widget")
 
 
 def get_filter_switches() -> Dict[str, bool]:
@@ -469,6 +469,14 @@ def _parse_tags(tags_val: Optional[str]) -> List[str]:
     return [t.strip() for t in tags_val.split(",") if t.strip()]
 
 
+def _normalize_domain_strip_www(domain: str) -> str:
+    """Normalize domain: strip and lowercase; remove leading www. so www.example.com -> example.com."""
+    d = (domain or "").strip().lower()
+    if d.startswith("www."):
+        return d[4:]
+    return d
+
+
 def validate_policy(domain: str, path: Optional[str] = None,
                     policy_type: str = "*", state: str = "block",
                     tags: Optional[List[str]] = None) -> Optional[str]:
@@ -514,6 +522,7 @@ def add_policy(domain: str, path: Optional[str] = None,
     if error:
         raise ValueError(error)
 
+    domain = _normalize_domain_strip_www(domain)
     now = int(datetime.now().timestamp())
     path = path.strip() if path else None
     tags_str = _tags_to_str(tags) if tags else None
@@ -575,6 +584,7 @@ def update_policy(policy_id: int, domain: Optional[str] = None,
     if error:
         raise ValueError(error)
 
+    new_domain = _normalize_domain_strip_www(new_domain)
     now = int(datetime.now().timestamp())
     new_path = new_path.strip() if new_path else None
     new_tags_str = _tags_to_str(new_tags) if isinstance(new_tags, list) else (new_tags if isinstance(new_tags, str) else _tags_to_str(current.get("tags")))
