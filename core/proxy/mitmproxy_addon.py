@@ -24,14 +24,26 @@ import urllib.request
 from mitmproxy import ctx, http
 
 from core.flow.http_flow_processor import process_http_response
+from core.flow.site_policy_pages import (
+    get_blocked_page_bytes,
+    get_send_for_review_page_bytes,
+)
 from core.logger.logging_config import setup_logging
 from core.policy.policy_database import (
     get_user_id_for_ip,
     get_active_traffic_session_id,
     add_traffic_log_entry,
+    get_filter_switches,
 )
+from core.policy.policy_loader import get_policy_resolver
 from core.proxy.utils import format_flow_error, format_response_error
-from data.constants import FILTER_BIND_BASE_URL, CRM_PROXY_SECRET
+from data.constants import (
+    FILTER_BIND_BASE_URL,
+    CRM_PROXY_SECRET,
+    CRM_BASE_URL,
+    FILTER_DIAGNOSTIC_HOST,
+    FILTER_DIAGNOSTIC_HOST_ALIAS,
+)
 from data.landing_pages import UNBOUND_IP_HTML
 
 setup_logging()
@@ -58,6 +70,24 @@ def _client_ip_from_flow(flow: http.HTTPFlow) -> str | None:
     return None
 
 
+def _request_host_normalized(flow: http.HTTPFlow) -> str:
+    """Host from request without port (e.g. '1.2.3.4:80' -> '1.2.3.4')."""
+    raw = (flow.request.host or "").strip()
+    if ":" in raw:
+        return raw.split(":")[0].strip()
+    return raw
+
+
+def _is_request_to_diagnostic_host(flow: http.HTTPFlow) -> bool:
+    """True if this request is for the filter diagnostic page (1.2.3.4 or filter.check)."""
+    if not flow.request:
+        return False
+    host = _request_host_normalized(flow).lower()
+    return host == (FILTER_DIAGNOSTIC_HOST or "").lower() or host == (
+        FILTER_DIAGNOSTIC_HOST_ALIAS or ""
+    ).lower()
+
+
 def _is_request_to_bind_host(flow: http.HTTPFlow) -> bool:
     """True if this request is going to the bind server (avoid redirect loop)."""
     if not FILTER_BIND_BASE_URL or not flow.request:
@@ -81,6 +111,19 @@ class FilterAddon:
             flow.metadata = {}
         # For traffic recording: measure real request duration (request → response)
         flow.metadata["request_start_time"] = time.perf_counter()
+
+        # Diagnostic host (filter.check / 1.2.3.4) – הפניה ל־CRM/diagnostic בלבד.
+        if _is_request_to_diagnostic_host(flow):
+            diagnostic_url = f"{CRM_BASE_URL.rstrip('/')}/diagnostic"
+            flow.response = http.Response.make(
+                302,
+                b"",
+                {"Location": diagnostic_url, "Content-Type": "text/html; charset=utf-8"},
+            )
+            flow.metadata["redirected_to_bind"] = True
+            logger.info("Redirecting diagnostic host to %s", diagnostic_url)
+            return
+
         # IP of the surfer (real client): from X-Forwarded-For / X-Real-IP when behind proxy, else connection peername
         client_ip = _client_ip_from_flow(flow)
         # When the request goes to the bind host (CRM), inject the real client IP so the CRM sees the same IP
@@ -131,6 +174,55 @@ class FilterAddon:
                         logger.debug("Touch IP failed (non-fatal): %s", e)
                 t = threading.Thread(target=_touch_ip_background, daemon=True)
                 t.start()
+            # Apply URL policy at request time for every request: only URLs defined as allowed may load.
+            # Any other URL (block/review) is blocked here; we respond with the appropriate HTML page
+            # (blocked or send-for-review) so the user sees the right message. This blocks all resource
+            # types (pages, video, API, etc.) from non-allowed addresses.
+            if get_filter_switches().get("url_policy", True):
+                try:
+                    resolver = get_policy_resolver(user_id)
+                    rule = resolver.resolve(flow.request.url, "*")
+                    if rule is not None:
+                        state = rule.get("state", "block")
+                        if state == "block":
+                            body = get_blocked_page_bytes(
+                                request_url=flow.request.url,
+                                rule=rule,
+                                tags=rule.get("tags") or [],
+                                block_reason=rule.get("block_reason") or "",
+                            )
+                            flow.response = http.Response.make(
+                                200,
+                                body,
+                                {"Content-Type": "text/html; charset=utf-8", "Content-Length": str(len(body))},
+                            )
+                            flow.metadata["policy_handled_in_request"] = True
+                            flow.metadata["traffic_status"] = "blocked"
+                            logger.info(
+                                "Request blocked by policy - URL: %s - rule: %s",
+                                flow.request.url,
+                                rule.get("domain") or rule.get("path") or "—",
+                            )
+                            return
+                        if state == "review":
+                            body = get_send_for_review_page_bytes(request_url=flow.request.url)
+                            flow.response = http.Response.make(
+                                200,
+                                body,
+                                {
+                                    "Content-Type": "text/html; charset=utf-8",
+                                    "Content-Length": str(len(body)),
+                                    "Cache-Control": "no-store, no-cache, must-revalidate",
+                                    "Pragma": "no-cache",
+                                    "Expires": "0",
+                                },
+                            )
+                            flow.metadata["policy_handled_in_request"] = True
+                            flow.metadata["traffic_status"] = "review"
+                            logger.info("Request send-for-review by policy - URL: %s", flow.request.url)
+                            return
+                except Exception as e:
+                    logger.warning("Request-time policy check failed for %s: %s", flow.request.url, e)
         else:
             flow.metadata["user_id"] = get_user_id_for_ip(client_ip) if client_ip else None
 
