@@ -110,12 +110,14 @@ def inject_surf_widget(
     rule: Optional[dict],
     encoding: str = "utf-8",
     is_admin: bool = False,
+    inject_video: bool = True,
 ) -> bytes:
     """
     Inject the surf widget (tab + panel) and config script before </body>.
     Only injects when user_id is set (bound connection). Preserves encoding.
     - is_admin=False: only "דיווח" (report) link.
     - is_admin=True: full panel with admin quick-rule; "החל" opens a new page that applies and shows summary.
+    - inject_video=False: do not inject the video "שלח לבדיקה" buttons (per-rule video_filter_enabled).
     """
     if user_id is None:
         logger.debug("surf_widget: skip inject (user_id is None) url=%s", (current_url or "")[:80])
@@ -179,7 +181,8 @@ def inject_surf_widget(
   root.innerHTML = '<div style="position:fixed;left:0;top:50%;transform:translateY(-50%);z-index:2147483646;background:#0D1A3B;color:#fff;padding:12px 16px;border-radius:0 8px 8px 0;font-size:13px;font-family:system-ui;direction:rtl;">סרגל דיווח – שגיאה: ' + errMsg + '</div>';
   }}
 }})();
-</script>
+</script>"""
+    video_script = """
 <script>
 (function(){{
   var crmBase = (typeof window !== "undefined" && window.__goallm_crm_frontend) ? window.__goallm_crm_frontend : "";
@@ -237,13 +240,15 @@ def inject_surf_widget(
               if (n.tagName === "VIDEO") addButton(n);
               if (n.querySelectorAll) n.querySelectorAll("video").forEach(addButton);
             }}
-          });
+          }});
       }});
     }});
     obs.observe(document.body, {{ childList: true, subtree: true }});
   }}
 }})();
 </script>"""
+    if not is_admin:
+        pass  # widget_html = minimal widget (set above)
     else:
         # Full widget: admin panel visible; "החל" opens new page to apply and show summary.
         widget_html = f"""<script>
@@ -373,71 +378,10 @@ def inject_surf_widget(
     root.innerHTML = '<div style="position:fixed;left:0;top:50%;transform:translateY(-50%);z-index:2147483646;background:#0D1A3B;color:#fff;padding:12px 16px;border-radius:0 8px 8px 0;font-size:13px;font-family:system-ui;direction:rtl;">סרגל דיווח – שגיאה: ' + errMsg + '</div>';
   }}
 }})();
-</script>
-<script>
-(function(){{
-  var crmBase = (typeof window !== "undefined" && window.__goallm_crm_frontend) ? window.__goallm_crm_frontend : "";
-  if (!crmBase) return;
-  function filenameFromUrl(url) {{
-    try {{
-      var path = (url || "").split("?")[0];
-      if (path && path.indexOf("/") !== -1) path = path.split("/").pop();
-      return (path && path.length) ? decodeURIComponent(path) : "וידאו";
-    }} catch (e) {{ return "וידאו"; }}
-  }}
-  function addButton(video) {{
-    if (video.dataset.goallmSendReview) return;
-    video.dataset.goallmSendReview = "1";
-    var src = video.currentSrc || video.src || "";
-    if (!src && video.querySelector) {{
-      var first = video.querySelector("source");
-      if (first && first.src) src = first.src;
-    }}
-    if (!src || src.indexOf("data:") === 0 || src.indexOf("blob:") === 0) return;
-    var filename = filenameFromUrl(src);
-    var redirect = "/support/new?attach=file&file_url=" + encodeURIComponent(src) + "&filename=" + encodeURIComponent(filename);
-    var href = crmBase.replace(/\\/$/, "") + "/login?redirect=" + encodeURIComponent(redirect);
-    var wrapper = document.createElement("div");
-    wrapper.style.cssText = "position:relative;display:inline-block;max-width:100%;";
-    var parent = video.parentNode;
-    if (parent) {{
-      parent.insertBefore(wrapper, video);
-      wrapper.appendChild(video);
-      var btnWrap = document.createElement("div");
-      btnWrap.style.cssText = "position:absolute;bottom:8px;left:8px;right:8px;z-index:10;display:flex;justify-content:center;pointer-events:none;";
-      var a = document.createElement("a");
-      a.href = href;
-      a.target = "_blank";
-      a.rel = "noopener";
-      a.textContent = "שלח לבדיקה";
-      a.style.cssText = "pointer-events:auto;padding:6px 12px;background:#2F6CFF;color:#fff;border-radius:6px;text-decoration:none;font-size:13px;font-family:system-ui,-apple-system,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,0.2);direction:rtl;";
-      btnWrap.appendChild(a);
-      wrapper.appendChild(btnWrap);
-    }}
-  }}
-  function run() {{
-    try {{
-      document.querySelectorAll("video").forEach(function(v) {{ addButton(v); }});
-    }} catch (e) {{}}
-  }}
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", run);
-  else run();
-  if (typeof MutationObserver !== "undefined" && document.body) {{
-    var obs = new MutationObserver(function(mutations) {{
-      mutations.forEach(function(m) {{
-        if (m.addedNodes)
-          m.addedNodes.forEach(function(n) {{
-            if (n && n.nodeType === 1) {{
-              if (n.tagName === "VIDEO") addButton(n);
-              if (n.querySelectorAll) n.querySelectorAll("video").forEach(addButton);
-            }}
-          });
-      }});
-    }});
-    obs.observe(document.body, {{ childList: true, subtree: true }});
-  }}
-}})();
 </script>"""
+
+    if inject_video:
+        widget_html = widget_html + video_script
 
     # Prevent </script> in script body from closing the tag (escape so browser does not end script early)
     script_open = widget_html.find("<script>")
