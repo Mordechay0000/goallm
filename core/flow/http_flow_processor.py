@@ -17,11 +17,13 @@ from core.flow.site_policy_pages import (
     get_send_for_review_file_page_bytes,
 )
 from core.filters.image.embedded_image_filter import filter_embedded_images_in_html
-from core.filters.text.text_filter import filter_text_content, _encode_debug_b64
+from core.filters.text.text_filter import filter_text_content, _encode_debug_b64, format_text_filter_debug_readable
 from core.filters.image.image_status_manager import get_image_with_status
+from core.filters.pdf.pdf_filter import filter_pdf_response
+from core.filters.search.google_search_filter import filter_google_search_html, is_google_search_page
 from core.policy.policy_loader import get_policy_resolver
-from core.policy.policy_database import get_profile_mode, get_filter_switches
-from data.constants import CRM_FRONTEND_URL
+from core.policy.policy_database import get_profile_mode, get_filter_switches, get_site_injection_for_url
+from data.constants import CRM_FRONTEND_URL, PUBLIC_FILE_SHARE_DOMAINS, FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +123,50 @@ def _is_content_type_already_filtered(flow: http.HTTPFlow) -> bool:
     return False
 
 
+def _is_pdf_response(flow: http.HTTPFlow) -> bool:
+    """True when response is application/pdf."""
+    ct = (flow.response.headers.get("content-type") or "").lower().split(";")[0].strip()
+    return ct == "application/pdf"
+
+
+def _blocked_traffic_status(rule: dict, is_file: bool) -> str:
+    """Return traffic_status for a block: blocked_user / blocked_global or file_blocked_user / file_blocked_global."""
+    prefix = "file_blocked_" if is_file else "blocked_"
+    if rule.get("source") == "global":
+        return prefix + "global"
+    if rule.get("source") == "user" or rule.get("block_reason") == "user_settings":
+        return prefix + "user"
+    return prefix + "global"
+
+
+def _is_public_file_share_request(url: str) -> bool:
+    """True when request URL is a public file-share link (domain in list and path/query indicates file)."""
+    if not url or not PUBLIC_FILE_SHARE_DOMAINS:
+        return False
+    try:
+        parsed = urlparse(url if "://" in url else f"https://{url}")
+        host = (parsed.hostname or "").lower().rstrip(".")
+        if host.startswith("www."):
+            host = host[4:]
+        if host not in PUBLIC_FILE_SHARE_DOMAINS:
+            return False
+        path = (parsed.path or "").lower()
+        query = (parsed.query or "").lower()
+        # Paths that indicate file/view: drive /file/d/, /open, dropbox /s/, we.tl/xxx, etc.
+        if "/file/" in path or "/open" in path or "/view" in path or "/sharing/" in path:
+            return True
+        if path.startswith("/s/") or path.count("/") >= 2:  # dropbox.com/s/xxx, transfer.sh/xxx
+            return True
+        if "id=" in query or "url=" in query:  # drive open?id=, etc.
+            return True
+        # For domains that are purely file-sharing (we.tl, file.io, transfer.sh), any path is a file link
+        if host in ("we.tl", "file.io", "transfer.sh", "tmpfiles.org", "send.any.run"):
+            return len(path) > 1
+        return False
+    except Exception:
+        return False
+
+
 def _apply_site_policy_for_html(flow: http.HTTPFlow, user_id: Optional[int] = None) -> Tuple[bool, Optional[dict]]:
     """Apply site policy for HTML responses. Returns (replaced, rule). If allow: (False, rule); else (True, None)."""
     url = flow.request.url
@@ -137,12 +183,12 @@ def _apply_site_policy_for_html(flow: http.HTTPFlow, user_id: Optional[int] = No
                     block_reason=rule.get("block_reason") or "",
                 )
                 flow.response = http.Response.make(
-                    200,
+                    FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS,
                     body,
                     {"Content-Type": "text/html; charset=utf-8", "Content-Length": str(len(body))},
                 )
                 if getattr(flow, "metadata", None) is not None:
-                    flow.metadata["traffic_status"] = "blocked"
+                    flow.metadata["traffic_status"] = _blocked_traffic_status(rule, is_file=False)
                 logger.info(
                     "Site blocked by policy - URL: %s - rule: %s - reason: %s",
                     url,
@@ -153,7 +199,7 @@ def _apply_site_policy_for_html(flow: http.HTTPFlow, user_id: Optional[int] = No
             if state == "review":
                 body = get_send_for_review_page_bytes(request_url=url)
                 flow.response = http.Response.make(
-                    200,
+                    FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS,
                     body,
                     {
                         "Content-Type": "text/html; charset=utf-8",
@@ -180,7 +226,7 @@ def _apply_site_policy_for_html(flow: http.HTTPFlow, user_id: Optional[int] = No
                 return (False, rule)
         body = get_send_for_review_page_bytes(request_url=url)
         flow.response = http.Response.make(
-            200,
+            FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS,
             body,
             {
                 "Content-Type": "text/html; charset=utf-8",
@@ -196,25 +242,91 @@ def _apply_site_policy_for_html(flow: http.HTTPFlow, user_id: Optional[int] = No
         return (True, None)
     except Exception as e:
         logger.warning("Policy resolution failed for HTML %s: %s; showing send-for-review", url, e)
-        body = get_send_for_review_page_bytes(request_url=url)
-        flow.response = http.Response.make(
-            200,
-            body,
-            {
-                "Content-Type": "text/html; charset=utf-8",
-                "Content-Length": str(len(body)),
-                "Cache-Control": "no-store, no-cache, must-revalidate",
-                "Pragma": "no-cache",
-                "Expires": "0",
-            },
-        )
-        return (True, None)
+
+
+def _strip_elements_by_selectors(html_text: str, selectors: list) -> str:
+    """Remove from HTML all elements matching the given CSS selectors (server-side, before response is sent)."""
+    if not selectors:
+        return html_text
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        logger.warning("BeautifulSoup4 not available; skipping server-side hide_selectors")
+        return html_text
+    try:
+        soup = BeautifulSoup(html_text, "html.parser")
+        for sel in selectors:
+            sel = (sel or "").strip()
+            if not sel:
+                continue
+            try:
+                for el in soup.select(sel):
+                    el.decompose()
+            except Exception as e:
+                logger.debug("Selector %r failed: %s", sel, e)
+        return str(soup)
+    except Exception as e:
+        logger.warning("Server-side strip by selectors failed: %s", e)
+        return html_text
+
+
+def _apply_site_injections(html_body: bytes, url: str, encoding: str, injection: dict) -> bytes:
+    """Apply site injection: (1) strip hide_selectors from HTML in proxy, (2) head_code, (3) body_code, (4) hide script as fallback for dynamic content."""
+    try:
+        text = html_body.decode(encoding, errors="replace")
+    except Exception:
+        text = html_body.decode("utf-8", errors="replace")
+    head_code = (injection.get("head_code") or "").strip()
+    body_code = (injection.get("body_code") or "").strip()
+    hide_selectors = injection.get("hide_selectors") or []
+    if not head_code and not body_code and not hide_selectors:
+        return html_body
+    # 1) Remove matching elements from HTML in the proxy response (page already comes back without them)
+    if hide_selectors:
+        text = _strip_elements_by_selectors(text, hide_selectors)
+    import re
+    if head_code:
+        # Insert before </head> (case-insensitive)
+        head_close = re.compile(re.escape("</head>"), re.IGNORECASE)
+        if head_close.search(text):
+            text = head_close.sub(head_code + "\n</head>", text, count=1)
+        else:
+            # No </head>: append after <head>
+            head_open = re.compile(re.escape("<head>"), re.IGNORECASE)
+            if head_open.search(text):
+                text = head_open.sub("<head>\n" + head_code, text, count=1)
+            else:
+                text = head_code + "\n" + text
+    hide_script = ""
+    if hide_selectors:
+        # Run on DOMContentLoaded + MutationObserver so dynamically added content (SPA/NodeBB) is also hidden
+        selectors_js = json.dumps(hide_selectors)
+        hide_script = (
+            "<script>(function(){var s=%s;function hide(){try{s.forEach(function(sel){"
+            "document.querySelectorAll(sel).forEach(function(el){el.style.setProperty('display','none','important');});"
+            "});}catch(e){}}"
+            "function run(){hide();if(document.body){var o=new MutationObserver(hide);o.observe(document.body,{childList:true,subtree:true});}}"
+            "if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',run);}else{setTimeout(run,0);}"
+            "})();</script>"
+        ) % selectors_js
+    body_inject = (body_code + "\n" + hide_script) if (body_code and hide_script) else (body_code or hide_script)
+    if body_inject:
+        body_close = re.compile(re.escape("</body>"), re.IGNORECASE)
+        if body_close.search(text):
+            text = body_close.sub(body_inject + "\n</body>", text, count=1)
+        else:
+            text = text + "\n" + body_inject
+    try:
+        return text.encode(encoding, errors="replace")
+    except Exception:
+        return text.encode("utf-8", errors="replace")
 
 
 def process_http_response(flow: http.HTTPFlow) -> None:
-    """Process HTTP response. Each filter (URL policy, text, image, embedded image) works independently per global switches.
+    """Process HTTP response. Filters are independent: each runs when its switch is on, regardless of other switches.
+    When all are on, order is: (1) URL policy – block/review then no further filters; (2) text; (3) embedded images; (4) file-share; (5) PDF; (6) file download; (7) direct images.
     When flow.metadata has user_id (from IP binding), that user's profile and rules are used.
-    Sets flow.metadata['traffic_status'] for traffic recording: open, blocked, review, cert_missing."""
+    Sets flow.metadata['traffic_status'] for traffic recording: open, blocked, review, text_filter_blocked, file_review, file_blocked, cert_missing, error."""
     url = flow.request.url
     referer_url = flow.request.headers.get("Referer")
     method = flow.request.method
@@ -235,6 +347,37 @@ def process_http_response(flow: http.HTTPFlow) -> None:
             user_id,
         )
         return
+
+    # Public file-share: when file_share_block is on, show "שלח לבדיקה" for any file-share URL (unless rule disables file filter for this site)
+    if switches.get("file_share_block", True) and _is_public_file_share_request(url):
+        file_rule = None
+        if switches.get("url_policy", True):
+            try:
+                file_rule = get_policy_resolver(user_id).resolve(url, "html") or get_policy_resolver(user_id).resolve(url, "*")
+            except Exception:
+                pass
+        if file_rule is None or file_rule.get("file_filter_enabled", True):
+            filename = _get_filename_from_response(flow) or "קובץ"
+            body = get_send_for_review_file_page_bytes(file_url=url, filename=filename)
+            flow.response = http.Response.make(
+                FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS,
+                body,
+                {
+                    "Content-Type": "text/html; charset=utf-8",
+                    "Content-Length": str(len(body)),
+                    "Cache-Control": "no-store, no-cache, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
+                },
+            )
+            if getattr(flow, "metadata", None) is not None:
+                flow.metadata["traffic_status"] = "file_review"
+            logger.info(
+                "Public file-share: showing send-for-review - URL: %s",
+                url[:80] if url else "",
+            )
+            return
+        logger.debug("Public file-share: skipped (file_filter_enabled=False for rule) - URL: %s", url[:80] if url else "")
 
     logger.info("Processing HTTP response - Method: %s, URL: %s (user_id=%s)", method, url, user_id)
     logger.debug(
@@ -290,6 +433,7 @@ def process_http_response(flow: http.HTTPFlow) -> None:
                     logger.debug("text_filter: result block_page=%s filtered_len=%s reason=%s", block_page, len(filtered), block_reason)
                     if block_page:
                         block_debug_b64 = _encode_debug_b64(debug_info) if debug_info else ""
+                        block_debug_readable = format_text_filter_debug_readable(block_reason, debug_info or {}) if debug_info else ""
                         body = get_blocked_page_bytes(
                             request_url=url,
                             rule=rule,
@@ -297,14 +441,15 @@ def process_http_response(flow: http.HTTPFlow) -> None:
                             block_reason="text_filter",
                             block_reason_detail=block_reason,
                             block_debug_b64=block_debug_b64,
+                            block_debug_readable=block_debug_readable,
                         )
                         flow.response = http.Response.make(
-                            200,
+                            FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS,
                             body,
                             {"Content-Type": "text/html; charset=utf-8", "Content-Length": str(len(body))},
                         )
                         if getattr(flow, "metadata", None) is not None:
-                            flow.metadata["traffic_status"] = "blocked"
+                            flow.metadata["traffic_status"] = "text_filter_blocked"
                         logger.info(
                             "Page blocked by text filter - URL: %s - cause: %s",
                             url,
@@ -350,12 +495,24 @@ def process_http_response(flow: http.HTTPFlow) -> None:
                     if part.startswith("charset="):
                         enc = part.split("=", 1)[1].strip().strip('"')
                         break
-            if switches.get("surf_widget", True):
+            if switches.get("google_search_filter", True) and is_google_search_page(url):
+                try:
+                    body_to_send = filter_google_search_html(
+                        body_to_send,
+                        page_url=url,
+                        encoding=enc,
+                        user_id=user_id,
+                    )
+                    logger.debug("Google search filter applied - URL: %s", url[:80] if url else "")
+                except Exception as e:
+                    logger.warning("Google search filter failed for %s: %s", url, e)
+            if switches.get("surf_widget", True) and (rule is None or rule.get("surf_widget_enabled", True)):
                 from core.proxy.surf_widget import inject_surf_widget, get_surf_user_is_admin
                 is_admin = get_surf_user_is_admin(user_id)
+                inject_video = rule is None or rule.get("video_filter_enabled", True)
                 body_before_len = len(body_to_send)
                 body_to_send = inject_surf_widget(
-                    body_to_send, url, user_id, rule, encoding=enc, is_admin=is_admin
+                    body_to_send, url, user_id, rule, encoding=enc, is_admin=is_admin, inject_video=inject_video
                 )
                 logger.info(
                     "surf_widget: injected url=%s user_id=%s is_admin=%s body_before=%s body_after=%s",
@@ -365,6 +522,14 @@ def process_http_response(flow: http.HTTPFlow) -> None:
                     body_before_len,
                     len(body_to_send),
                 )
+            # Site injections (admin-defined head/body code and hide selectors per site)
+            try:
+                injection = get_site_injection_for_url(url)
+                if injection:
+                    body_to_send = _apply_site_injections(body_to_send, url, enc, injection)
+                    logger.debug("site_injection applied for url=%s", url[:80] if url else "")
+            except Exception as e:
+                logger.warning("Site injection failed for %s: %s", url[:80] if url else "", e)
             flow.response.headers.pop("transfer-encoding", None)
             flow.response.headers.pop("content-encoding", None)
             flow.response.raw_content = body_to_send
@@ -422,31 +587,122 @@ def process_http_response(flow: http.HTTPFlow) -> None:
                 logger.warning("Text filter failed for text/json %s: %s", url, e, exc_info=True)
         return
 
-    # File download (non-image): always return send-for-review page instead of the file
+    # PDF: apply URL policy (block/review), then extract text + images, filter text and images, optional distortion warning
+    if _is_pdf_response(flow):
+        has_pdf_content = bool(flow.response.raw_content)
+        rule = None
+        if switches.get("url_policy", True) and has_pdf_content:
+            try:
+                resolver = get_policy_resolver(user_id)
+                rule = resolver.resolve(url, "html")
+                if rule is not None:
+                    state = rule.get("state", "block")
+                    if state == "block":
+                        body = get_blocked_page_bytes(
+                            request_url=url,
+                            rule=rule,
+                            tags=rule.get("tags") or [],
+                            block_reason=rule.get("block_reason") or "",
+                        )
+                        flow.response = http.Response.make(
+                            FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS,
+                            body,
+                            {"Content-Type": "text/html; charset=utf-8", "Content-Length": str(len(body))},
+                        )
+                        if getattr(flow, "metadata", None) is not None:
+                            flow.metadata["traffic_status"] = _blocked_traffic_status(rule, is_file=True)
+                        logger.info("PDF blocked by policy - URL: %s", url)
+                        return
+                    if state == "review":
+                        filename = _get_filename_from_response(flow) or "מסמך.pdf"
+                        body = get_send_for_review_file_page_bytes(file_url=url, filename=filename)
+                        flow.response = http.Response.make(
+                            FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS,
+                            body,
+                            {
+                                "Content-Type": "text/html; charset=utf-8",
+                                "Content-Length": str(len(body)),
+                                "Cache-Control": "no-store, no-cache, must-revalidate",
+                                "Pragma": "no-cache",
+                                "Expires": "0",
+                            },
+                        )
+                        if getattr(flow, "metadata", None) is not None:
+                            flow.metadata["traffic_status"] = "file_review"
+                        logger.info("PDF send-for-review by policy - URL: %s", url)
+                        return
+            except Exception as e:
+                logger.warning("Policy resolution failed for PDF %s: %s", url, e)
+        # PDF filter: run when at least one of pdf_filter_text / pdf_filter_images is on. When both off, no PDF editing.
+        pdf_filter_text = switches.get("pdf_filter_text", True)
+        pdf_filter_images = switches.get("pdf_filter_images", True)
+        if (pdf_filter_text or pdf_filter_images) and has_pdf_content and (rule is None or rule.get("state") == "allow") and (rule is None or rule.get("pdf_filter_enabled", True)):
+            try:
+                body_bytes = flow.response.content if hasattr(flow.response, "content") else flow.response.raw_content
+                if body_bytes:
+                    filtered_pdf, blocked_html, _ = filter_pdf_response(
+                        body_bytes,
+                        pdf_url=url,
+                        referer_url=referer_url,
+                        rule_context=rule,
+                        distortion_warning_enabled=False,
+                        filter_text=pdf_filter_text,
+                        filter_images=pdf_filter_images,
+                    )
+                    if blocked_html is not None:
+                        flow.response = http.Response.make(
+                            FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS,
+                            blocked_html,
+                            {"Content-Type": "text/html; charset=utf-8", "Content-Length": str(len(blocked_html))},
+                        )
+                        if getattr(flow, "metadata", None) is not None:
+                            flow.metadata["traffic_status"] = "text_filter_blocked"
+                        logger.info("PDF blocked by text filter - URL: %s", url)
+                        return
+                    if filtered_pdf is not None and filtered_pdf != body_bytes:
+                        flow.response.headers.pop("transfer-encoding", None)
+                        flow.response.headers.pop("content-encoding", None)
+                        flow.response.raw_content = filtered_pdf
+                        flow.response.headers["Content-Length"] = str(len(filtered_pdf))
+                        logger.info("PDF filtered (images/text) - URL: %s", url)
+                        return
+            except Exception as e:
+                logger.warning("PDF filter failed for %s: %s", url, e, exc_info=True)
+        return
+
+    # File download (non-image): return send-for-review page unless global switch or per-rule file_filter_enabled is off
     if _is_file_download_response(flow) and not _is_content_type_already_filtered(flow):
         if get_filter_switches().get("file_download_filter", True):
-            file_url = url
-            filename = _get_filename_from_response(flow) or "קובץ"
-            body = get_send_for_review_file_page_bytes(file_url=file_url, filename=filename)
-            flow.response = http.Response.make(
-                200,
-                body,
-                {
-                    "Content-Type": "text/html; charset=utf-8",
-                    "Content-Length": str(len(body)),
-                    "Cache-Control": "no-store, no-cache, must-revalidate",
-                    "Pragma": "no-cache",
-                    "Expires": "0",
-                },
-            )
-            if getattr(flow, "metadata", None) is not None:
-                flow.metadata["traffic_status"] = "review"
-            logger.info(
-                "File download intercepted, showing send-for-review - URL: %s, filename: %s",
-                url,
-                filename,
-            )
-            return
+            file_rule = None
+            if switches.get("url_policy", True):
+                try:
+                    file_rule = get_policy_resolver(user_id).resolve(url, "html") or get_policy_resolver(user_id).resolve(url, "*")
+                except Exception:
+                    pass
+            if file_rule is None or file_rule.get("file_filter_enabled", True):
+                file_url = url
+                filename = _get_filename_from_response(flow) or "קובץ"
+                body = get_send_for_review_file_page_bytes(file_url=file_url, filename=filename)
+                flow.response = http.Response.make(
+                    FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS,
+                    body,
+                    {
+                        "Content-Type": "text/html; charset=utf-8",
+                        "Content-Length": str(len(body)),
+                        "Cache-Control": "no-store, no-cache, must-revalidate",
+                        "Pragma": "no-cache",
+                        "Expires": "0",
+                    },
+                )
+                if getattr(flow, "metadata", None) is not None:
+                    flow.metadata["traffic_status"] = "file_review"
+                logger.info(
+                    "File download intercepted, showing send-for-review - URL: %s, filename: %s",
+                    url,
+                    filename,
+                )
+                return
+        logger.debug("File download: passed through (file_download_filter off or file_filter_enabled=False for rule) - URL: %s", url[:80] if url else "")
 
     # Direct image responses
     extracted = extract_image_content(flow)
@@ -454,17 +710,13 @@ def process_http_response(flow: http.HTTPFlow) -> None:
         logger.debug("Response is not an image, skipping processing for URL: %s", url)
         return
 
+    # URL policy for images: when url_policy is on and site is block/review, image filter still runs and returns placeholder.
+    # When site is "allow" we no longer skip – image filter always runs when its switch is on (independent).
     rule = None
     if switches.get("url_policy", True):
         try:
             resolver = get_policy_resolver(user_id)
             rule = resolver.resolve(url, "image")
-            if rule is not None and rule.get("state") == "allow":
-                if "domain" not in rule:
-                    logger.info("Image open (blacklist mode, not in list) - URL: %s", url)
-                else:
-                    logger.info("URL allowed by policy, passing through - URL: %s", url)
-                return
         except Exception as e:
             logger.warning("Policy resolution failed for %s: %s; applying filter", url, e)
     else:
@@ -473,15 +725,17 @@ def process_http_response(flow: http.HTTPFlow) -> None:
     if not switches.get("image_filter", True):
         logger.debug("Image filter disabled - passing image through - URL: %s", url)
         return
-    if rule is None:
-        try:
-            resolver = get_policy_resolver(user_id)
-            rule = resolver.resolve(url, "image")
-        except Exception:
-            pass
-    if rule is not None and not rule.get("image_filter_enabled", True):
-        logger.debug("Image filter disabled for this rule - URL: %s", url)
-        return
+    # Only skip by rule (image_filter_enabled) when url_policy is on – so filters work independently
+    if switches.get("url_policy", True):
+        if rule is None:
+            try:
+                resolver = get_policy_resolver(user_id)
+                rule = resolver.resolve(url, "image")
+            except Exception:
+                pass
+        if rule is not None and not rule.get("image_filter_enabled", True):
+            logger.debug("Image filter disabled for this rule - URL: %s", url)
+            return
 
     image_content, mime_type = extracted
     logger.info(

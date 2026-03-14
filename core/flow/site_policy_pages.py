@@ -4,7 +4,7 @@ HTML replacement pages for site-level policy: blocked and send-for-review.
 - Requests are submitted from within the user's account.
 """
 import html
-from urllib.parse import quote
+from urllib.parse import quote, urlparse, urlunparse, parse_qs, urlencode
 
 from data.constants import CRM_API_URL, CRM_FRONTEND_URL
 from data.landing_pages import (
@@ -61,6 +61,7 @@ def _blocked_page_html(
     block_reason: str = "",
     block_reason_detail: str = "",
     block_debug_b64: str = "",
+    block_debug_readable: str = "",
 ) -> str:
     tags_list = tags_list or []
     reason = (block_reason or "").strip().lower()
@@ -68,6 +69,7 @@ def _blocked_page_html(
     is_text_filter = reason == "text_filter"
     reason_detail = (block_reason_detail or "").strip()
     debug_b64 = (block_debug_b64 or "").strip()
+    debug_readable = (block_debug_readable or "").strip()
 
     if is_text_filter:
         full_request_url = request_url.replace("https://", "").replace("http://", "").strip() if request_url else ""
@@ -75,11 +77,15 @@ def _blocked_page_html(
         reason_detail_html = ""
         if reason_detail:
             reason_detail_esc = html.escape(reason_detail, quote=False)
-            reason_detail_html = f'<p class="detail"><strong>מידע נוסף לשירות הלקוחות:</strong> <code style="word-break:break-all;">{reason_detail_esc}</code></p>'
+            reason_detail_html = f'<p class="detail"><strong>סיבת חסימה:</strong> <code style="word-break:break-all;">{reason_detail_esc}</code></p>'
+        debug_readable_section = ""
+        if debug_readable:
+            debug_readable_esc = html.escape(debug_readable, quote=False)
+            debug_readable_section = f'<p class="detail" style="margin-top:0.75rem;"><strong>למה נחסם (דיבאג):</strong></p><pre class="detail" style="white-space:pre-wrap;word-break:break-word;background:#f5f5f5;padding:0.75rem;border-radius:8px;font-size:0.9rem;margin:0.25rem 0;">{debug_readable_esc}</pre>'
         debug_section = ""
         if debug_b64:
             debug_b64_esc = html.escape(debug_b64, quote=False)
-            debug_section = f'<p class="detail" style="margin-top:1rem;"><strong>מידע נוסף לשירות הלקוחות:</strong></p><textarea readonly class="readonly-debug" id="debug-b64">{debug_b64_esc}</textarea>'
+            debug_section = f'<p class="detail" style="margin-top:1rem;"><strong>מידע מלא (base64 לשירות):</strong></p><textarea readonly class="readonly-debug" id="debug-b64">{debug_b64_esc}</textarea>'
         return f"""<!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
@@ -99,6 +105,7 @@ def _blocked_page_html(
         <p class="details-head">פרטים</p>
         <p class="detail info-url"><strong>כתובת הדף:</strong> {full_url_display}</p>
         {reason_detail_html}
+        {debug_readable_section}
         {debug_section}
     </div>
 </body>
@@ -227,6 +234,57 @@ def get_send_for_review_file_page_bytes(file_url: str = "", filename: str = "") 
     return html_str.encode("utf-8")
 
 
+def _pdf_continue_url(pdf_url: str) -> str:
+    """Add goallm_pdf_confirm=1 to the PDF URL for the 'continue to PDF' button."""
+    if not (pdf_url or "").strip():
+        return "#"
+    u = (pdf_url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    try:
+        parsed = urlparse(u)
+        qs = parse_qs(parsed.query, keep_blank_values=True)
+        qs["goallm_pdf_confirm"] = ["1"]
+        new_query = urlencode(qs, doseq=True)
+        return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, parsed.fragment))
+    except Exception:
+        return pdf_url + ("&" if "?" in pdf_url else "?") + "goallm_pdf_confirm=1"
+
+
+def _pdf_warning_page_html(pdf_url: str = "") -> str:
+    """HTML page shown before opening a PDF: distortion warning + button to continue to PDF."""
+    continue_url = _pdf_continue_url(pdf_url)
+    continue_url_esc = html.escape(continue_url, quote=True)
+    return f"""<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>אזהרה – פתיחת קובץ PDF</title>
+    {FONT_LINK}
+    <style>{COMMON_STYLES}</style>
+</head>
+<body style="background: {BG_OVERLAY}{_svg_bg_uri(BG_PENDING)} center/cover no-repeat; color: #1A1A1A;">
+    <div class="page-wrap">
+        <div class="page-head">
+            <span class="status-badge" style="background: #fef3c7; color: #b45309; border-color: #d97706;">אזהרה</span>
+        </div>
+        <h1>פתיחת קובץ PDF</h1>
+        <p class="lead">יתכן שהקובץ ייצא משובש – הסינון שינה תמונות או טקסט בתוך הקובץ. אם אתה מעדיף להמשיך בכל זאת, לחץ על הכפתור למטה.</p>
+        <div class="actions">
+            <a href="{continue_url_esc}" class="btn" style="background: #2F6CFF; color: #fff;">המשך ל-PDF</a>
+        </div>
+    </div>
+</body>
+</html>"""
+
+
+def get_pdf_warning_page_bytes(pdf_url: str = "") -> bytes:
+    """Return HTML bytes for PDF distortion warning page (before opening PDF)."""
+    html_str = _pdf_warning_page_html(pdf_url=pdf_url)
+    return html_str.encode("utf-8")
+
+
 def get_blocked_page_bytes(
     request_url: str = "",
     rule: dict = None,
@@ -234,6 +292,7 @@ def get_blocked_page_bytes(
     block_reason: str = "",
     block_reason_detail: str = "",
     block_debug_b64: str = "",
+    block_debug_readable: str = "",
 ) -> bytes:
     rule = rule or {}
     tags_list = list(tags) if tags else (rule.get("tags") or [])
@@ -249,6 +308,7 @@ def get_blocked_page_bytes(
         block_reason=block_reason or rule.get("block_reason", ""),
         block_reason_detail=block_reason_detail or rule.get("block_reason_detail", ""),
         block_debug_b64=block_debug_b64 or rule.get("block_debug_b64", ""),
+        block_debug_readable=block_debug_readable or rule.get("block_debug_readable", ""),
     )
     return html_str.encode("utf-8")
 

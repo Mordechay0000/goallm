@@ -113,6 +113,18 @@ def init_db_schema():
     if "image_filter_enabled" not in columns:
         db_connection.execute(f"ALTER TABLE {POLICIES_TABLE_NAME} ADD COLUMN image_filter_enabled INTEGER NOT NULL DEFAULT 1")
         logger.info("Added image_filter_enabled to url_policies")
+    for col, default in (
+        ("file_filter_enabled", 1),
+        ("pdf_filter_enabled", 1),
+        ("video_filter_enabled", 1),
+        ("surf_widget_enabled", 1),
+    ):
+        cursor = db_connection.execute(f"PRAGMA table_info({POLICIES_TABLE_NAME})")
+        cols = [r[1] for r in cursor.fetchall()]
+        if col not in cols:
+            db_connection.execute(f"ALTER TABLE {POLICIES_TABLE_NAME} ADD COLUMN {col} INTEGER NOT NULL DEFAULT {default}")
+            db_connection.commit()
+            logger.info("Added %s to url_policies", col)
 
     # Migration: user_id for per-user policies (NULL = global, integer = user)
     cursor = db_connection.execute(f"PRAGMA table_info({POLICIES_TABLE_NAME})")
@@ -201,7 +213,18 @@ def init_db_schema():
             value INTEGER NOT NULL DEFAULT 1
         )
     """)
-    for key in ("url_policy", "text_filter", "image_filter", "embedded_image_filter"):
+    for key in (
+        "url_policy",
+        "text_filter",
+        "image_filter",
+        "embedded_image_filter",
+        "file_download_filter",
+        "surf_widget",
+        "pdf_filter_text",
+        "pdf_filter_images",
+        "file_share_block",
+        "google_search_filter",
+    ):
         db_connection.execute(
             "INSERT OR IGNORE INTO filter_switches (key, value) VALUES (?, 1)",
             (key,),
@@ -232,6 +255,25 @@ def init_db_schema():
             created_at INTEGER NOT NULL
         )
     """)
+
+    # Site injections: per-site head/body code and hide selectors (synced from CRM)
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS site_injections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            domain_pattern TEXT NOT NULL,
+            path_pattern TEXT,
+            include_subdomains INTEGER NOT NULL DEFAULT 0,
+            head_code TEXT,
+            body_code TEXT,
+            hide_selectors TEXT,
+            enabled INTEGER NOT NULL DEFAULT 1
+        )
+    """)
+    db_connection.execute("CREATE INDEX IF NOT EXISTS idx_site_injections_domain ON site_injections(domain_pattern)")
+    si_cols = [row[1] for row in db_connection.execute("PRAGMA table_info(site_injections)").fetchall()]
+    if "path_exact_only" not in si_cols:
+        db_connection.execute("ALTER TABLE site_injections ADD COLUMN path_exact_only INTEGER NOT NULL DEFAULT 1")
+        logger.info("Added path_exact_only to site_injections")
 
     # Traffic recording: user starts recording in CRM → proxy logs each request until user stops
     db_connection.execute("""
@@ -271,6 +313,14 @@ def init_db_schema():
         db_connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_traffic_sessions_share_token ON traffic_recording_sessions(share_token)")
         db_connection.commit()
         logger.info("Added share_token to traffic_recording_sessions")
+
+    # traffic_log: קוד תגובת HTTP (200, 404, 500 וכו') – כדי לראות שגיאות שרת בהקלטה
+    cursor = db_connection.execute("PRAGMA table_info(traffic_log)")
+    log_columns = [row[1] for row in cursor.fetchall()]
+    if "http_status_code" not in log_columns:
+        db_connection.execute("ALTER TABLE traffic_log ADD COLUMN http_status_code INTEGER")
+        db_connection.commit()
+        logger.info("Added http_status_code to traffic_log")
 
     db_connection.commit()
     logger.info("Policies database schema initialized successfully")
@@ -371,7 +421,18 @@ def get_core_resolver_db_path() -> str:
     return str(_db_path)
 
 
-FILTER_SWITCH_KEYS = ("url_policy", "text_filter", "image_filter", "embedded_image_filter", "file_download_filter", "surf_widget")
+FILTER_SWITCH_KEYS = (
+    "url_policy",
+    "text_filter",
+    "image_filter",
+    "embedded_image_filter",
+    "file_download_filter",
+    "surf_widget",
+    "pdf_filter_text",
+    "pdf_filter_images",
+    "file_share_block",
+    "google_search_filter",
+)
 
 
 def get_filter_switches() -> Dict[str, bool]:
@@ -384,6 +445,11 @@ def get_filter_switches() -> Dict[str, bool]:
     out = {k: True for k in FILTER_SWITCH_KEYS}
     for row in cursor.fetchall():
         out[row[0]] = bool(row[1])
+    # Legacy: if old pdf_filter was off, treat both PDF switches as off
+    leg = db_connection.execute("SELECT value FROM filter_switches WHERE key = 'pdf_filter'").fetchone()
+    if leg is not None and not bool(leg[0]):
+        out["pdf_filter_text"] = False
+        out["pdf_filter_images"] = False
     return out
 
 
@@ -428,6 +494,124 @@ def set_allowed_file_urls(urls: List[str]) -> None:
             )
     db_connection.commit()
     logger.info("Allowed file URLs synced from CRM: %s entries", len([u for u in (urls or []) if (u or "").strip()]))
+
+
+# Site injections (synced from CRM; applied in proxy to HTML responses)
+def _parse_url_for_injection(url: str) -> Tuple[str, str]:
+    """Parse URL into (domain, path) for injection matching."""
+    from urllib.parse import urlparse as _urlparse
+    u = (url or "").strip()
+    if not u or "://" not in u:
+        return "", "/"
+    try:
+        p = _urlparse(u)
+        domain = (p.hostname or "").lower().rstrip(".")
+        if domain.startswith("www."):
+            domain = domain[4:]
+        path = (p.path or "").strip() or "/"
+        path = "/" + path.lstrip("/")
+        if path != "/" and path.endswith("/"):
+            path = path.rstrip("/")
+        return domain, path
+    except Exception:
+        return "", "/"
+
+
+def _injection_domain_matches(rule_domain: str, domain: str) -> bool:
+    if not rule_domain or not domain:
+        return False
+    if rule_domain.startswith("*."):
+        base = rule_domain[2:]
+        return domain == base or domain.endswith("." + base)
+    return domain == rule_domain
+
+
+def _injection_path_matches(rule_path: Optional[str], path: str, path_exact_only: bool = True) -> bool:
+    rp = (rule_path or "").strip() or "/"
+    if rp != "/":
+        rp = rp.rstrip("/")
+    if not path:
+        path = "/"
+    if path != "/" and path.endswith("/"):
+        path = path.rstrip("/")
+    if path_exact_only:
+        return path == rp
+    if not rule_path or rule_path == "/" or (rule_path or "").strip() == "":
+        return True
+    return path.startswith(rp) or (rp == "/" and path.startswith("/"))
+
+
+def set_site_injections(injections: List[Dict]) -> None:
+    """Replace all site injections (synced from CRM). Core does not own this list."""
+    db_connection.execute("DELETE FROM site_injections")
+    for inj in (injections or []):
+        if not inj.get("enabled"):
+            continue
+        domain = (inj.get("domain_pattern") or "").strip()
+        if not domain:
+            continue
+        path = inj.get("path_pattern")
+        if path == "/" or (path or "").strip() == "":
+            path = None
+        inc = 1 if inj.get("include_subdomains") else 0
+        path_exact = 1 if inj.get("path_exact_only", True) else 0
+        head = (inj.get("head_code") or "").strip() or None
+        body = (inj.get("body_code") or "").strip() or None
+        hide = inj.get("hide_selectors")
+        if isinstance(hide, list):
+            import json
+            hide = json.dumps(hide) if hide else None
+        hide = (hide or "").strip() or None
+        db_connection.execute(
+            """INSERT INTO site_injections (domain_pattern, path_pattern, include_subdomains, head_code, body_code, hide_selectors, path_exact_only, enabled)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 1)""",
+            (domain, path, inc, head, body, hide, path_exact),
+        )
+    db_connection.commit()
+    logger.info("Site injections synced from CRM: %s entries", len([i for i in (injections or []) if i.get("enabled")]))
+
+
+def get_site_injection_for_url(url: str) -> Optional[Dict]:
+    """Return the best matching site injection for this URL, or None. Used by proxy when processing HTML."""
+    domain, path = _parse_url_for_injection(url)
+    if not domain:
+        return None
+    cursor = db_connection.execute(
+        "SELECT domain_pattern, path_pattern, include_subdomains, head_code, body_code, hide_selectors, COALESCE(path_exact_only, 1) FROM site_injections WHERE enabled = 1"
+    )
+    rows = cursor.fetchall()
+    best = None
+    best_score = -1
+    for row in rows:
+        r_domain = row[0] or ""
+        r_path = (row[1] or "").strip() or "/"
+        path_exact_only = bool(row[6]) if len(row) > 6 else True
+        if not _injection_domain_matches(r_domain, domain):
+            continue
+        if not _injection_path_matches(r_path, path, path_exact_only):
+            continue
+        p_score = len(r_path.rstrip("/"))
+        d_score = 100 if r_domain.startswith("*.") else 200
+        score = d_score + p_score
+        if score > best_score:
+            best_score = score
+            head = row[3]
+            body = row[4]
+            hide = row[5]
+            if hide:
+                try:
+                    import json
+                    hide_list = json.loads(hide)
+                except Exception:
+                    hide_list = [s.strip() for s in (hide or "").split("\n") if s.strip()]
+            else:
+                hide_list = []
+            best = {
+                "head_code": head,
+                "body_code": body,
+                "hide_selectors": hide_list,
+            }
+    return best
 
 
 def is_file_url_allowed(url: str) -> bool:
@@ -510,6 +694,8 @@ def add_policy(domain: str, path: Optional[str] = None,
                description: Optional[str] = None, enabled: bool = True,
                tags: Optional[List[str]] = None, source: str = "user",
                text_filter_enabled: bool = True, image_filter_enabled: bool = True,
+               file_filter_enabled: bool = True, pdf_filter_enabled: bool = True,
+               video_filter_enabled: bool = True, surf_widget_enabled: bool = True,
                user_id: Optional[int] = None) -> Dict:
     """Add a new policy. source: 'global' (user_id must be None) or 'user' (user_id optional, for per-user rules)."""
     if source not in ("global", "user"):
@@ -528,13 +714,17 @@ def add_policy(domain: str, path: Optional[str] = None,
     tags_str = _tags_to_str(tags) if tags else None
     tf = 1 if text_filter_enabled else 0
     imgf = 1 if image_filter_enabled else 0
+    ff = 1 if file_filter_enabled else 0
+    pf = 1 if pdf_filter_enabled else 0
+    vf = 1 if video_filter_enabled else 0
+    sw = 1 if surf_widget_enabled else 0
 
     try:
         db_connection.execute(f"""
             INSERT INTO {POLICIES_TABLE_NAME} 
-            (domain, path, type, state, description, enabled, created_at, updated_at, tags, source, text_filter_enabled, image_filter_enabled, user_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (domain, path, policy_type, state, description, 1 if enabled else 0, now, now, tags_str, source, tf, imgf, user_id))
+            (domain, path, type, state, description, enabled, created_at, updated_at, tags, source, text_filter_enabled, image_filter_enabled, file_filter_enabled, pdf_filter_enabled, video_filter_enabled, surf_widget_enabled, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (domain, path, policy_type, state, description, 1 if enabled else 0, now, now, tags_str, source, tf, imgf, ff, pf, vf, sw, user_id))
         db_connection.commit()
         
         cursor = db_connection.execute(f"""
@@ -555,7 +745,9 @@ def update_policy(policy_id: int, domain: Optional[str] = None,
                   state: Optional[str] = None, description: Optional[str] = None,
                   enabled: Optional[bool] = None, tags: Optional[List[str]] = None,
                   source: Optional[str] = None, text_filter_enabled: Optional[bool] = None,
-                  image_filter_enabled: Optional[bool] = None) -> Dict:
+                  image_filter_enabled: Optional[bool] = None, file_filter_enabled: Optional[bool] = None,
+                  pdf_filter_enabled: Optional[bool] = None, video_filter_enabled: Optional[bool] = None,
+                  surf_widget_enabled: Optional[bool] = None) -> Dict:
     """Update an existing policy. Returns the updated policy dict."""
     cursor = db_connection.execute(f"""
         SELECT * FROM {POLICIES_TABLE_NAME} WHERE id = ?
@@ -566,7 +758,6 @@ def update_policy(policy_id: int, domain: Optional[str] = None,
 
     current = row_to_dict(row)
     new_tags = tags if tags is not None else current.get("tags")
-    # Update fields
     new_domain = domain if domain is not None else current["domain"]
     new_path = path if path is not None else current["path"]
     new_type = policy_type if policy_type is not None else current["type"]
@@ -578,8 +769,11 @@ def update_policy(policy_id: int, domain: Optional[str] = None,
         new_source = "user"
     new_text_filter = text_filter_enabled if text_filter_enabled is not None else current.get("text_filter_enabled", True)
     new_image_filter = image_filter_enabled if image_filter_enabled is not None else current.get("image_filter_enabled", True)
+    new_file_filter = file_filter_enabled if file_filter_enabled is not None else current.get("file_filter_enabled", True)
+    new_pdf_filter = pdf_filter_enabled if pdf_filter_enabled is not None else current.get("pdf_filter_enabled", True)
+    new_video_filter = video_filter_enabled if video_filter_enabled is not None else current.get("video_filter_enabled", True)
+    new_surf_widget = surf_widget_enabled if surf_widget_enabled is not None else current.get("surf_widget_enabled", True)
 
-    # Validate
     error = validate_policy(new_domain, new_path, new_type, new_state, new_tags if isinstance(new_tags, list) else None)
     if error:
         raise ValueError(error)
@@ -593,10 +787,12 @@ def update_policy(policy_id: int, domain: Optional[str] = None,
         db_connection.execute(f"""
             UPDATE {POLICIES_TABLE_NAME}
             SET domain = ?, path = ?, type = ?, state = ?,
-                description = ?, enabled = ?, updated_at = ?, tags = ?, source = ?, text_filter_enabled = ?, image_filter_enabled = ?
+                description = ?, enabled = ?, updated_at = ?, tags = ?, source = ?,
+                text_filter_enabled = ?, image_filter_enabled = ?, file_filter_enabled = ?, pdf_filter_enabled = ?, video_filter_enabled = ?, surf_widget_enabled = ?
             WHERE id = ?
         """, (new_domain, new_path, new_type, new_state,
-              new_description, 1 if new_enabled else 0, now, new_tags_str, new_source, 1 if new_text_filter else 0, 1 if new_image_filter else 0, policy_id))
+              new_description, 1 if new_enabled else 0, now, new_tags_str, new_source,
+              1 if new_text_filter else 0, 1 if new_image_filter else 0, 1 if new_file_filter else 0, 1 if new_pdf_filter else 0, 1 if new_video_filter else 0, 1 if new_surf_widget else 0, policy_id))
         db_connection.commit()
         
         # Return updated policy
@@ -674,7 +870,12 @@ def get_global_policies_for_resolver() -> List[Dict]:
     """Get enabled global (base whitelist) policies for resolver."""
     policies = get_all_policies(enabled_only=True, source_filter="global")
     return [
-        {"domain": p["domain"], "path": p["path"], "type": p["type"], "state": p["state"], "tags": p.get("tags", []), "text_filter_enabled": p.get("text_filter_enabled", True), "image_filter_enabled": p.get("image_filter_enabled", True)}
+        {
+            "domain": p["domain"], "path": p["path"], "type": p["type"], "state": p["state"], "tags": p.get("tags", []),
+            "text_filter_enabled": p.get("text_filter_enabled", True), "image_filter_enabled": p.get("image_filter_enabled", True),
+            "file_filter_enabled": p.get("file_filter_enabled", True), "pdf_filter_enabled": p.get("pdf_filter_enabled", True),
+            "video_filter_enabled": p.get("video_filter_enabled", True), "surf_widget_enabled": p.get("surf_widget_enabled", True),
+        }
         for p in policies
     ]
 
@@ -684,7 +885,12 @@ def get_user_policies_for_resolver(user_id: Optional[int] = None) -> List[Dict]:
     _uid = user_id if user_id is not None else get_default_user_id()
     policies = get_all_policies(enabled_only=True, source_filter="user", user_id=_uid)
     return [
-        {"domain": p["domain"], "path": p["path"], "type": p["type"], "state": p["state"], "tags": p.get("tags", [])}
+        {
+            "domain": p["domain"], "path": p["path"], "type": p["type"], "state": p["state"], "tags": p.get("tags", []),
+            "text_filter_enabled": p.get("text_filter_enabled", True), "image_filter_enabled": p.get("image_filter_enabled", True),
+            "file_filter_enabled": p.get("file_filter_enabled", True), "pdf_filter_enabled": p.get("pdf_filter_enabled", True),
+            "video_filter_enabled": p.get("video_filter_enabled", True), "surf_widget_enabled": p.get("surf_widget_enabled", True),
+        }
         for p in policies
     ]
 
@@ -807,6 +1013,10 @@ def row_to_dict(row: tuple) -> Dict:
         d["user_id"] = row[13] if row[13] is not None else None
     else:
         d["user_id"] = None
+    d["file_filter_enabled"] = bool(row[14]) if len(row) > 14 else True
+    d["pdf_filter_enabled"] = bool(row[15]) if len(row) > 15 else True
+    d["video_filter_enabled"] = bool(row[16]) if len(row) > 16 else True
+    d["surf_widget_enabled"] = bool(row[17]) if len(row) > 17 else True
     return d
 
 
@@ -887,8 +1097,10 @@ def add_traffic_log_entry(
     status: str,
     time_sec: float,
     content_type: Optional[str],
+    http_status_code: Optional[int] = None,
 ) -> None:
-    """Append one request to traffic log. Proxy calls this; session must belong to user_id."""
+    """Append one request to traffic log. Proxy calls this; session must belong to user_id.
+    http_status_code: response status (200, 404, 500, etc.); None when no response (e.g. connection error)."""
     cursor = db_connection.execute(
         "SELECT id FROM traffic_recording_sessions WHERE id = ? AND user_id = ?",
         (session_id, user_id),
@@ -898,9 +1110,9 @@ def add_traffic_log_entry(
         return
     now = int(datetime.now().timestamp())
     db_connection.execute(
-        """INSERT INTO traffic_log (session_id, url, protocol, status, time_sec, content_type, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (session_id, url or "", protocol or "", status or "open", time_sec, content_type or "", now),
+        """INSERT INTO traffic_log (session_id, url, protocol, status, time_sec, content_type, created_at, http_status_code)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (session_id, url or "", protocol or "", status or "open", time_sec, content_type or "", now, http_status_code),
     )
     db_connection.commit()
 
@@ -961,7 +1173,7 @@ def _get_traffic_log_rows(session_id: int, conn: Optional[sqlite3.Connection] = 
     """conn: if provided (e.g. from get_traffic_log thread), use it; else use global db_connection."""
     connection = conn if conn is not None else db_connection
     cursor = connection.execute(
-        """SELECT id, session_id, url, protocol, status, time_sec, content_type, created_at
+        """SELECT id, session_id, url, protocol, status, time_sec, content_type, created_at, http_status_code
            FROM traffic_log WHERE session_id = ? ORDER BY id ASC""",
         (session_id,),
     )
@@ -975,6 +1187,7 @@ def _get_traffic_log_rows(session_id: int, conn: Optional[sqlite3.Connection] = 
             "time_sec": row[5],
             "content_type": row[6] or "",
             "created_at": row[7],
+            "http_status_code": row[8] if len(row) > 8 else None,
         }
         for row in cursor.fetchall()
     ]
