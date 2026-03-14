@@ -59,6 +59,9 @@ FILTER_CERT_DIR = os.environ.get("FILTER_CERT_DIR") or os.path.expanduser("~/.mi
 # תוקף טוקן Surf בשניות – אחרי הזמן הזה הטוקן לא תקף לאימות משתמש מפרוקסי ל-CRM.
 SURF_TOKEN_TTL_SEC = 300
 
+# קוד HTTP לתגובות חסימה / שלח לבדיקה – מחזירים דף HTML עם קוד זה (418 = I'm a teapot, לא בשימוש סטנדרטי).
+FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS = 418
+
 # ========== כתובות CRM (API ופרונט) ==========
 # ערכים אפקטיביים – מסביבה או נגזרים מ-CRM_BASE_URL.
 # ניתן עדיין לדרוס כל אחד מהם בנפרד במקרה הצורך.
@@ -113,25 +116,38 @@ JPEG_QUALITY = 90
 # מקסימום תמונות מוטמעות (data: URL) לעיבוד בדף אחד – מונע עומס.
 MAX_EMBEDDED_IMAGES_PER_PAGE = 100
 
-# ========== סינון מלל – ספים ורמות ==========
-# רמות חומרה למילים: 1=קל, 2=בינוני, 3=חמור. משמש את רשימות המילים והספים.
-SEVERITY_LIGHT = 1
-SEVERITY_MEDIUM = 2
-SEVERITY_SEVERE = 3
+# ========== סינון מלל – רמה אחת, חסימה לפי יחס ==========
+# רמה אחת: מילה ברשימה = תוכן לא צנוע. חסימת דף תמיד לפי יחס על כל הדף/מסמך.
 
-# מינימום מופעים של חומרה 1 (קל) במשפט/פסקה/דף כדי לחסום את היחידה.
-THRESHOLD_SENTENCE_LIGHT = 2
-THRESHOLD_PARAGRAPH_LIGHT = 5
-THRESHOLD_PAGE_LIGHT = 10
+# יחס מילים (טקסט גולמי / PDF מלא): מילים_שנמצאו / סה"כ_מילים
+MIN_RATIO_WORDS_FOR_PAGE_BLOCK = 0.02  # 2%
+# מינימום מילים שנמצאו (לטקסט גולמי) – מונע חסימה על מסמך עם מילה אחת
+MIN_MATCHES_FOR_PAGE_BLOCK = 2
+# מסמך קצר (עד N מילים): חסימה לפי count בלבד. מסמך ארוך: לפי ratio.
+MIN_WORDS_FOR_RATIO_BLOCK = 80
 
-# True = מופע אחד של חומרה 3 (חמור) בדף מספיק לחסימת הדף (בטקסט גולמי).
-ANY_SEVERITY_3_BLOCKS_PAGE = True
-# מינימום מופעים של חומרה 2 (בינוני) בדף כדי לאפשר חסימת דף לפי מגמה.
-THRESHOLD_PAGE_MEDIUM_BLOCK = 3
-# אחוז מינימלי מרכיבי הדף (למשל פסקאות) עם זיהוי כדי לחסום את כל הדף.
-MIN_PERCENTAGE_COMPONENTS_FOR_PAGE_BLOCK = 0.25
-# מינימום מספר רכיבים עם זיהוי כדי לחסום דף (גם אם האחוז נמוך).
+# אחוז מינימלי רכיבים/בלוקים עם זיהוי (HTML, PDF) – יחס על כל הדף
+MIN_PERCENTAGE_COMPONENTS_FOR_PAGE_BLOCK = 0.25  # 25%
+# מינימום מספר רכיבים עם זיהוי – מונע חסימה על דף עם רכיב אחד בלבד
 MIN_COMPONENTS_WITH_DETECTION_FOR_PAGE_BLOCK = 3
 
-# קודי שפה נתמכות – תואמות לתיקיות ב־word_lists (he, en).
+# קודי שפה נתמכות – תואמות לתיקיות ב־word_lists (he, en)
 SUPPORTED_LANGS = ("he", "en")
+
+# דומיינים של אתרי שיתוף קבצים ציבוריים – קישור ציבורי חסום עד בדיקה ("שלח לבדיקה").
+# רשימת דומיינים (ללא www) – גוגל דרייב, דרופבוקס, OneDrive וכו'.
+# Hosts are matched after lowercasing and stripping www.
+PUBLIC_FILE_SHARE_DOMAINS = (
+    "drive.google.com",
+    "docs.google.com",
+    "dropbox.com",
+    "onedrive.live.com",
+    "1drv.ms",
+    "sharepoint.com",
+    "we.tl",
+    "wetransfer.com",
+    "send.any.run",
+    "file.io",
+    "transfer.sh",
+    "tmpfiles.org",
+)

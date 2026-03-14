@@ -30,5 +30,11 @@ flask-cors>=4.0.0
 bcrypt>=4.0.1
 slowapi>=0.1.9
 
+# PDF filtering (extract images + text, filter, reassemble)
+PyMuPDF>=1.24.0
+
+# Text filter – stemming for morphological matching
+snowballstemmer>=2.2.0
+
 # Optional: LLM image analyzer (uncomment for llm_image_analyzer)
 # llama-cpp-python>=0.2.0
