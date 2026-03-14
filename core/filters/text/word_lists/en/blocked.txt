@@ -1,0 +1,53 @@
+# Blocked words – sexuality, explicit romance, LGBTQ+, immodest content.
+# Charedi filter: no exceptions for medical/educational context. Always block.
+#
+# REMOVED (innocent meanings): intimate, intimacy, affair, gross, tempting,
+# temptation, aroused, queer. These appear often in kosher content.
+#
+# KEPT: sex, sexual, gay, lesbian – 99% of occurrences are not kosher.
+
+# Explicit sexual content – no innocent use
+sex
+sexual
+intercourse
+orgasm
+masturbation
+pornography
+porn
+nude
+naked
+nudity
+lust
+lustful
+arousal
+buttocks
+genitals
+genital
+penis
+vagina
+
+# Suggestive / seductive
+sexy
+seductive
+arousing
+
+# Explicit romance / adultery
+lover
+mistress
+adultery
+adulterous
+seduction
+seduce
+
+# LGBTQ+ – always block (no political/social exception)
+gay
+lesbian
+homosexual
+homosexuality
+transgender
+lgbt
+lgbtq
+bisexual
+
+
+fetish

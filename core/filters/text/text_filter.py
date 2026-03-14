@@ -1,9 +1,9 @@
 """
 סינון מלל (text filtering) – סינון לחרדים.
 
-- רמות חומרה: 1=קל (קללות), 2=בינוני, 3=חמור (תוכן מיני/כפירה וכו').
-- החלפת מילה באיקסים (לפי אורך); ספים למשפט/פסקה/דף.
-- תמיכה בעברית ובאנגלית (רשימות מילים ב־word_lists).
+- רמה אחת: מילה ברשימה = תוכן לא צנוע. חסימה לפי יחס על כל הדף/מסמך.
+- החלפת מילה באיקסים (לפי אורך). תמיכה בעברית ובאנגלית (רשימות ב־word_lists/*/blocked.txt).
+- התאמה דקדוקית: stemming לזיהוי צורות מילה (sexually, nudity, gays וכו').
 """
 import base64
 import json
@@ -14,14 +14,10 @@ from pathlib import Path
 
 from core.filters.text.text_filter_config import (
     WORD_LISTS_DIR,
-    SEVERITY_LIGHT,
-    SEVERITY_MEDIUM,
-    SEVERITY_SEVERE,
-    THRESHOLD_SENTENCE_LIGHT,
-    THRESHOLD_PARAGRAPH_LIGHT,
-    THRESHOLD_PAGE_LIGHT,
-    ANY_SEVERITY_3_BLOCKS_PAGE,
-    THRESHOLD_PAGE_MEDIUM_BLOCK,
+    BLOCKED_WORDS_FILENAME,
+    MIN_RATIO_WORDS_FOR_PAGE_BLOCK,
+    MIN_MATCHES_FOR_PAGE_BLOCK,
+    MIN_WORDS_FOR_RATIO_BLOCK,
     MIN_PERCENTAGE_COMPONENTS_FOR_PAGE_BLOCK,
     MIN_COMPONENTS_WITH_DETECTION_FOR_PAGE_BLOCK,
     SUPPORTED_LANGS,
@@ -29,22 +25,60 @@ from core.filters.text.text_filter_config import (
 
 logger = logging.getLogger(__name__)
 
-# cache: (lang, severity) -> set of words (normalized)
-_word_list_cache: Dict[Tuple[str, int], set] = {}
+# Optional stemmer for English (snowballstemmer has no Hebrew)
+_stemmer_en = None
+try:
+    import snowballstemmer
+    _stemmer_en = snowballstemmer.EnglishStemmer()
+except ImportError:
+    logger.debug("snowballstemmer not installed; using exact match only (pip install snowballstemmer for stemming)")
+
+# Hebrew suffixes for morphological matching (order: longer first)
+_HEBREW_SUFFIXES = ("יות", "ים", "ות", "ית", "י", "ה", "ת", "ו")
+# Hebrew prefixes to strip – ה (the), ו (and), ב (in), ל (to), כ (as), מ (from), ש (that)
+_HEBREW_PREFIXES = ("ש", "מ", "ל", "ב", "כ", "ה", "ו")
+
+
+# cache: lang -> set of words/stems (normalized)
+_word_list_cache: Dict[str, set] = {}
 
 
 def _normalize_hebrew(word: str) -> str:
-    """Strip optional niqqud for matching (keep base letters)."""
-    # Remove Hebrew niqqud (U+0591–U+05C7) and other marks
-    return re.sub(r"[\u0591-\u05C7\u05C0-\u05C3\u05C4-\u05C5]", "", word)
+    """Strip niqqud and normalize final letters: ך→כ, ם→מ, ן→נ, ף→פ, ץ→צ."""
+    s = re.sub(r"[\u0591-\u05C7\u05C0-\u05C3\u05C4-\u05C5]", "", word)
+    # Final form to regular form (so ך matches כ, etc.)
+    final_to_regular = {"\u05da": "\u05db", "\u05dd": "\u05de", "\u05df": "\u05e0", "\u05e3": "\u05e4", "\u05e5": "\u05e6"}
+    for fin, reg in final_to_regular.items():
+        s = s.replace(fin, reg)
+    return s
 
 
-def _load_word_list(lang: str, severity: int) -> set:
-    """Load word list for lang and severity; cached."""
-    key = (lang, severity)
-    if key in _word_list_cache:
-        return _word_list_cache[key]
-    path = WORD_LISTS_DIR / lang / f"severity_{severity}.txt"
+def _strip_hebrew_prefix(word: str) -> str:
+    """Strip common Hebrew prefixes (ה/ו/ב/ל/כ/מ/ש)."""
+    for pre in _HEBREW_PREFIXES:
+        if len(word) > len(pre) + 1 and word.startswith(pre):
+            return word[len(pre):]
+    return word
+
+
+def _stem(word: str, lang: str) -> str:
+    """Return stem of word for matching. EN: snowball; HE: prefix + suffix stripping."""
+    if lang == "en" and _stemmer_en:
+        return _stemmer_en.stemWord(word)
+    if lang == "he" and len(word) > 1:
+        w = _strip_hebrew_prefix(word)
+        for suf in _HEBREW_SUFFIXES:
+            if len(w) > len(suf) + 1 and w.endswith(suf):
+                return w[: -len(suf)]
+        return w
+    return word
+
+
+def _load_blocked_words(lang: str) -> set:
+    """Load blocked word list for lang; cached. Includes stems when stemmer available."""
+    if lang in _word_list_cache:
+        return _word_list_cache[lang]
+    path = WORD_LISTS_DIR / lang / BLOCKED_WORDS_FILENAME
     words = set()
     if path.exists():
         try:
@@ -56,45 +90,34 @@ def _load_word_list(lang: str, severity: int) -> set:
                 w = line.split("#")[0].strip()
                 if w:
                     if lang == "en":
-                        words.add(w.lower())
+                        n = w.lower()
                     else:
-                        words.add(_normalize_hebrew(w))
+                        n = _normalize_hebrew(w)
+                    words.add(n)
+                    # Add stem for morphological matching
+                    stem = _stem(n, lang)
+                    if stem and stem != n:
+                        words.add(stem)
         except Exception as e:
             logger.warning("Failed to load word list %s: %s", path, e)
-    _word_list_cache[key] = words
+    _word_list_cache[lang] = words
     return words
 
 
-def _get_word_severity(word: str, lang: str) -> int:
-    """Return max severity (1–3) for word in this language, or 0 if not in lists."""
-    w_lower = word.lower() if lang == "en" else _normalize_hebrew(word)
-    for sev in (SEVERITY_SEVERE, SEVERITY_MEDIUM, SEVERITY_LIGHT):
-        if w_lower in _load_word_list(lang, sev):
-            return sev
-    return 0
+def _is_listed(word: str, lang: str) -> bool:
+    """Return True if word (or its stem) is in blocked list for this language."""
+    w = word.lower() if lang == "en" else _normalize_hebrew(word)
+    blocked = _load_blocked_words(lang)
+    if w in blocked:
+        return True
+    stem_w = _stem(w, lang)
+    return stem_w in blocked
 
 
 def _tokenize_words(text: str) -> List[Tuple[str, int, int]]:
     """Return list of (word, start, end) for Hebrew+English word chars."""
-    # Hebrew block \u0590-\u05FF, English letters, digits
     pattern = re.compile(r"[\u0590-\u05FFa-zA-Z0-9]+")
     return [(m.group(0), m.start(), m.end()) for m in pattern.finditer(text)]
-
-
-def _split_sentences(paragraph: str) -> List[Tuple[str, int, int]]:
-    """Split paragraph into sentences; return list of (sentence, start, end) relative to paragraph."""
-    # Sentence boundaries: . ! ? or newline (keep delimiter with previous sentence)
-    pattern = re.compile(r"(?<=[.!?\n])\s*")
-    parts = pattern.split(paragraph)
-    sentences = []
-    pos = 0
-    for part in parts:
-        if part.strip():
-            start = pos
-            end = pos + len(part)
-            sentences.append((part, start, end))
-        pos += len(part)
-    return sentences if sentences else [(paragraph, 0, len(paragraph))]
 
 
 def _mask_string(s: str, keep_spaces: bool = True) -> str:
@@ -104,20 +127,41 @@ def _mask_string(s: str, keep_spaces: bool = True) -> str:
     return "X" * len(s)
 
 
+def filter_paragraph_for_pdf(text: str, lang_hint: Optional[str] = None) -> Tuple[str, bool]:
+    """
+    For PDF block/paragraph: if any word is in blocked list, return (text with matched words
+    replaced by X's, True); otherwise (original_text, False).
+    """
+    if not text or not text.strip():
+        return text, False
+    langs = list(SUPPORTED_LANGS) if lang_hint is None else [lang_hint]
+    arr = list(text)
+    has_detection = False
+    for word, start, end in _tokenize_words(text):
+        for lang in langs:
+            if _is_listed(word, lang):
+                has_detection = True
+                for i in range(start, end):
+                    arr[i] = "X"
+                break
+    if has_detection:
+        return "".join(arr), True
+    return text, False
+
+
 def _snippet_around_match(text: str, start: int, end: int, max_before: int = 120, max_after: int = 120, max_total: int = 400) -> str:
     """Extract a short context around a match; replace the match with [M] for privacy."""
     before_start = max(0, start - max_before)
     after_end = min(len(text), end + max_after)
     s = text[before_start:after_end]
-    # Replace the matched word with [M]
     rel_start = start - before_start
     rel_end = end - before_start
     s = s[:rel_start] + "[M]" + s[rel_end:]
-    # Collapse newlines and limit
     s = re.sub(r"\s+", " ", s).strip()
     if len(s) > max_total:
         s = s[: max_total - 3] + "..."
     return s
+
 
 def _filter_plain_text(
     text: str,
@@ -125,112 +169,64 @@ def _filter_plain_text(
 ) -> Tuple[str, bool, str, Dict[str, Any]]:
     """
     Filter plain text. Returns (filtered_text, block_page, block_reason, debug_info).
-    debug_info: matched (list of {w, s}), counts, snippet (when block_page).
+    Block decision: ratio-based – matched_words/total_words >= MIN_RATIO and matched >= MIN_MATCHES.
     """
-    empty_debug: Dict[str, Any] = {"matched": [], "counts": {"light": 0, "medium": 0, "severe": 0}, "snippet": ""}
+    empty_debug: Dict[str, Any] = {"matched": [], "counts": {"matched": 0, "total": 0}, "snippet": ""}
     if not text.strip():
         return text, False, "", empty_debug
 
-    # Use both languages for matching (page may be mixed)
     langs = list(SUPPORTED_LANGS) if lang_hint is None else [lang_hint]
 
-    # Build severity per character range: (start, end, severity)
-    word_severities: List[Tuple[int, int, int]] = []
-    for word, start, end in _tokenize_words(text):
-        max_sev = 0
-        for lang in langs:
-            sev = _get_word_severity(word, lang)
-            if sev > max_sev:
-                max_sev = sev
-        if max_sev:
-            word_severities.append((start, end, max_sev))
+    # Find all matched words
+    matched_ranges: List[Tuple[int, int, str]] = []
+    tokens = _tokenize_words(text)
+    total_words = len(tokens)
 
-    block_page = False
-    block_reason = ""
-    count_light_page = sum(1 for _, _, sev in word_severities if sev == SEVERITY_LIGHT)
-    count_medium_page = sum(1 for _, _, sev in word_severities if sev == SEVERITY_MEDIUM)
-    count_severe_page = sum(1 for _, _, sev in word_severities if sev == SEVERITY_SEVERE)
-    counts = {"light": count_light_page, "medium": count_medium_page, "severe": count_severe_page}
-    matched = [{"w": text[s:e], "s": sev} for s, e, sev in word_severities[:30]]
+    for word, start, end in tokens:
+        for lang in langs:
+            if _is_listed(word, lang):
+                matched_ranges.append((start, end, text[start:end]))
+                break
+
+    count_matched = len(matched_ranges)
+    counts = {"matched": count_matched, "total": total_words}
+    matched = [{"w": w, "s": 1} for _, _, w in matched_ranges[:30]]
     debug_info: Dict[str, Any] = {"matched": matched, "counts": counts, "snippet": ""}
 
-    logger.debug(
-        "text_filter: plain_text matches len=%s light=%s medium=%s severe=%s",
-        len(word_severities), count_light_page, count_medium_page, count_severe_page,
-    )
-    if ANY_SEVERITY_3_BLOCKS_PAGE and count_severe_page > 0:
-        block_page = True
-        words_sev3 = list(dict.fromkeys([text[s:e] for s, e, sev in word_severities if sev == SEVERITY_SEVERE]))[:15]
-        block_reason = "severity_3: " + ", ".join(words_sev3)
-        first = next(( (s, e) for s, e, sev in word_severities if sev == SEVERITY_SEVERE ), (0, 0))
-        if first != (0, 0):
-            debug_info["snippet"] = _snippet_around_match(text, first[0], first[1])
-        logger.debug("text_filter: block_page=True (severity 3 present): %s", block_reason)
-    elif count_light_page >= THRESHOLD_PAGE_LIGHT:
-        block_page = True
-        block_reason = "too_many_light_in_page (%d >= %d)" % (count_light_page, THRESHOLD_PAGE_LIGHT)
-        first = next(( (s, e) for s, e, sev in word_severities if sev == SEVERITY_LIGHT ), (0, 0))
-        if first != (0, 0):
-            debug_info["snippet"] = _snippet_around_match(text, first[0], first[1])
-        logger.debug("text_filter: block_page=True (light count %s >= %s)", count_light_page, THRESHOLD_PAGE_LIGHT)
-    elif count_medium_page >= THRESHOLD_PAGE_MEDIUM_BLOCK:
-        block_page = True
-        block_reason = "too_many_medium_in_page (%d >= %d)" % (count_medium_page, THRESHOLD_PAGE_MEDIUM_BLOCK)
-        first = next(( (s, e) for s, e, sev in word_severities if sev == SEVERITY_MEDIUM ), (0, 0))
-        if first != (0, 0):
-            debug_info["snippet"] = _snippet_around_match(text, first[0], first[1])
-        logger.debug("text_filter: block_page=True (medium count %s >= %s)", count_medium_page, THRESHOLD_PAGE_MEDIUM_BLOCK)
+    logger.debug("text_filter: plain_text matches=%s total=%s", count_matched, total_words)
 
-    # Replace words with X's (by length)
+    # Block: short doc (≤80 words) → count only; long doc → ratio
+    block_page = False
+    block_reason = ""
+    if total_words > 0 and count_matched >= MIN_MATCHES_FOR_PAGE_BLOCK:
+        if total_words <= MIN_WORDS_FOR_RATIO_BLOCK:
+            # Short document: block by count only
+            block_page = True
+            block_reason = "short_doc_count: %d matches in %d words" % (count_matched, total_words)
+        else:
+            # Long document: block by ratio
+            ratio = count_matched / total_words
+            if ratio >= MIN_RATIO_WORDS_FOR_PAGE_BLOCK:
+                block_page = True
+                block_reason = "ratio_words: %d/%d (%.1f%% >= %.1f%%)" % (
+                    count_matched, total_words, ratio * 100, MIN_RATIO_WORDS_FOR_PAGE_BLOCK * 100,
+                )
+        if block_page and matched_ranges:
+            s, e, _ = matched_ranges[0]
+            debug_info["snippet"] = _snippet_around_match(text, s, e)
+            logger.debug("text_filter: block_page=True %s", block_reason)
+
+    # Replace matched words with X's
     arr = list(text)
-    for start, end, _ in word_severities:
+    for start, end, _ in matched_ranges:
         for i in range(start, end):
             arr[i] = "X"
-    text_replaced = "".join(arr)
 
-    # Paragraph boundaries (keep separator so positions match text_replaced)
-    parts = re.split(r"(\n\s*\n)", text_replaced)
-    para_boundaries: List[Tuple[int, int]] = []
-    pos = 0
-    for i, part in enumerate(parts):
-        if i % 2 == 0 and part:
-            para_boundaries.append((pos, pos + len(part)))
-        pos += len(part)
-
-    # Per-sentence: count light words; if >= THRESHOLD_SENTENCE_LIGHT, mask whole sentence
-    result = list(text_replaced)
-    for pstart, pend in para_boundaries:
-        para_text = text_replaced[pstart:pend]
-        sentences = _split_sentences(para_text)
-        light_in_para = 0
-        for sent, sstart, send in sentences:
-            abs_start = pstart + sstart
-            abs_end = pstart + send
-            count_light = sum(
-                1 for ws, we, sev in word_severities
-                if sev == SEVERITY_LIGHT and ws >= abs_start and we <= abs_end
-            )
-            light_in_para += count_light
-            if count_light >= THRESHOLD_SENTENCE_LIGHT:
-                masked = _mask_string(para_text[sstart:send])
-                for j, c in enumerate(masked):
-                    if abs_start + j < len(result):
-                        result[abs_start + j] = c
-
-        if light_in_para >= THRESHOLD_PARAGRAPH_LIGHT:
-            masked = _mask_string(para_text)
-            for j, c in enumerate(masked):
-                if pstart + j < len(result):
-                    result[pstart + j] = c
-
-    return "".join(result), block_page, block_reason, debug_info
+    return "".join(arr), block_page, block_reason, debug_info
 
 
 def _filter_json_value(value: Any) -> Any:
-    """
-    Recursively walk JSON structure; filter only string values (replace with filtered text).
-    Keys and structure are unchanged. Returns modified structure.
-    """
+    """Recursively walk JSON; filter only string values."""
     if isinstance(value, str):
         filtered, _block, _reason, _debug = _filter_plain_text(value)
         return filtered
@@ -242,11 +238,7 @@ def _filter_json_value(value: Any) -> Any:
 
 
 def _filter_json(text: str, url: str, content_type: str) -> Tuple[bytes, Dict[str, Any]]:
-    """
-    Parse JSON, filter only string values (preserve structure and keys), re-serialize.
-    Never blocks the whole response – only replaces text content.
-    Returns (filtered_bytes, debug_info).
-    """
+    """Parse JSON, filter string values, re-serialize. Never blocks – only replaces text."""
     try:
         data = json.loads(text)
     except Exception as e:
@@ -262,12 +254,33 @@ def _filter_json(text: str, url: str, content_type: str) -> Tuple[bytes, Dict[st
 
 
 def _encode_debug_b64(debug: Dict[str, Any]) -> str:
-    """Encode full debug dict to base64 for display on blocked page (decode for full debugging)."""
+    """Encode full debug dict to base64 for display on blocked page."""
     try:
         js = json.dumps(debug, ensure_ascii=False)
         return base64.b64encode(js.encode("utf-8")).decode("ascii")
     except Exception:
         return ""
+
+
+def format_text_filter_debug_readable(block_reason: str, debug_info: Dict[str, Any]) -> str:
+    """Build a short Hebrew readable debug string for the blocked page."""
+    parts = []
+    if block_reason:
+        parts.append("סיבת חסימה: " + block_reason)
+    counts = debug_info.get("counts") or {}
+    matched_count = counts.get("matched", 0)
+    total = counts.get("total", 0)
+    if matched_count or total:
+        parts.append("ספירה: %d מילים מתוך %d" % (matched_count, total))
+    matched = debug_info.get("matched") or []
+    if matched:
+        words = [m.get("w", "") for m in matched[:15] if m.get("w")]
+        if words:
+            parts.append("מילים שנמצאו (דוגמה): " + ", ".join(words))
+    snippet = (debug_info.get("snippet") or "").strip()
+    if snippet:
+        parts.append("הקשר: " + snippet[:300] + ("..." if len(snippet) > 300 else ""))
+    return "\n".join(parts)
 
 
 def filter_text_content(
@@ -283,7 +296,6 @@ def filter_text_content(
 
     Returns:
         (filtered_content_bytes, block_page, block_reason, debug_info).
-        debug_info: url, content_type, block_reason, matched, counts, snippet (for full debug / base64).
     """
     empty_debug: Dict[str, Any] = {"url": url, "content_type": content_type, "block_reason": "", "matched": [], "counts": {}, "snippet": ""}
     logger.debug("text_filter: filter_text_content url=%r content_type=%r len=%s text_filter_enabled=%s", url, content_type, len(content), text_filter_enabled)
@@ -292,9 +304,7 @@ def filter_text_content(
         return content, False, "", empty_debug
 
     try:
-        # Decode
         if "charset=" in (content_type or ""):
-            # Simple: try common encodings
             for enc in ("utf-8", "windows-1255", "iso-8859-1"):
                 try:
                     text = content.decode(enc)
@@ -306,7 +316,6 @@ def filter_text_content(
         else:
             text = content.decode("utf-8", errors="replace")
 
-        # JSON: filter only string values, preserve structure and keys
         ct_lower = (content_type or "").lower()
         is_json = "application/json" in ct_lower or (
             text.strip().startswith("{") or text.strip().startswith("[")
@@ -316,7 +325,6 @@ def filter_text_content(
             out_bytes, debug_info = _filter_json(text, url, content_type)
             block_page = False
             block_reason = ""
-            logger.debug("text_filter: _filter_json done (structure preserved)")
         else:
             is_html = "<" in text and ">" in text and ("<html" in text.lower() or "<body" in text.lower() or "<div" in text.lower())
             logger.debug("text_filter: decoded len=%s is_html=%s", len(text), is_html)
@@ -346,11 +354,11 @@ def filter_text_content(
         return content, False, "", {"url": url, "content_type": content_type or "", "block_reason": "", "matched": [], "counts": {}, "snippet": ""}
 
 
-# Tag names whose text content must not be filtered (would break page: JS, CSS, etc.)
 _SKIP_FILTER_TAGS = frozenset(("script", "style", "noscript", "template", "xmp", "iframe"))
 
+
 def _is_inside_skip_tag(node) -> bool:
-    """True if this node is inside script, style, etc. – do not filter so we don't break the page."""
+    """True if node is inside script, style, etc."""
     from bs4 import NavigableString
     if not isinstance(node, NavigableString):
         return False
@@ -364,11 +372,10 @@ def _is_inside_skip_tag(node) -> bool:
 
 def _filter_html(html_text: str, url: str, content_type: str) -> Tuple[bytes, bool, str, Dict[str, Any]]:
     """
-    Parse HTML, filter each text node. When detection found: replace entire text in node with X's (not just the word).
-    Skips text inside script, style, noscript, template, etc. so the page structure and behavior are preserved.
-    Block page only when a significant percentage of components have detection (component-based, not word-count based).
+    Parse HTML, filter each text node. Replace only matched words with X's (not entire component).
+    Block page when ratio of components with detection >= MIN_PERCENTAGE and count >= MIN_COMPONENTS.
     """
-    empty_debug: Dict[str, Any] = {"matched": [], "counts": {"light": 0, "medium": 0, "severe": 0}, "snippet": ""}
+    empty_debug: Dict[str, Any] = {"matched": [], "counts": {"matched": 0, "total": 0}, "snippet": ""}
     try:
         from bs4 import BeautifulSoup
     except ImportError:
@@ -378,9 +385,9 @@ def _filter_html(html_text: str, url: str, content_type: str) -> Tuple[bytes, bo
 
     soup = BeautifulSoup(html_text, "html.parser")
     merged_matched: List[Dict[str, Any]] = []
-    merged_counts = {"light": 0, "medium": 0, "severe": 0}
+    total_matched = 0
+    total_words = 0
     first_snippet = ""
-    # Components with at least one detection (any severity)
     components_with_detection = 0
     total_components = 0
 
@@ -392,40 +399,48 @@ def _filter_html(html_text: str, url: str, content_type: str) -> Tuple[bytes, bo
                 continue
             total_components += 1
             s = str(node)
-            filtered, _block_ignored, reason, debug_info = _filter_plain_text(s)
-            c = debug_info.get("counts", {})
-            light = c.get("light", 0)
-            medium = c.get("medium", 0)
-            severe = c.get("severe", 0)
-            has_detection = light or medium or severe
+            filtered, _block_ignored, _reason, debug_info = _filter_plain_text(s)
+            count_matched = debug_info.get("counts", {}).get("matched", 0)
+            count_total = debug_info.get("counts", {}).get("total", 0)
+            total_words += count_total
+            has_detection = count_matched > 0
             if has_detection:
                 components_with_detection += 1
+                total_matched += count_matched
                 for m in debug_info.get("matched", [])[:20]:
                     merged_matched.append(m)
-                merged_counts["light"] += light
-                merged_counts["medium"] += medium
-                merged_counts["severe"] += severe
                 if debug_info.get("snippet") and not first_snippet:
                     first_snippet = debug_info["snippet"]
-                # Replace entire text in component with X's (every char -> x)
-                node.replace_with(_mask_string(s))
-            # No match: keep original text unchanged
+                node.replace_with(filtered)
+            # No match: keep original
 
-    # Component-based block logic: block when significant % of components have detection
+    # Block if (components ratio) OR (words ratio) passes threshold
     block_page = False
     block_reason = ""
     if total_components > 0 and components_with_detection > 0:
-        pct = components_with_detection / total_components
-        if components_with_detection >= MIN_COMPONENTS_WITH_DETECTION_FOR_PAGE_BLOCK and pct >= MIN_PERCENTAGE_COMPONENTS_FOR_PAGE_BLOCK:
+        comp_pct = components_with_detection / total_components
+        comp_ok = components_with_detection >= MIN_COMPONENTS_WITH_DETECTION_FOR_PAGE_BLOCK and comp_pct >= MIN_PERCENTAGE_COMPONENTS_FOR_PAGE_BLOCK
+        if comp_ok:
             block_page = True
             block_reason = "components_with_detection: %d/%d (%.0f%% >= %.0f%%)" % (
                 components_with_detection, total_components,
-                pct * 100, MIN_PERCENTAGE_COMPONENTS_FOR_PAGE_BLOCK * 100,
+                comp_pct * 100, MIN_PERCENTAGE_COMPONENTS_FOR_PAGE_BLOCK * 100,
             )
+    if not block_page and total_words > 0 and total_matched >= MIN_MATCHES_FOR_PAGE_BLOCK:
+        if total_words <= MIN_WORDS_FOR_RATIO_BLOCK:
+            block_page = True
+            block_reason = "short_page_count: %d matches in %d words" % (total_matched, total_words)
+        else:
+            word_ratio = total_matched / total_words
+            if word_ratio >= MIN_RATIO_WORDS_FOR_PAGE_BLOCK:
+                block_page = True
+                block_reason = "words_ratio: %d/%d (%.1f%% >= %.1f%%)" % (
+                    total_matched, total_words, word_ratio * 100, MIN_RATIO_WORDS_FOR_PAGE_BLOCK * 100,
+                )
 
     out_debug: Dict[str, Any] = {
         "matched": merged_matched[:50],
-        "counts": merged_counts,
+        "counts": {"matched": total_matched, "total": total_words},
         "snippet": first_snippet,
         "blocks_with": {"components_with_detection": components_with_detection, "total_components": total_components},
     }
