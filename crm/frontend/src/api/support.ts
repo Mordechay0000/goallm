@@ -30,6 +30,10 @@ export interface SupportTicket {
   user_avatar_url?: string;
   replies_count?: number;
   unread_replies_count?: number;
+  // For ticket owner: number of support (system) replies not yet read by the user
+  unread_support_replies_for_owner?: number;
+  // For admins: number of user replies that have not yet been read by any admin (shared across all admins)
+  unread_user_replies_for_admin?: number;
   attachments?: SupportAttachmentItem[];
   attached_rule_request_id?: number;
   request_snapshot_for_client?: string; // JSON
@@ -116,11 +120,29 @@ export const supportApi = {
     search?: string;
     /** 'mine' = רק הפניות שלי (גם לאדמין); לא מועבר = לאדמין כל הפניות */
     scope?: 'mine' | 'all';
+    /** אדמין: all | unread | read */
+    read_filter?: 'all' | 'unread' | 'read';
+    /** אדמין: סינון לפי משתמש (user_id של בעל הפנייה) */
+    user_id?: number;
   }): Promise<{ tickets: SupportTicket[]; total: number }> => {
     const response = await apiClient.get<{ tickets: SupportTicket[]; total: number }>(
       '/api/support/tickets',
       { params }
     );
+    return response.data;
+  },
+
+  /** אדמין: רשימת משתמשים שיש להם פניות (למסנן) */
+  listTicketUsers: async (): Promise<{ users: { id: number; first_name?: string; last_name?: string; phone?: string }[] }> => {
+    const response = await apiClient.get<{ users: { id: number; first_name?: string; last_name?: string; phone?: string }[] }>(
+      '/api/support/tickets/users'
+    );
+    return response.data;
+  },
+
+  /** אדמין: מחיקת פניות נבחרות */
+  bulkDeleteTickets: async (ticketIds: number[]): Promise<{ deleted: number }> => {
+    const response = await apiClient.post<{ deleted: number }>('/api/support/tickets/bulk-delete', { ticket_ids: ticketIds });
     return response.data;
   },
 

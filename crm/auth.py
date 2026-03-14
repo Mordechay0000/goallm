@@ -89,7 +89,7 @@ async def get_current_admin(
     current_user: dict = Depends(get_current_user),
 ):
     """Require current user to be admin. Use for admin-only endpoints."""
-    if not current_user.get("is_admin"):
+    if current_user.get("is_admin") is not True:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="גישה נדחתה - נדרשת הרשאת מנהל",

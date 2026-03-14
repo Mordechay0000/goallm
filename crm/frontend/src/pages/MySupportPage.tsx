@@ -11,7 +11,7 @@ import {
   Button,
   TablePagination,
 } from '@mui/material';
-import { Add as AddIcon, Notifications as NotificationsIcon, ChevronLeft as ChevronLeftIcon } from '@mui/icons-material';
+import { Add as AddIcon, ChevronLeft as ChevronLeftIcon } from '@mui/icons-material';
 import { supportApi } from '../api/support';
 import type { SupportTicket } from '../api/support';
 
@@ -116,7 +116,9 @@ const MySupportPage: React.FC = () => {
         ) : (
           <>
             <Box sx={{ width: '100%', bgcolor: 'background.paper', borderRadius: 1 }}>
-              {tickets.map((t, idx) => (
+              {tickets.map((t, idx) => {
+                const hasUnread = (t.unread_replies_count ?? 0) > 0;
+                return (
                 <Box
                   key={t.id}
                   onClick={() => handleOpenTicket(t)}
@@ -129,18 +131,12 @@ const MySupportPage: React.FC = () => {
                     borderColor: 'divider',
                     cursor: 'pointer',
                     transition: 'background-color 0.2s ease',
+                    bgcolor: hasUnread ? 'rgba(25, 118, 210, 0.08)' : undefined,
                     '&:hover': { bgcolor: 'action.selected' },
                     px: 1.5,
                   }}
+                  title={hasUnread ? 'יש תגובות שלא נקראו' : undefined}
                 >
-                  {(t.unread_replies_count ?? 0) > 0 && (
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                      <NotificationsIcon sx={{ color: 'primary.main', fontSize: 20 }} titleAccess="תגובות שלא נקראו" />
-                      <Typography variant="caption" color="primary.main" fontWeight={600}>
-                        {t.unread_replies_count} הודעות לא נקראו
-                      </Typography>
-                    </Box>
-                  )}
                   <Box sx={{ flex: 1, minWidth: 0 }}>
                     <Typography variant="body2" fontWeight={600} noWrap>
                       {t.subject}
@@ -157,7 +153,8 @@ const MySupportPage: React.FC = () => {
                   </Typography>
                   <ChevronLeftIcon color="action" />
                 </Box>
-              ))}
+              );
+              })}
             </Box>
             <TablePagination
               component="div"

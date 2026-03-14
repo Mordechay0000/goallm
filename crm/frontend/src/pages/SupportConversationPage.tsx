@@ -30,7 +30,9 @@ import SupportAttachBar from '../components/SupportAttachBar';
 import { getAvatarUrl } from '../api/auth';
 import { useAuthStore } from '../store/authStore';
 import { ruleRequestsApi } from '../api/ruleRequests';
+import type { RuleRequest, RuleConflictRule } from '../api/ruleRequests';
 import { TagInput } from '../components/TagInput';
+import RuleConflictDialog from '../components/RuleConflictDialog';
 
 /** Renders markdown; links to audio/video are shown as players, other links as normal. */
 const SupportMessageContent: React.FC<{ content: string; resolveUrl: (url: string) => string }> = ({ content, resolveUrl }) => {
@@ -350,6 +352,12 @@ const SupportConversationPage: React.FC<{ isAdmin?: boolean }> = ({ isAdmin }) =
   const [showEditCopyForm, setShowEditCopyForm] = useState(false);
   const [editCopySnapshot, setEditCopySnapshot] = useState<AttachedRequestSnapshot | null>(null);
   const [adminActionLoading, setAdminActionLoading] = useState(false);
+  const [approveSuccessMessage, setApproveSuccessMessage] = useState<string | null>(null);
+  const [approveConflictData, setApproveConflictData] = useState<{
+    request: RuleRequest;
+    existing_rule: RuleConflictRule;
+    proposed_rule: RuleConflictRule;
+  } | null>(null);
 
   const listPath = isAdmin ? '/admin/support' : '/support';
   const attachedRequestPending = ticket?.attached_request_status === 'pending';
@@ -368,6 +376,8 @@ const SupportConversationPage: React.FC<{ isAdmin?: boolean }> = ({ isAdmin }) =
       ]);
       setTicket(t);
       setReplies(r);
+      // עדכון מיידי של המספר בתפריט (פניות שלא נקראו) – listReplies סימן את השיחה כנקראה
+      window.dispatchEvent(new CustomEvent('support-stats-refresh'));
     } catch (e: unknown) {
       const ax = e as { response?: { data?: { detail?: string } } };
       setError(ax?.response?.data?.detail || 'שגיאה בטעינה');
@@ -390,10 +400,8 @@ const SupportConversationPage: React.FC<{ isAdmin?: boolean }> = ({ isAdmin }) =
       navigate('/support');
       return;
     }
-    if (!isAdmin && currentUser.is_admin && ticketId) {
-      navigate(`/admin/support/${ticketId}`, { replace: true });
-      return;
-    }
+    // Do not redirect admins from /support/:id to /admin/support/:id – the route determines context:
+    // from "הפניות שלי" → /support/:id (user view); from "פניות שהתקבלו" → /admin/support/:id (admin view).
   }, [currentUser, ticket, isAdmin, ticketId, navigate]);
 
   const handleBack = () => navigate(listPath);
@@ -409,7 +417,8 @@ const SupportConversationPage: React.FC<{ isAdmin?: boolean }> = ({ isAdmin }) =
       await supportApi.addReply(ticket.id, {
         content,
         ...(snapshot && { attached_request_snapshot: snapshot }),
-        is_support_reply: isAdmin,
+        // לפי מקום השליחה: פניות שלי → תגובת משתמש; פניות שהתקבלו (אדמין) → תגובת תמיכה
+        is_support_reply: isAdmin === true,
       });
       setReplyContent('');
       setShowEditCopyForm(false);
@@ -447,20 +456,41 @@ const SupportConversationPage: React.FC<{ isAdmin?: boolean }> = ({ isAdmin }) =
     await handleAddReply({ attached_request_snapshot: JSON.stringify(editCopySnapshot) });
   };
 
-  const handleApproveRequest = async () => {
+  const handleApproveRequest = async (opts?: { force_update?: boolean; skip_rule_update?: boolean }) => {
     if (!ticket?.attached_rule_request_id) return;
+    const requestId = approveConflictData?.request?.id ?? ticket.attached_rule_request_id;
     setAdminActionLoading(true);
     setError('');
+    setApproveSuccessMessage(null);
     try {
-      await ruleRequestsApi.approve(ticket.attached_rule_request_id);
+      const res = await ruleRequestsApi.approve(requestId, {
+        force_update: opts?.force_update,
+        skip_rule_update: opts?.skip_rule_update,
+      });
+      if (res.status === 'conflict') {
+        setApproveConflictData({ request: res.request, existing_rule: res.existing_rule, proposed_rule: res.proposed_rule });
+        setAdminActionLoading(false);
+        return;
+      }
+      setApproveConflictData(null);
+      const isFile = res?.request?.request_type === 'file';
+      if (res.already_existed_identical) {
+        setApproveSuccessMessage('הכלל כבר קיים ולכן לא נוסף. הבקשה סומנה כאושרה.');
+      } else {
+        setApproveSuccessMessage(isFile ? 'הבקשה אושרה והקובץ נוסף לרשימת הקבצים המותרים' : 'הבקשה אושרה והכלל נוסף לרשימה הגלובלית');
+      }
       await load();
     } catch (e: unknown) {
-      const ax = e as { response?: { data?: { detail?: string } } };
-      setError(ax?.response?.data?.detail || 'שגיאה באישור');
+      const ax = e as { response?: { data?: { detail?: string | unknown } }; message?: string };
+      const d = ax?.response?.data?.detail;
+      setError((typeof d === 'string' ? d : null) || ax?.message || 'שגיאה באישור');
     } finally {
       setAdminActionLoading(false);
     }
   };
+
+  const handleConflictUpdate = () => handleApproveRequest({ force_update: true });
+  const handleConflictLeave = () => handleApproveRequest({ skip_rule_update: true });
 
   const handleRejectRequest = async () => {
     if (!ticket?.attached_rule_request_id) return;
@@ -534,6 +564,12 @@ const SupportConversationPage: React.FC<{ isAdmin?: boolean }> = ({ isAdmin }) =
             {error}
           </Box>
         )}
+        {approveSuccessMessage && (
+          <Box sx={{ py: 1, mb: 2, bgcolor: 'success.light', color: 'success.contrastText', px: 2, borderRadius: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span>{approveSuccessMessage}</span>
+            <Button size="small" onClick={() => setApproveSuccessMessage(null)}>סגור</Button>
+          </Box>
+        )}
 
         <Box className="chat-view-frame" sx={{ width: '100%' }}>
           <Box className="chat-discussion" sx={{ width: '100%' }}>
@@ -562,8 +598,8 @@ const SupportConversationPage: React.FC<{ isAdmin?: boolean }> = ({ isAdmin }) =
                     </Button>
                     {attachedRequestPending && (
                       <>
-                        <Button size="small" color="success" startIcon={<CheckIcon />} onClick={handleApproveRequest} disabled={adminActionLoading}>
-                          אישור
+                        <Button size="small" color="success" startIcon={<CheckIcon />} onClick={() => handleApproveRequest()} disabled={adminActionLoading}>
+                          {adminActionLoading ? 'מאשר...' : 'אישור'}
                         </Button>
                         <Button size="small" color="error" startIcon={<CloseIcon />} onClick={handleRejectRequest} disabled={adminActionLoading}>
                           דחה (יש להוסיף תגובה למטה)
@@ -696,6 +732,15 @@ const SupportConversationPage: React.FC<{ isAdmin?: boolean }> = ({ isAdmin }) =
         </Box>
         </Box>
       </Paper>
+
+      <RuleConflictDialog
+        open={!!approveConflictData}
+        onClose={() => !adminActionLoading && setApproveConflictData(null)}
+        data={approveConflictData}
+        approving={adminActionLoading}
+        onUpdate={handleConflictUpdate}
+        onLeave={handleConflictLeave}
+      />
     </Container>
   );
 };

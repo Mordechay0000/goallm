@@ -39,6 +39,7 @@ import {
 import { Add as AddIcon, Delete as DeleteIcon, Edit as EditIcon, ExpandMore as ExpandMoreIcon, Search as SearchIcon } from '@mui/icons-material';
 import { adminApi, type GlobalRule, type GlobalRuleCreate, type GlobalRuleUpdate } from '../api/admin';
 import { TagInput } from '../components/TagInput';
+import RuleConflictDialog from '../components/RuleConflictDialog';
 import { validateDomainOrUrl, processUrlInput, normalizeUrlForRule, WWW_NORMALIZED_MESSAGE } from '../utils/validation';
 import { PAGE_DESCRIPTIONS } from '../brand';
 
@@ -68,6 +69,9 @@ const AdminGlobalRulesPage: React.FC = () => {
   const [textFilterEnabled, setTextFilterEnabled] = useState(true);
   const [imageFilterEnabled, setImageFilterEnabled] = useState(true);
   const [fileFilterEnabled, setFileFilterEnabled] = useState(true);
+  const [pdfFilterEnabled, setPdfFilterEnabled] = useState(true);
+  const [videoFilterEnabled, setVideoFilterEnabled] = useState(true);
+  const [surfWidgetEnabled, setSurfWidgetEnabled] = useState(true);
   const [urlError, setUrlError] = useState('');
   const [saving, setSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
@@ -88,6 +92,13 @@ const AdminGlobalRulesPage: React.FC = () => {
 
   const [editRuleIdError, setEditRuleIdError] = useState<string | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
+  /** When adding a rule: result of check-create (exact match + same-domain rules). Shows conflict/same-domain dialog. */
+  const [addRuleCheck, setAddRuleCheck] = useState<{
+    exact_match: { rule: GlobalRule; identical: boolean } | null;
+    same_domain_rules: GlobalRule[];
+    proposed_rule: NonNullable<Awaited<ReturnType<typeof adminApi.checkCreateGlobalRule>>['proposed_rule']>;
+    createData: GlobalRuleCreate;
+  } | null>(null);
 
   const loadRules = async () => {
     setLoading(true);
@@ -151,6 +162,9 @@ const AdminGlobalRulesPage: React.FC = () => {
     setTextFilterEnabled(true);
     setImageFilterEnabled(true);
     setFileFilterEnabled(true);
+    setPdfFilterEnabled(true);
+    setVideoFilterEnabled(true);
+    setSurfWidgetEnabled(true);
     setDialogOpen(true);
   };
 
@@ -165,6 +179,9 @@ const AdminGlobalRulesPage: React.FC = () => {
     setTextFilterEnabled(r.text_filter_enabled !== false);
     setImageFilterEnabled(r.image_filter_enabled !== false);
     setFileFilterEnabled(r.file_filter_enabled !== false);
+    setPdfFilterEnabled(r.pdf_filter_enabled !== false);
+    setVideoFilterEnabled(r.video_filter_enabled !== false);
+    setSurfWidgetEnabled(r.surf_widget_enabled !== false);
     setDialogOpen(true);
   };
 
@@ -181,20 +198,102 @@ const AdminGlobalRulesPage: React.FC = () => {
       const tf = isAllow ? textFilterEnabled : undefined;
       const imgf = isAllow ? imageFilterEnabled : undefined;
       const filef = isAllow ? fileFilterEnabled : undefined;
+      const pdff = isAllow ? pdfFilterEnabled : undefined;
+      const videof = isAllow ? videoFilterEnabled : undefined;
+      const surfw = isAllow ? surfWidgetEnabled : undefined;
       if (editingId) {
-        const data: GlobalRuleUpdate = { url: normalized, action, include_subdomains: includeSubdomains, tags: tags.length ? tags : undefined, text_filter_enabled: tf, image_filter_enabled: imgf, file_filter_enabled: filef };
+        const data: GlobalRuleUpdate = { url: normalized, action, include_subdomains: includeSubdomains, tags: tags.length ? tags : undefined, text_filter_enabled: tf, image_filter_enabled: imgf, file_filter_enabled: filef, pdf_filter_enabled: pdff, video_filter_enabled: videof, surf_widget_enabled: surfw };
         await adminApi.updateGlobalRule(editingId, data);
+        setDialogOpen(false);
+        setUrlError('');
+        await loadRules();
+        if (hadWww) alert(WWW_NORMALIZED_MESSAGE);
       } else {
-        const data: GlobalRuleCreate = { url: normalized, action, include_subdomains: includeSubdomains, tags: tags.length ? tags : undefined, text_filter_enabled: tf, image_filter_enabled: imgf, file_filter_enabled: filef };
+        const data: GlobalRuleCreate = { url: normalized, action, include_subdomains: includeSubdomains, tags: tags.length ? tags : undefined, text_filter_enabled: tf, image_filter_enabled: imgf, file_filter_enabled: filef, pdf_filter_enabled: pdff, video_filter_enabled: videof, surf_widget_enabled: surfw };
+        const check = await adminApi.checkCreateGlobalRule(data);
+        if (check.exact_match?.identical) {
+          alert('כלל זהה כבר קיים ברשימה.');
+          setSaving(false);
+          return;
+        }
+        if (check.exact_match || (check.same_domain_rules?.length ?? 0) > 0) {
+          setAddRuleCheck({
+            exact_match: check.exact_match,
+            same_domain_rules: check.same_domain_rules ?? [],
+            proposed_rule: check.proposed_rule,
+            createData: data,
+          });
+          setSaving(false);
+          return;
+        }
         await adminApi.createGlobalRule(data);
+        setDialogOpen(false);
+        setUrlError('');
+        await loadRules();
+        if (hadWww) alert(WWW_NORMALIZED_MESSAGE);
       }
-      setDialogOpen(false);
-      setUrlError('');
-      await loadRules();
-      if (hadWww) alert(WWW_NORMALIZED_MESSAGE);
     } catch (e: unknown) {
       const msg = e && typeof e === 'object' && 'response' in e && (e as { response?: { data?: { detail?: string } } }).response?.data?.detail;
       alert(msg || 'שגיאה בשמירה');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleAddRuleConflictUpdate = async () => {
+    if (!addRuleCheck?.exact_match) return;
+    setSaving(true);
+    try {
+      const data: GlobalRuleUpdate = { ...addRuleCheck.createData, url: addRuleCheck.createData.url };
+      await adminApi.updateGlobalRule(addRuleCheck.exact_match.rule.id, data);
+      setAddRuleCheck(null);
+      setDialogOpen(false);
+      await loadRules();
+    } catch (e: unknown) {
+      const msg = e && typeof e === 'object' && 'response' in e && (e as { response?: { data?: { detail?: string } } }).response?.data?.detail;
+      alert(msg || 'שגיאה בעדכון');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleAddRuleConflictLeave = () => {
+    if ((addRuleCheck?.same_domain_rules?.length ?? 0) > 0) {
+      setAddRuleCheck((prev) => prev ? { ...prev, exact_match: null } : null);
+    } else {
+      setAddRuleCheck(null);
+    }
+  };
+
+  const handleAddRuleReplace = async (ruleId: number) => {
+    if (!addRuleCheck) return;
+    setSaving(true);
+    try {
+      const d = addRuleCheck.createData;
+      const data: GlobalRuleUpdate = { action: d.action, include_subdomains: d.include_subdomains, tags: d.tags, text_filter_enabled: d.text_filter_enabled, image_filter_enabled: d.image_filter_enabled, file_filter_enabled: d.file_filter_enabled, pdf_filter_enabled: d.pdf_filter_enabled, video_filter_enabled: d.video_filter_enabled, surf_widget_enabled: d.surf_widget_enabled };
+      await adminApi.updateGlobalRule(ruleId, data);
+      setAddRuleCheck(null);
+      setDialogOpen(false);
+      await loadRules();
+    } catch (e: unknown) {
+      const msg = e && typeof e === 'object' && 'response' in e && (e as { response?: { data?: { detail?: string } } }).response?.data?.detail;
+      alert(msg || 'שגיאה בהחלפה');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleAddRuleAnyway = async () => {
+    if (!addRuleCheck) return;
+    setSaving(true);
+    try {
+      await adminApi.createGlobalRule(addRuleCheck.createData);
+      setAddRuleCheck(null);
+      setDialogOpen(false);
+      await loadRules();
+    } catch (e: unknown) {
+      const msg = e && typeof e === 'object' && 'response' in e && (e as { response?: { data?: { detail?: string } } }).response?.data?.detail;
+      alert(msg || 'שגיאה בהוספה');
     } finally {
       setSaving(false);
     }
@@ -363,14 +462,17 @@ const AdminGlobalRulesPage: React.FC = () => {
                 <TableCell>סינון מלל</TableCell>
                 <TableCell>סינון תמונות</TableCell>
                 <TableCell>סינון קבצים</TableCell>
+                <TableCell>סינון PDF</TableCell>
+                <TableCell>סינון וידאו</TableCell>
+                <TableCell>וידג'ט</TableCell>
                 <TableCell align="left">פעולות</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {loading ? (
-                <TableRow><TableCell colSpan={7}>טוען...</TableCell></TableRow>
+                <TableRow><TableCell colSpan={10}>טוען...</TableCell></TableRow>
               ) : filteredRules.length === 0 ? (
-                <TableRow><TableCell colSpan={7}>{rules.length === 0 ? 'אין כללים גלובליים' : 'אין תוצאות לחיפוש או לסינון'}</TableCell></TableRow>
+                <TableRow><TableCell colSpan={10}>{rules.length === 0 ? 'אין כללים גלובליים' : 'אין תוצאות לחיפוש או לסינון'}</TableCell></TableRow>
               ) : (
                 paginatedRules.map((r) => (
                   <TableRow key={r.id} hover sx={{ '&:hover': { bgcolor: 'action.selected' } }}>
@@ -396,6 +498,9 @@ const AdminGlobalRulesPage: React.FC = () => {
                     <TableCell>{r.action === 'block' ? '—' : (r.text_filter_enabled !== false ? 'כן' : 'לא')}</TableCell>
                     <TableCell>{r.action === 'block' ? '—' : (r.image_filter_enabled !== false ? 'כן' : 'לא')}</TableCell>
                     <TableCell>{r.action === 'block' ? '—' : (r.file_filter_enabled !== false ? 'כן' : 'לא')}</TableCell>
+                    <TableCell>{r.action === 'block' ? '—' : (r.pdf_filter_enabled !== false ? 'כן' : 'לא')}</TableCell>
+                    <TableCell>{r.action === 'block' ? '—' : (r.video_filter_enabled !== false ? 'כן' : 'לא')}</TableCell>
+                    <TableCell>{r.action === 'block' ? '—' : (r.surf_widget_enabled !== false ? 'כן' : 'לא')}</TableCell>
                     <TableCell align="left">
                       <IconButton size="small" onClick={() => openEdit(r)}><EditIcon /></IconButton>
                       <IconButton size="small" color="error" onClick={() => setDeleteConfirm(r.id)}><DeleteIcon /></IconButton>
@@ -465,7 +570,22 @@ const AdminGlobalRulesPage: React.FC = () => {
                 />
                 <FormControlLabel
                   control={<Checkbox checked={fileFilterEnabled} onChange={(e) => setFileFilterEnabled(e.target.checked)} />}
-                  label="סינון קבצים לאתר (טרם נתמך)"
+                  label="סינון קבצים לאתר"
+                  sx={{ display: 'block', mt: 0.5 }}
+                />
+                <FormControlLabel
+                  control={<Checkbox checked={pdfFilterEnabled} onChange={(e) => setPdfFilterEnabled(e.target.checked)} />}
+                  label="סינון מסמכים (PDF)"
+                  sx={{ display: 'block', mt: 0.5 }}
+                />
+                <FormControlLabel
+                  control={<Checkbox checked={videoFilterEnabled} onChange={(e) => setVideoFilterEnabled(e.target.checked)} />}
+                  label="סינון וידאו (כפתור שלח לבדיקה)"
+                  sx={{ display: 'block', mt: 0.5 }}
+                />
+                <FormControlLabel
+                  control={<Checkbox checked={surfWidgetEnabled} onChange={(e) => setSurfWidgetEnabled(e.target.checked)} />}
+                  label="הזרקת וידג'ט (סרגל דיווח)"
                   sx={{ display: 'block', mt: 0.5 }}
                 />
               </AccordionDetails>
@@ -477,6 +597,59 @@ const AdminGlobalRulesPage: React.FC = () => {
           <Button variant="contained" onClick={handleSave} disabled={saving || !url.trim() || !!urlError}>{editingId ? 'שמור' : 'הוסף'}</Button>
         </DialogActions>
       </Dialog>
+
+      {/* Add rule: exact match conflict (same domain+path, different content) */}
+      {addRuleCheck?.exact_match && (
+        <RuleConflictDialog
+          open
+          onClose={() => setAddRuleCheck(null)}
+          data={{
+            existing_rule: addRuleCheck.exact_match.rule,
+            proposed_rule: addRuleCheck.proposed_rule,
+          }}
+          approving={saving}
+          onUpdate={handleAddRuleConflictUpdate}
+          onLeave={handleAddRuleConflictLeave}
+        />
+      )}
+
+      {/* Add rule: same-domain rules (other rules on domain – add anyway or replace one) */}
+      {addRuleCheck && !addRuleCheck.exact_match && (addRuleCheck.same_domain_rules?.length ?? 0) > 0 && (
+        <Dialog open onClose={() => setAddRuleCheck(null)} maxWidth="sm" fullWidth>
+          <DialogTitle>קיימים כללים על הדומיין</DialogTitle>
+          <DialogContent>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              קיימים כללים נוספים על אותו דומיין. ניתן להוסיף את הכלל החדש בכל זאת (לא ידרוס כלום) או להחליף אחד מהכללים הקיימים בתוכן החדש.
+            </Typography>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell sx={{ fontWeight: 600 }}>כלל קיים</TableCell>
+                  <TableCell sx={{ fontWeight: 600 }} align="left">פעולה</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {addRuleCheck.same_domain_rules.map((r) => (
+                  <TableRow key={r.id}>
+                    <TableCell sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>{ruleDisplayUrl(r)}</TableCell>
+                    <TableCell align="left">
+                      <Button size="small" variant="outlined" onClick={() => handleAddRuleReplace(r.id)} disabled={saving}>
+                        החלף
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setAddRuleCheck(null)} disabled={saving}>ביטול</Button>
+            <Button variant="contained" onClick={handleAddRuleAnyway} disabled={saving}>
+              {saving ? '...' : 'הוסף בכל זאת'}
+            </Button>
+          </DialogActions>
+        </Dialog>
+      )}
 
       <Dialog open={deleteConfirm !== null} onClose={() => setDeleteConfirm(null)}>
         <DialogTitle>מחיקת כלל גלובלי</DialogTitle>

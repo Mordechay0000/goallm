@@ -464,6 +464,12 @@ def init_db_schema():
     if "file_filter_enabled" not in gr_cols:
         db_connection.execute("ALTER TABLE global_rules ADD COLUMN file_filter_enabled INTEGER NOT NULL DEFAULT 1")
         logger.info("Added file_filter_enabled to global_rules")
+        gr_cols = [row[1] for row in db_connection.execute("PRAGMA table_info(global_rules)").fetchall()]
+    for col in ("pdf_filter_enabled", "video_filter_enabled", "surf_widget_enabled"):
+        if col not in gr_cols:
+            db_connection.execute(f"ALTER TABLE global_rules ADD COLUMN {col} INTEGER NOT NULL DEFAULT 1")
+            logger.info("Added %s to global_rules", col)
+            gr_cols = [row[1] for row in db_connection.execute("PRAGMA table_info(global_rules)").fetchall()]
     # Migration: audit fields (who created/updated – stored for logging/security, not displayed in API)
     gr_cols = [row[1] for row in db_connection.execute("PRAGMA table_info(global_rules)").fetchall()]
     if "created_by_user_id" not in gr_cols:
@@ -489,6 +495,27 @@ def init_db_schema():
             created_at INTEGER NOT NULL
         )
     """)
+
+    # site_injections: per-site custom code (head/body) and hide selectors (admin only)
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS site_injections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            domain_pattern TEXT NOT NULL,
+            path_pattern TEXT,
+            include_subdomains INTEGER NOT NULL DEFAULT 0,
+            head_code TEXT,
+            body_code TEXT,
+            hide_selectors TEXT,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )
+    """)
+    db_connection.execute("CREATE INDEX IF NOT EXISTS idx_site_injections_domain ON site_injections(domain_pattern)")
+    si_cols = [row[1] for row in db_connection.execute("PRAGMA table_info(site_injections)").fetchall()]
+    if "path_exact_only" not in si_cols:
+        db_connection.execute("ALTER TABLE site_injections ADD COLUMN path_exact_only INTEGER NOT NULL DEFAULT 1")
+        logger.info("Added path_exact_only to site_injections")
 
     # IP bindings: which client IP is associated with which user (for filter per-user)
     db_connection.execute("""

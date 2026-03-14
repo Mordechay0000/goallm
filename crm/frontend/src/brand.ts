@@ -49,6 +49,7 @@ export const PAGE_DESCRIPTIONS = {
   adminRequests: 'בקשות שהתקבלו – אשר או דחה',
   adminGlobalRules: 'רשימת האתרים הגלובלית – חסום או פתח לכולם',
   adminGlobalFiles: 'רשימת הקבצים המותרים גלובלית',
+  adminSiteInjections: 'הזרקת קוד ל־head/body והסתרת רכיבים לפי אתר',
   adminFilterSwitches: 'הפעלה וכיבוי של סינונים',
   adminSupport: 'פניות שהתקבלו – צפה והגב',
 } as const;

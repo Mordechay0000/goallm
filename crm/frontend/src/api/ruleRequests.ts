@@ -55,6 +55,21 @@ export interface RuleRequestCreate {
   request_url?: string;
 }
 
+/** Shape of rule in conflict response (existing vs proposed) */
+export interface RuleConflictRule {
+  domain_pattern?: string;
+  path_pattern?: string;
+  action?: string;
+  include_subdomains?: boolean;
+  tags?: string[];
+  text_filter_enabled?: boolean;
+  image_filter_enabled?: boolean;
+  file_filter_enabled?: boolean;
+  id?: number;
+  created_at?: number;
+  updated_at?: number;
+}
+
 export const ruleRequestsApi = {
   create: async (data: RuleRequestCreate): Promise<RuleRequest> => {
     const response = await apiClient.post<RuleRequest>('/api/rule-requests', data);
@@ -75,9 +90,23 @@ export const ruleRequestsApi = {
     await apiClient.delete(`/api/rule-requests/${id}`);
   },
 
-  /** Approve request: adds rule to global list only. profileId is ignored (kept for API compat). */
-  approve: async (id: number, profileId?: number): Promise<{ status: string; request: RuleRequest }> => {
-    const response = await apiClient.post<{ status: string; request: RuleRequest }>(`/api/admin/rule-requests/${id}/approve`, { profile_id: profileId ?? null });
+  /** Approve request: adds rule to global list. Options: force_update / skip_rule_update when status was conflict. */
+  approve: async (
+    id: number,
+    options?: { profileId?: number; force_update?: boolean; skip_rule_update?: boolean }
+  ): Promise<
+    | { status: 'approved'; request: RuleRequest; already_existed_identical?: boolean }
+    | { status: 'conflict'; request: RuleRequest; existing_rule: RuleConflictRule; proposed_rule: RuleConflictRule }
+  > => {
+    const body: { profile_id: number | null; force_update?: boolean; skip_rule_update?: boolean } = {
+      profile_id: options?.profileId ?? null,
+    };
+    if (options?.force_update === true) body.force_update = true;
+    if (options?.skip_rule_update === true) body.skip_rule_update = true;
+    const response = await apiClient.post<
+      | { status: 'approved'; request: RuleRequest; already_existed_identical?: boolean }
+      | { status: 'conflict'; request: RuleRequest; existing_rule: RuleConflictRule; proposed_rule: RuleConflictRule }
+    >(`/api/admin/rule-requests/${id}/approve`, body);
     return response.data;
   },
 

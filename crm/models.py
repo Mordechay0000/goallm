@@ -190,6 +190,9 @@ class GlobalRuleCreate(BaseModel):
     text_filter_enabled: Optional[bool] = Field(default=None, description="Only when action=allow; ignored when action=block")
     image_filter_enabled: Optional[bool] = Field(default=None, description="Only when action=allow; ignored when action=block")
     file_filter_enabled: Optional[bool] = Field(default=None, description="Only when action=allow; ignored when action=block")
+    pdf_filter_enabled: Optional[bool] = Field(default=None, description="Only when action=allow; ignored when action=block")
+    video_filter_enabled: Optional[bool] = Field(default=None, description="Only when action=allow; ignored when action=block")
+    surf_widget_enabled: Optional[bool] = Field(default=None, description="Only when action=allow; ignored when action=block")
 
     @validator('url')
     def validate_url(cls, v):
@@ -227,6 +230,9 @@ class GlobalRuleUpdate(BaseModel):
     text_filter_enabled: Optional[bool] = None
     image_filter_enabled: Optional[bool] = None
     file_filter_enabled: Optional[bool] = None
+    pdf_filter_enabled: Optional[bool] = None
+    video_filter_enabled: Optional[bool] = None
+    surf_widget_enabled: Optional[bool] = None
 
     @validator("url")
     def normalize_url(cls, v):
@@ -245,6 +251,9 @@ class GlobalRuleResponse(BaseModel):
     text_filter_enabled: bool = True
     image_filter_enabled: bool = True
     file_filter_enabled: bool = True
+    pdf_filter_enabled: bool = True
+    video_filter_enabled: bool = True
+    surf_widget_enabled: bool = True
     created_at: int
     updated_at: int
 
@@ -351,6 +360,8 @@ class RuleRequestCreate(BaseModel):
 class RuleRequestApprove(BaseModel):
     """Optional; approval adds rule to global list only. profile_id kept for API compatibility, ignored."""
     profile_id: Optional[int] = None
+    force_update: bool = False  # when conflict: update existing rule with request data
+    skip_rule_update: bool = False  # when conflict: leave existing rule as-is, only link request to it
 
 
 class RuleRequestResponse(BaseModel):
@@ -403,6 +414,54 @@ class AllowedFileUrlBody(BaseModel):
     url: str = Field(..., min_length=1)
 
 
+# Site injections (הזרקת קוד והסתרת תוכן לאתר – אדמין)
+class SiteInjectionCreate(BaseModel):
+    """Create site injection: URL pattern (like global rules), optional head/body code, hide selectors."""
+    url: str = Field(..., min_length=1, description="כתובת אתר (דומיין או דומיין/נתיב)")
+    head_code: Optional[str] = Field(None, description="קוד להזרקה ל־<head>")
+    body_code: Optional[str] = Field(None, description="קוד להזרקה לפני </body>")
+    hide_selectors: Optional[List[str]] = Field(None, description="בוררים CSS להסתרת רכיבים (למשל ['.ad', '#sidebar'])")
+    include_subdomains: bool = Field(default=False, description="כלול תת־דומיינים")
+    path_exact_only: bool = Field(default=True, description="True=רק הכתובת הזו, False=גם כל הנתיבים מתחת")
+    enabled: bool = Field(default=True)
+
+
+class SiteInjectionUpdate(BaseModel):
+    """Update site injection."""
+    url: Optional[str] = Field(None, min_length=1)
+    head_code: Optional[str] = None
+    body_code: Optional[str] = None
+    hide_selectors: Optional[List[str]] = None
+    include_subdomains: Optional[bool] = None
+    path_exact_only: Optional[bool] = None
+    enabled: Optional[bool] = None
+
+
+class SiteInjectionResponse(BaseModel):
+    """Site injection rule for API response."""
+    id: int
+    domain_pattern: str
+    path_pattern: Optional[str]
+    include_subdomains: bool
+    path_exact_only: bool = True
+    head_code: Optional[str]
+    body_code: Optional[str]
+    hide_selectors_list: List[str]  # parsed from hide_selectors JSON
+    enabled: bool
+    created_at: int
+    updated_at: int
+
+    @property
+    def display_url(self) -> str:
+        url = self.domain_pattern or ""
+        if self.path_pattern:
+            url += self.path_pattern
+        return url
+
+    class Config:
+        from_attributes = True
+
+
 # Support tickets (פניות משתמשים)
 class SupportAttachmentItem(BaseModel):
     name: str
@@ -431,6 +490,10 @@ class SupportTicketResponse(BaseModel):
     user_avatar_url: Optional[str] = None
     replies_count: Optional[int] = None
     unread_replies_count: Optional[int] = None  # for ticket owner: replies not yet read
+    # For ticket owner: number of support (system) replies not yet read by the user
+    unread_support_replies_for_owner: Optional[int] = None
+    # For admins: number of user replies that have not yet been read by any admin (shared across all admins)
+    unread_user_replies_for_admin: Optional[int] = None
     attachments: Optional[List[SupportAttachmentItem]] = None
     attached_rule_request_id: Optional[int] = None
     """Request as the user sent it (for client display). Admin edits are not shown to client."""
@@ -467,3 +530,8 @@ class SupportReplyResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class SupportTicketsBulkDeleteBody(BaseModel):
+    """Admin: delete multiple support tickets."""
+    ticket_ids: List[int] = Field(..., min_length=1, description="רשימת מזהה פניות למחיקה")

@@ -3,7 +3,7 @@
  * Sidebar navigation with clear hierarchy
  */
 import React, { useState, useEffect } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation, Navigate } from 'react-router-dom';
 import {
   Box,
   Drawer,
@@ -39,6 +39,7 @@ import {
   QuestionAnswer as QuestionAnswerIcon,
   Build as BuildIcon,
   InsertDriveFile as InsertDriveFileIcon,
+  Code as CodeIcon,
 } from '@mui/icons-material';
 import { useAuthStore } from '../store/authStore';
 import { getAvatarUrl } from '../api/auth';
@@ -93,6 +94,17 @@ const navItems: NavItem[] = [
   },
 ];
 
+/** Redirect non-admins away from any /admin/* path. Ensures admin pages and data are never shown to non-admins. */
+const AdminRouteGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const location = useLocation();
+  const { user } = useAuthStore();
+  // Only redirect when user is known and not admin (avoid redirecting while auth is still loading)
+  if (location.pathname.startsWith('/admin') && user != null && !user.is_admin) {
+    return <Navigate to="/" replace />;
+  }
+  return <>{children}</>;
+};
+
 const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
@@ -105,12 +117,19 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     if (!user) return;
     supportApi.getStats().then(setSupportStats).catch(() => {});
   }, [user]);
-  // Refresh support stats when opening the support list (so badge updates after marking read)
+  // Refresh when entering list page
   const isSupportList = location.pathname === '/support' || location.pathname === '/admin/support';
   useEffect(() => {
     if (!user || !isSupportList) return;
     supportApi.getStats().then(setSupportStats).catch(() => {});
   }, [user, isSupportList]);
+  // Refresh immediately when entering a conversation (listReplies marks as read, then we refresh badge)
+  useEffect(() => {
+    if (!user) return;
+    const onRefresh = () => supportApi.getStats().then(setSupportStats).catch(() => {});
+    window.addEventListener('support-stats-refresh', onRefresh);
+    return () => window.removeEventListener('support-stats-refresh', onRefresh);
+  }, [user]);
 
   const handleDrawerToggle = () => {
     setMobileOpen(!mobileOpen);
@@ -317,6 +336,36 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   primaryTypographyProps={{
                     fontSize: '0.95rem',
                     fontWeight: isActive('/admin/global-files') ? 600 : 400,
+                  }}
+                />
+              </ListItemButton>
+            </ListItem>
+            <ListItem disablePadding sx={{ mb: 0 }}>
+              <ListItemButton
+                selected={isActive('/admin/site-injections')}
+                onClick={() => {
+                  navigate('/admin/site-injections');
+                  setMobileOpen(false);
+                }}
+                sx={{
+                  minHeight: 48,
+                  py: 1,
+                  px: 2,
+                  '&.Mui-selected': {
+                    borderRight: '3px solid',
+                    borderColor: 'primary.main',
+                    boxShadow: 'inset 0 0 24px rgba(30, 58, 95, 0.08)',
+                  },
+                }}
+              >
+                <ListItemIcon sx={{ minWidth: 44, mr: 1.5 }}>
+                  <CodeIcon />
+                </ListItemIcon>
+                <ListItemText
+                  primary="הזרקות לאתר (אדמין)"
+                  primaryTypographyProps={{
+                    fontSize: '0.95rem',
+                    fontWeight: isActive('/admin/site-injections') ? 600 : 400,
                   }}
                 />
               </ListItemButton>
@@ -531,7 +580,9 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         className="main-content"
       >
         <Toolbar sx={{ minHeight: { xs: 56, sm: 64 } }} />
-        <Box sx={{ pt: { xs: 2, sm: 3 } }} className="container-content">{children}</Box>
+        <Box sx={{ pt: { xs: 2, sm: 3 } }} className="container-content">
+          <AdminRouteGuard>{children}</AdminRouteGuard>
+        </Box>
       </Box>
     </Box>
   );

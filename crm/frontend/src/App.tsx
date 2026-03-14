@@ -29,6 +29,7 @@ import AdminUsersPage from './pages/AdminUsersPage';
 import AdminRequestsPage from './pages/AdminRequestsPage';
 import AdminGlobalRulesPage from './pages/AdminGlobalRulesPage';
 import AdminAllowedFilesPage from './pages/AdminAllowedFilesPage';
+import AdminSiteInjectionsPage from './pages/AdminSiteInjectionsPage';
 import AdminFilterSwitchesPage from './pages/AdminFilterSwitchesPage';
 import MyRequestsPage from './pages/MyRequestsPage';
 import RequestFilePage from './pages/RequestFilePage';
@@ -284,6 +285,16 @@ function App() {
               <ProtectedRoute>
                 <AdminLayout>
                   <AdminAllowedFilesPage />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/site-injections"
+            element={
+              <ProtectedRoute>
+                <AdminLayout>
+                  <AdminSiteInjectionsPage />
                 </AdminLayout>
               </ProtectedRoute>
             }

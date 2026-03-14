@@ -63,7 +63,14 @@ function actionLabel(action: string): string {
 const STATUS_LABELS: Record<string, string> = {
   open: 'פתוח',
   blocked: 'חסום',
-  review: 'בדיקה / דף לא ברשימה',
+  blocked_user: 'חסום – הגדרות משתמש',
+  blocked_global: 'חסום – רשימה גלובלית',
+  review: 'לא נבדק',
+  text_filter_blocked: 'נחסם רובוט המלל',
+  file_review: 'קובץ לא נבדק',
+  file_blocked: 'קובץ נחסם',
+  file_blocked_user: 'קובץ נחסם – הגדרות משתמש',
+  file_blocked_global: 'קובץ נחסם – רשימה גלובלית',
   cert_missing: 'חוסר בתעודת אבטחה',
   error: 'שגיאה',
   custom_block: 'חסימה מותאמת',
@@ -75,19 +82,20 @@ function statusLabel(s: string): string {
   return STATUS_LABELS[s] ?? s;
 }
 
+const BLOCKED_STATUSES = [
+  'blocked', 'blocked_user', 'blocked_global',
+  'file_blocked', 'file_blocked_user', 'file_blocked_global',
+  'text_filter_blocked', 'cert_missing', 'error',
+];
+
 function statusIcon(status: string) {
-  switch (status) {
-    case 'blocked':
-    case 'cert_missing':
-    case 'error':
-      return <ErrorIcon fontSize="small" color="error" />;
-    case 'review':
-    case 'custom_block':
-    case 'video_unchecked':
-      return <WarningIcon fontSize="small" sx={{ color: 'warning.main' }} />;
-    default:
-      return <CheckCircleIcon fontSize="small" color="success" />;
+  if (BLOCKED_STATUSES.includes(status)) {
+    return <ErrorIcon fontSize="small" color="error" />;
   }
+  if (['review', 'file_review', 'custom_block', 'video_unchecked'].includes(status)) {
+    return <WarningIcon fontSize="small" sx={{ color: 'warning.main' }} />;
+  }
+  return <CheckCircleIcon fontSize="small" color="success" />;
 }
 
 const TrafficViewPage: React.FC = () => {
@@ -101,8 +109,8 @@ const TrafficViewPage: React.FC = () => {
   const [advancedView, setAdvancedView] = useState(false);
   const [showUnblocked, setShowUnblocked] = useState(true);
   const [showBlockedOnly, setShowBlockedOnly] = useState(false);
-  const [orderBy, setOrderBy] = useState<'url' | 'status' | 'time'>('url');
-  const [order, setOrder] = useState<'asc' | 'desc'>('asc');
+  const [orderBy, setOrderBy] = useState<'id' | 'url' | 'status' | 'time'>('id');
+  const [order, setOrder] = useState<'asc' | 'desc'>('desc');
   const [addRuleLoading, setAddRuleLoading] = useState<string | null>(null);
   const [addRuleError, setAddRuleError] = useState('');
   const [lastAddedRule, setLastAddedRule] = useState<GlobalRule | null>(null);
@@ -161,6 +169,14 @@ const TrafficViewPage: React.FC = () => {
       .finally(() => setLoading(false));
   }, [token]);
 
+  const entries = data?.entries ?? [];
+  const seqByEntryId = useMemo(() => {
+    const sorted = [...entries].sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0));
+    const m = new Map<number, number>();
+    sorted.forEach((e, i) => m.set(e.id, i + 1));
+    return m;
+  }, [entries]);
+
   const filteredRows = useMemo(() => {
     if (!data) return [];
     let list = data.entries;
@@ -170,7 +186,8 @@ const TrafficViewPage: React.FC = () => {
     if (!showUnblocked) list = list.filter((r) => r.status !== 'open');
     return [...list].sort((a, b) => {
       let cmp = 0;
-      if (orderBy === 'url') cmp = (a.url || '').localeCompare(b.url || '');
+      if (orderBy === 'id') cmp = (a.created_at ?? 0) - (b.created_at ?? 0);
+      else if (orderBy === 'url') cmp = (a.url || '').localeCompare(b.url || '');
       else if (orderBy === 'status') cmp = (a.status || '').localeCompare(b.status || '');
       else cmp = (a.time_sec ?? 0) - (b.time_sec ?? 0);
       return order === 'asc' ? cmp : -cmp;
@@ -264,7 +281,11 @@ const TrafficViewPage: React.FC = () => {
           <Table size="small" stickyHeader>
             <TableHead>
               <TableRow>
-                <TableCell sx={{ fontWeight: 600, width: 56 }}>#</TableCell>
+                <TableCell sx={{ fontWeight: 600, width: 72 }} sortDirection={orderBy === 'id' ? order : false}>
+                  <TableSortLabel active={orderBy === 'id'} direction={orderBy === 'id' ? order : 'desc'} onClick={() => { setOrderBy('id'); setOrder(orderBy === 'id' && order === 'asc' ? 'desc' : 'asc'); }}>
+                    #
+                  </TableSortLabel>
+                </TableCell>
                 <TableCell sx={{ fontWeight: 600, width: 48 }} />
                 {advancedView && (
                   <TableCell sx={{ fontWeight: 600, minWidth: 70 }}>פרוטוקול</TableCell>
@@ -278,6 +299,9 @@ const TrafficViewPage: React.FC = () => {
                   <TableSortLabel active={orderBy === 'status'} direction={orderBy === 'status' ? order : 'asc'} onClick={() => { setOrderBy('status'); setOrder(orderBy === 'status' && order === 'asc' ? 'desc' : 'asc'); }}>
                     מצב / סיבת חסימה
                   </TableSortLabel>
+                </TableCell>
+                <TableCell sx={{ fontWeight: 600, width: 72 }} title="קוד תגובת השרת (HTTP) – 4xx/5xx = שגיאה">
+                  HTTP
                 </TableCell>
                 {advancedView && (
                   <TableCell sx={{ fontWeight: 600, width: 100 }} sortDirection={orderBy === 'time' ? order : false}>
@@ -300,14 +324,14 @@ const TrafficViewPage: React.FC = () => {
             <TableBody>
               {filteredRows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={4 + (advancedView ? 4 : 0) + (isAdmin ? 1 : 0)} align="center" sx={{ py: 4 }}>
+                  <TableCell colSpan={5 + (advancedView ? 4 : 0) + (isAdmin ? 1 : 0)} align="center" sx={{ py: 4 }}>
                     לא נמצאו שורות לפי הסינון.
                   </TableCell>
                 </TableRow>
               ) : (
-                filteredRows.map((row, idx) => (
+                filteredRows.map((row) => (
                   <TableRow key={row.id} hover sx={{ '&:hover': { bgcolor: 'action.selected' } }}>
-                    <TableCell>{idx + 1}</TableCell>
+                    <TableCell sx={{ fontFamily: 'monospace' }}>{seqByEntryId.get(row.id) ?? '—'}</TableCell>
                     <TableCell>{statusIcon(row.status)}</TableCell>
                     {advancedView && (
                       <TableCell>
@@ -334,9 +358,18 @@ const TrafficViewPage: React.FC = () => {
                       <Chip
                         label={statusLabel(row.status)}
                         size="small"
-                        color={row.status === 'open' ? 'success' : row.status === 'blocked' || row.status === 'cert_missing' || row.status === 'error' ? 'error' : 'warning'}
+                        color={row.status === 'open' ? 'success' : BLOCKED_STATUSES.includes(row.status) ? 'error' : 'warning'}
                         variant="outlined"
                       />
+                    </TableCell>
+                    <TableCell
+                      sx={{
+                        fontFamily: 'monospace',
+                        fontWeight: row.http_status_code != null && row.http_status_code >= 400 ? 600 : undefined,
+                        color: row.http_status_code != null && row.http_status_code >= 400 ? 'error.main' : 'text.secondary',
+                      }}
+                    >
+                      {row.http_status_code != null ? row.http_status_code : '—'}
                     </TableCell>
                     {advancedView && (
                       <TableCell>

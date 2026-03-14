@@ -5,6 +5,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
+  Alert,
   Container,
   Divider,
   Paper,
@@ -39,9 +40,10 @@ import {
 } from '@mui/material';
 import { Check as CheckIcon, Close as CloseIcon, Delete as DeleteIcon, Edit as EditIcon, MoreVert as MoreVertIcon, Search as SearchIcon } from '@mui/icons-material';
 import { ruleRequestsApi } from '../api/ruleRequests';
-import type { RuleRequest, RuleRequestUpdate } from '../api/ruleRequests';
+import type { RuleRequest, RuleRequestUpdate, RuleConflictRule } from '../api/ruleRequests';
 import { adminApi } from '../api/admin';
 import { TagInput } from '../components/TagInput';
+import RuleConflictDialog from '../components/RuleConflictDialog';
 import { validateDomainOrUrl, processUrlInput, normalizeUrlForRule, WWW_NORMALIZED_MESSAGE } from '../utils/validation';
 import { PAGE_DESCRIPTIONS, PLACEHOLDERS } from '../brand';
 
@@ -85,6 +87,13 @@ const AdminRequestsPage: React.FC = () => {
   const [editFileFilterEnabled, setEditFileFilterEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
   const [editMoreAnchor, setEditMoreAnchor] = useState<null | HTMLElement>(null);
+  const [approveSuccess, setApproveSuccess] = useState<string | null>(null);
+  const [approving, setApproving] = useState(false);
+  const [conflictData, setConflictData] = useState<{
+    request: RuleRequest;
+    existing_rule: RuleConflictRule;
+    proposed_rule: RuleConflictRule;
+  } | null>(null);
 
   const loadRequests = async () => {
     setLoading(true);
@@ -139,17 +148,44 @@ const AdminRequestsPage: React.FC = () => {
     setApproveDialog(req);
   };
 
-  const handleApproveConfirm = async () => {
-    if (!approveDialog) return;
+  const handleApproveConfirm = async (opts?: { force_update?: boolean; skip_rule_update?: boolean }) => {
+    const reqToApprove = approveDialog || conflictData?.request;
+    if (!reqToApprove) return;
+    setApproving(true);
+    setApproveSuccess(null);
     try {
-      await ruleRequestsApi.approve(approveDialog.id);
+      const res = await ruleRequestsApi.approve(reqToApprove.id, {
+        force_update: opts?.force_update,
+        skip_rule_update: opts?.skip_rule_update,
+      });
+      if (res.status === 'conflict') {
+        setConflictData({ request: res.request, existing_rule: res.existing_rule, proposed_rule: res.proposed_rule });
+        setApproveDialog(null);
+        setApproving(false);
+        return;
+      }
+      const req = res.request;
+      const isFile = req?.request_type === 'file';
+      if (res.already_existed_identical) {
+        setApproveSuccess('הכלל כבר קיים ולכן לא נוסף. הבקשה סומנה כאושרה.');
+      } else {
+        setApproveSuccess(isFile ? 'הבקשה אושרה והקובץ נוסף לרשימת הקבצים המותרים' : 'הבקשה אושרה והכלל נוסף לרשימה הגלובלית');
+      }
       setApproveDialog(null);
+      setConflictData(null);
       await loadRequests();
     } catch (e: unknown) {
-      const ax = e as { response?: { data?: { detail?: string } } };
-      alert(ax?.response?.data?.detail || 'שגיאה באישור');
+      const ax = e as { response?: { data?: { detail?: string | unknown } }; message?: string };
+      const detail = ax?.response?.data?.detail;
+      const errMsg = typeof detail === 'string' ? detail : Array.isArray(detail) ? detail.map((x: { msg?: string }) => x?.msg).filter(Boolean).join(', ') : ax?.message || 'שגיאה באישור';
+      alert(errMsg || 'שגיאה באישור');
+    } finally {
+      setApproving(false);
     }
   };
+
+  const handleConflictUpdate = () => handleApproveConfirm({ force_update: true });
+  const handleConflictLeave = () => handleApproveConfirm({ skip_rule_update: true });
 
   const handleReject = async (req: RuleRequest) => {
     if (!confirm('לאשר דחיית הבקשה?')) return;
@@ -322,6 +358,12 @@ const AdminRequestsPage: React.FC = () => {
           {PAGE_DESCRIPTIONS.adminRequests}
         </Typography>
       </Box>
+
+      {approveSuccess && (
+        <Alert severity="success" onClose={() => setApproveSuccess(null)} sx={{ mb: 2 }}>
+          {approveSuccess}
+        </Alert>
+      )}
 
       <Paper sx={{ p: { xs: 2, sm: 2 }, mb: 2 }}>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}>
@@ -515,10 +557,21 @@ const AdminRequestsPage: React.FC = () => {
           </Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setApproveDialog(null)}>ביטול</Button>
-          <Button variant="contained" onClick={handleApproveConfirm}>אישור</Button>
+          <Button onClick={() => setApproveDialog(null)} disabled={approving}>ביטול</Button>
+          <Button variant="contained" onClick={() => handleApproveConfirm()} disabled={approving}>
+            {approving ? 'מאשר...' : 'אישור'}
+          </Button>
         </DialogActions>
       </Dialog>
+
+      <RuleConflictDialog
+        open={!!conflictData}
+        onClose={() => !approving && setConflictData(null)}
+        data={conflictData}
+        approving={approving}
+        onUpdate={handleConflictUpdate}
+        onLeave={handleConflictLeave}
+      />
 
       {/* Edit dialog */}
       <Dialog open={!!editDialog} onClose={() => setEditDialog(null)} maxWidth="sm" fullWidth>

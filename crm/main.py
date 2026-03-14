@@ -28,7 +28,9 @@ from .models import (
     ScheduleCreate, ScheduleUpdate, ScheduleResponse,
     RuleRequestCreate, RuleRequestApprove, RuleRequestUpdate, RuleRequestResponse,
     ResolverTestUrlBody, AllowedFileUrlBody,
+    SiteInjectionCreate, SiteInjectionUpdate, SiteInjectionResponse,
     SupportTicketCreate, SupportTicketResponse, SupportReplyCreate, SupportReplyResponse,
+    SupportTicketsBulkDeleteBody,
 )
 from .services import (
     create_user, setup_needed, authenticate_user, authenticate_user_by_phone, get_user_by_id, update_user, change_password, get_user_profiles,
@@ -43,9 +45,14 @@ from .services import (
     create_support_ticket, get_support_ticket, list_my_support_tickets, list_all_support_tickets,
     add_support_reply, list_support_replies, get_support_reply,
     count_my_tickets_with_replies, count_all_tickets_with_replies,
-    count_my_tickets_with_unread_replies, count_all_tickets_with_unread_replies,
-    mark_support_ticket_read, delete_support_ticket,
-    get_global_rules, get_global_rule, create_global_rule, update_global_rule, delete_global_rule, resolve_global_rule_for_url, find_and_update_global_rule_to_block, ensure_global_block_rule_for_url, create_or_update_global_rule_surf,
+    count_my_tickets_with_unread_replies,
+    count_all_tickets_with_unread_replies,
+    count_all_tickets_with_unread_for_admin_group,
+    mark_support_ticket_read, delete_support_ticket, delete_support_tickets_bulk,
+    list_support_ticket_user_ids,
+    get_global_rules, get_global_rule, create_global_rule, update_global_rule, delete_global_rule, resolve_global_rule_for_url, find_and_update_global_rule_to_block, ensure_global_block_rule_for_url, create_or_update_global_rule_surf, check_before_create_global_rule,
+    get_site_injections, get_site_injection, create_site_injection, update_site_injection, delete_site_injection,
+    sync_site_injections_to_core,
     list_bindings_for_user, add_ip_binding, remove_ip_binding, sync_ip_bindings_to_core, touch_ip_binding,
     get_user_id_for_ip,
 )
@@ -1651,18 +1658,70 @@ async def update_rule_request_endpoint(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+def _rule_request_to_response(req: dict) -> RuleRequestResponse:
+    """Build RuleRequestResponse from request dict, including user_phone."""
+    user = get_user_by_id(req["user_id"])
+    user_phone = user.get("phone") if user else None
+    return RuleRequestResponse(
+        id=req["id"],
+        user_id=req["user_id"],
+        request_type=req["request_type"],
+        url=req.get("url"),
+        domain_pattern=req.get("domain_pattern"),
+        path_pattern=req.get("path_pattern"),
+        action=req.get("action"),
+        include_subdomains=bool(req.get("include_subdomains")),
+        tags=req.get("tags"),
+        status=req["status"],
+        created_at=req["created_at"],
+        updated_at=req["updated_at"],
+        user_phone=user_phone,
+        approved_rule_id=req.get("approved_rule_id"),
+        approved_profile_id=req.get("approved_profile_id"),
+        is_from_blocked_page=False,
+        request_url=req.get("request_url"),
+        notes=req.get("notes"),
+        resolved_by_user_id=req.get("resolved_by_user_id"),
+        resolved_by_name=req.get("resolved_by_name"),
+        text_filter_enabled=req.get("text_filter_enabled"),
+        image_filter_enabled=req.get("image_filter_enabled"),
+        file_filter_enabled=req.get("file_filter_enabled"),
+    )
+
+
 @app.post("/api/admin/rule-requests/{request_id}/approve")
 async def approve_rule_request_endpoint(
     request_id: int,
     body: RuleRequestApprove,
     admin: dict = Depends(get_current_admin),
 ):
-    """Admin approves a request: create the rule on the given profile."""
+    """Admin approves a request: create or update rule in global list. May return status=conflict if rule exists with different content."""
     try:
-        req = approve_rule_request(request_id, profile_id=body.profile_id, resolved_by_user_id=admin.get("id"))
-        return {"status": "approved", "request": RuleRequestResponse(**{**req, "include_subdomains": bool(req.get("include_subdomains"))})}
+        result = approve_rule_request(
+            request_id,
+            profile_id=body.profile_id,
+            resolved_by_user_id=admin.get("id"),
+            force_update=getattr(body, "force_update", False),
+            skip_rule_update=getattr(body, "skip_rule_update", False),
+        )
+        req = result["request"]
+        if result.get("conflict"):
+            return {
+                "status": "conflict",
+                "existing_rule": result["existing_rule"],
+                "proposed_rule": result["proposed_rule"],
+                "request": _rule_request_to_response(req),
+            }
+        return {
+            "status": "approved",
+            "request": _rule_request_to_response(req),
+            "already_existed_identical": result.get("already_existed_identical", False),
+        }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.exception("approve_rule_request failed: %s", e)
+        raise HTTPException(status_code=500, detail="שגיאה בשרת באישור הבקשה")
 
 
 @app.post("/api/admin/rule-requests/{request_id}/reject")
@@ -1782,6 +1841,8 @@ async def list_support_tickets_endpoint(
     sort_order: str = Query("desc"),
     search: Optional[str] = Query(None),
     scope: Optional[str] = Query(None, description="mine = רק הפניות שלי (גם לאדמין); all או לא מועבר = לאדמין כל הפניות"),
+    read_filter: Optional[str] = Query(None, description="admin: all | unread | read"),
+    user_id: Optional[int] = Query(None, description="admin: filter by ticket owner user_id"),
 ):
     """List support tickets. scope=mine: only current user's tickets (also for admin). Otherwise: user gets own, admin gets all."""
     if scope == "mine":
@@ -1790,7 +1851,9 @@ async def list_support_tickets_endpoint(
         )
     elif current_user.get("is_admin"):
         rows, total = list_all_support_tickets(
-            page=page, page_size=page_size, sort_order=sort_order, search=search, viewer_id=current_user["id"]
+            page=page, page_size=page_size, sort_order=sort_order, search=search, viewer_id=current_user["id"],
+            read_filter=read_filter if read_filter in ("unread", "read") else None,
+            user_id_filter=user_id,
         )
     else:
         rows, total = list_my_support_tickets(
@@ -1809,6 +1872,8 @@ async def list_support_tickets_endpoint(
             user_phone=r.get("user_phone"),
             replies_count=r.get("replies_count", 0),
             unread_replies_count=r.get("unread_replies_count", 0),
+            unread_support_replies_for_owner=r.get("unread_support_replies_for_owner"),
+            unread_user_replies_for_admin=r.get("unread_user_replies_for_admin"),
             attached_rule_request_id=r.get("attached_rule_request_id"),
             request_snapshot_for_client=r.get("request_snapshot_for_client"),
             attached_request_status=r.get("attached_request_status"),
@@ -1818,13 +1883,34 @@ async def list_support_tickets_endpoint(
     return {"tickets": out, "total": total}
 
 
+@app.get("/api/support/tickets/users")
+async def list_support_ticket_users_endpoint(current_user: dict = Depends(get_current_user)):
+    """List users that have at least one support ticket (for admin filter dropdown). Admin only."""
+    if not current_user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="אין הרשאה")
+    users = list_support_ticket_user_ids()
+    return {"users": users}
+
+
+@app.post("/api/support/tickets/bulk-delete")
+async def bulk_delete_support_tickets_endpoint(
+    body: SupportTicketsBulkDeleteBody,
+    current_user: dict = Depends(get_current_user),
+):
+    """Delete multiple support tickets. Admin only. Returns number deleted."""
+    if not current_user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="אין הרשאה")
+    deleted = delete_support_tickets_bulk(body.ticket_ids)
+    return {"deleted": deleted}
+
+
 @app.get("/api/support/stats")
 async def support_stats_endpoint(current_user: dict = Depends(get_current_user)):
     """Return counts for sidebar: tickets_with_replies = my tickets with unread replies; admin = all with unread (for owner)."""
     tickets_with_replies = count_my_tickets_with_unread_replies(current_user["id"])
     out = {"tickets_with_replies": tickets_with_replies}
     if current_user.get("is_admin"):
-        out["admin_tickets_with_replies"] = count_all_tickets_with_unread_replies(admin_viewer_id=current_user["id"])
+        out["admin_tickets_with_replies"] = count_all_tickets_with_unread_for_admin_group()
     return out
 
 
@@ -1853,7 +1939,11 @@ async def list_support_replies_endpoint(
         raise HTTPException(status_code=404, detail="פנייה לא נמצאה")
     if ticket["user_id"] != current_user["id"] and not current_user.get("is_admin"):
         raise HTTPException(status_code=404, detail="פנייה לא נמצאה")
+    # Mark ticket as read for this viewer
     mark_support_ticket_read(ticket_id, current_user["id"])
+    # For admins, also update a shared "admin group" view (user_id=0) so unread user replies are shared across all managers
+    if current_user.get("is_admin"):
+        mark_support_ticket_read(ticket_id, 0)
     replies = list_support_replies(ticket_id, viewer_id=current_user["id"])
     return [
         SupportReplyResponse(
@@ -1890,7 +1980,8 @@ async def create_support_reply_endpoint(
         raise HTTPException(status_code=400, detail="נא להזין תוכן, לצרף קובץ או לצרף עותק ערוך של הבקשה")
     try:
         attachments = [{"name": a.name, "url": a.url} for a in (data.attachments or [])]
-        is_support_reply = data.is_support_reply if data.is_support_reply is not None else current_user.get("is_admin", False)
+        # נשמר לפי מקום השליחה (הלקוח שולח): פניות שלי = תגובת משתמש, פניות שהתקבלו = תגובת תמיכה
+        is_support_reply = data.is_support_reply if data.is_support_reply is not None else False
         reply = add_support_reply(
             ticket_id=ticket_id,
             author_id=current_user["id"],
@@ -1955,6 +2046,45 @@ async def admin_resolve_global_rule(
     return {"rule": GlobalRuleResponse(**rule)}
 
 
+@app.post("/api/admin/global-rules/check-create")
+async def admin_check_create_global_rule(
+    data: GlobalRuleCreate,
+    admin: dict = Depends(get_current_admin),
+):
+    """Check before creating: exact match and same-domain rules. Returns exact_match (rule + identical) and same_domain_rules list."""
+    try:
+        action_val = data.action or "allow"
+        tf = getattr(data, "text_filter_enabled", True) if action_val == "allow" else False
+        imgf = getattr(data, "image_filter_enabled", True) if action_val == "allow" else False
+        filef = getattr(data, "file_filter_enabled", True) if action_val == "allow" else False
+        pdff = getattr(data, "pdf_filter_enabled", True) if action_val == "allow" else False
+        videof = getattr(data, "video_filter_enabled", True) if action_val == "allow" else False
+        surfw = getattr(data, "surf_widget_enabled", True) if action_val == "allow" else False
+        result = check_before_create_global_rule(
+            url=data.url,
+            action=action_val,
+            include_subdomains=data.include_subdomains or False,
+            tags=data.tags,
+            text_filter_enabled=tf,
+            image_filter_enabled=imgf,
+            file_filter_enabled=filef,
+            pdf_filter_enabled=pdff,
+            video_filter_enabled=videof,
+            surf_widget_enabled=surfw,
+        )
+        out = {
+            "exact_match": None,
+            "same_domain_rules": [GlobalRuleResponse(**r) for r in result["same_domain_rules"]],
+            "proposed_rule": result["proposed_rule"],
+        }
+        if result.get("exact_match"):
+            em = result["exact_match"]
+            out["exact_match"] = {"rule": GlobalRuleResponse(**em["rule"]), "identical": em["identical"]}
+        return out
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.post("/api/admin/global-rules", response_model=GlobalRuleResponse, status_code=status.HTTP_201_CREATED)
 async def admin_create_global_rule(
     data: GlobalRuleCreate,
@@ -1967,6 +2097,9 @@ async def admin_create_global_rule(
         tf = getattr(data, "text_filter_enabled", True) if action_val == "allow" else False
         imgf = getattr(data, "image_filter_enabled", True) if action_val == "allow" else False
         filef = getattr(data, "file_filter_enabled", True) if action_val == "allow" else False
+        pdff = getattr(data, "pdf_filter_enabled", True) if action_val == "allow" else False
+        videof = getattr(data, "video_filter_enabled", True) if action_val == "allow" else False
+        surfw = getattr(data, "surf_widget_enabled", True) if action_val == "allow" else False
         rule = create_global_rule(
             url=data.url,
             action=action_val,
@@ -1975,6 +2108,9 @@ async def admin_create_global_rule(
             text_filter_enabled=tf,
             image_filter_enabled=imgf,
             file_filter_enabled=filef,
+            pdf_filter_enabled=pdff,
+            video_filter_enabled=videof,
+            surf_widget_enabled=surfw,
             created_by_user_id=admin.get("id"),
         )
         sync_crm_rules_to_core(None)
@@ -2008,11 +2144,14 @@ async def admin_update_global_rule(
     try:
         action_val = data.action if data.action is not None else rule.get("action", "allow")
         if action_val == "block":
-            tf, imgf, filef = False, False, False
+            tf, imgf, filef, pdff, videof, surfw = False, False, False, False, False, False
         else:
-            tf = data.text_filter_enabled
-            imgf = data.image_filter_enabled
-            filef = data.file_filter_enabled
+            tf = data.text_filter_enabled if data.text_filter_enabled is not None else rule.get("text_filter_enabled", True)
+            imgf = data.image_filter_enabled if data.image_filter_enabled is not None else rule.get("image_filter_enabled", True)
+            filef = data.file_filter_enabled if data.file_filter_enabled is not None else rule.get("file_filter_enabled", True)
+            pdff = data.pdf_filter_enabled if data.pdf_filter_enabled is not None else rule.get("pdf_filter_enabled", True)
+            videof = data.video_filter_enabled if data.video_filter_enabled is not None else rule.get("video_filter_enabled", True)
+            surfw = data.surf_widget_enabled if data.surf_widget_enabled is not None else rule.get("surf_widget_enabled", True)
         updated = update_global_rule(
             rule_id,
             url=data.url,
@@ -2022,6 +2161,9 @@ async def admin_update_global_rule(
             text_filter_enabled=tf,
             image_filter_enabled=imgf,
             file_filter_enabled=filef,
+            pdf_filter_enabled=pdff,
+            video_filter_enabled=videof,
+            surf_widget_enabled=surfw,
             updated_by_user_id=admin.get("id"),
         )
         sync_crm_rules_to_core(None)
@@ -2078,6 +2220,91 @@ async def admin_remove_allowed_file_download(
     deleted = remove_allowed_file_url_crm(url)
     if not deleted:
         raise HTTPException(status_code=404, detail="הכתובת לא נמצאה ברשימה")
+
+
+# Site injections (הזרקת קוד והסתרת תוכן לאתר – אדמין)
+@app.get("/api/admin/site-injections", response_model=List[SiteInjectionResponse])
+async def admin_list_site_injections(admin: dict = Depends(get_current_admin)):
+    """List all site injection rules. Admin only."""
+    rules = get_site_injections()
+    return [SiteInjectionResponse(**r) for r in rules]
+
+
+@app.post("/api/admin/site-injections", response_model=SiteInjectionResponse, status_code=status.HTTP_201_CREATED)
+async def admin_create_site_injection(
+    data: SiteInjectionCreate,
+    admin: dict = Depends(get_current_admin),
+):
+    """Create a site injection rule. Admin only."""
+    try:
+        rule = create_site_injection(
+            url=data.url,
+            head_code=data.head_code,
+            body_code=data.body_code,
+            hide_selectors=data.hide_selectors,
+            include_subdomains=data.include_subdomains,
+            path_exact_only=data.path_exact_only,
+            enabled=data.enabled,
+        )
+        sync_site_injections_to_core()
+        return SiteInjectionResponse(**rule)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/admin/site-injections/{injection_id}", response_model=SiteInjectionResponse)
+async def admin_get_site_injection(
+    injection_id: int,
+    admin: dict = Depends(get_current_admin),
+):
+    """Get a single site injection rule. Admin only."""
+    rule = get_site_injection(injection_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail="כלל הזרקה לא נמצא")
+    return SiteInjectionResponse(**rule)
+
+
+@app.put("/api/admin/site-injections/{injection_id}", response_model=SiteInjectionResponse)
+async def admin_update_site_injection(
+    injection_id: int,
+    data: SiteInjectionUpdate,
+    admin: dict = Depends(get_current_admin),
+):
+    """Update a site injection rule. Admin only."""
+    rule = get_site_injection(injection_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail="כלל הזרקה לא נמצא")
+    try:
+        updated = update_site_injection(
+            injection_id,
+            url=data.url,
+            head_code=data.head_code,
+            body_code=data.body_code,
+            hide_selectors=data.hide_selectors,
+            include_subdomains=data.include_subdomains,
+            path_exact_only=data.path_exact_only,
+            enabled=data.enabled,
+        )
+        sync_site_injections_to_core()
+        return SiteInjectionResponse(**updated)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/admin/site-injections/{injection_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def admin_delete_site_injection(
+    injection_id: int,
+    admin: dict = Depends(get_current_admin),
+):
+    """Delete a site injection rule. Admin only."""
+    rule = get_site_injection(injection_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail="כלל הזרקה לא נמצא")
+    deleted = delete_site_injection(injection_id)
+    if deleted:
+        sync_site_injections_to_core()
+    else:
+        raise HTTPException(status_code=404, detail="כלל הזרקה לא נמצא")
 
 
 @app.post("/api/admin/surf-update-rule-to-block")

@@ -511,6 +511,52 @@ def _rule_exists_for_profile(profile_id: int, domain_pattern: str, path: Optiona
     return row[0] if row else None
 
 
+def _base_domain(domain_pattern: str) -> str:
+    """Normalize domain_pattern to base domain (strip *. prefix) for same-domain comparison."""
+    d = (domain_pattern or "").strip().lower()
+    if d.startswith("*."):
+        return d[2:]
+    return d
+
+
+def get_rules_on_same_domain(domain_pattern: str, exclude_rule_id: Optional[int] = None) -> List[Dict]:
+    """Return all global rules on the same base domain (e.g. madrichim.ovh and *.madrichim.ovh). Optionally exclude one rule id."""
+    base = _base_domain(domain_pattern)
+    if not base:
+        return []
+    patterns = (base, f"*.{base}")
+    placeholders = ",".join("?" for _ in patterns)
+    sql = f"""
+        SELECT id, domain_pattern, path_pattern, action, include_subdomains, tags, created_at, updated_at,
+               COALESCE(text_filter_enabled, 1) AS text_filter_enabled,
+               COALESCE(image_filter_enabled, 1) AS image_filter_enabled,
+               COALESCE(file_filter_enabled, 1) AS file_filter_enabled,
+               COALESCE(pdf_filter_enabled, 1) AS pdf_filter_enabled,
+               COALESCE(video_filter_enabled, 1) AS video_filter_enabled,
+               COALESCE(surf_widget_enabled, 1) AS surf_widget_enabled
+        FROM global_rules
+        WHERE domain_pattern IN ({placeholders})
+    """
+    params: list = list(patterns)
+    if exclude_rule_id is not None:
+        sql += " AND id != ?"
+        params.append(exclude_rule_id)
+    cursor = db_connection.execute(sql, params)
+    rows = cursor.fetchall()
+    out = []
+    for row in rows:
+        d = dict(row)
+        d["tags"] = _parse_tags(d.get("tags"))
+        d["text_filter_enabled"] = bool(d.get("text_filter_enabled", 1))
+        d["image_filter_enabled"] = bool(d.get("image_filter_enabled", 1))
+        d["file_filter_enabled"] = bool(d.get("file_filter_enabled", 1))
+        d["pdf_filter_enabled"] = bool(d.get("pdf_filter_enabled", 1))
+        d["video_filter_enabled"] = bool(d.get("video_filter_enabled", 1))
+        d["surf_widget_enabled"] = bool(d.get("surf_widget_enabled", 1))
+        out.append(d)
+    return out
+
+
 def _global_rule_exists(domain_pattern: str, path: Optional[str], include_subdomains: bool) -> Optional[int]:
     """Check if global rule with same (domain, path, subdomains) exists. Returns rule_id or None."""
     pm = _path_for_match(path)
@@ -660,7 +706,10 @@ def get_global_rules() -> List[Dict]:
                include_subdomains, tags, created_at, updated_at,
                COALESCE(text_filter_enabled, 1) AS text_filter_enabled,
                COALESCE(image_filter_enabled, 1) AS image_filter_enabled,
-               COALESCE(file_filter_enabled, 1) AS file_filter_enabled
+               COALESCE(file_filter_enabled, 1) AS file_filter_enabled,
+               COALESCE(pdf_filter_enabled, 1) AS pdf_filter_enabled,
+               COALESCE(video_filter_enabled, 1) AS video_filter_enabled,
+               COALESCE(surf_widget_enabled, 1) AS surf_widget_enabled
         FROM global_rules
         ORDER BY created_at DESC
     """)
@@ -672,6 +721,9 @@ def get_global_rules() -> List[Dict]:
         d["text_filter_enabled"] = bool(d.get("text_filter_enabled", 1))
         d["image_filter_enabled"] = bool(d.get("image_filter_enabled", 1))
         d["file_filter_enabled"] = bool(d.get("file_filter_enabled", 1))
+        d["pdf_filter_enabled"] = bool(d.get("pdf_filter_enabled", 1))
+        d["video_filter_enabled"] = bool(d.get("video_filter_enabled", 1))
+        d["surf_widget_enabled"] = bool(d.get("surf_widget_enabled", 1))
         out.append(d)
     return out
 
@@ -745,7 +797,10 @@ def get_global_rule(rule_id: int) -> Optional[Dict]:
                include_subdomains, tags, created_at, updated_at,
                COALESCE(text_filter_enabled, 1) AS text_filter_enabled,
                COALESCE(image_filter_enabled, 1) AS image_filter_enabled,
-               COALESCE(file_filter_enabled, 1) AS file_filter_enabled
+               COALESCE(file_filter_enabled, 1) AS file_filter_enabled,
+               COALESCE(pdf_filter_enabled, 1) AS pdf_filter_enabled,
+               COALESCE(video_filter_enabled, 1) AS video_filter_enabled,
+               COALESCE(surf_widget_enabled, 1) AS surf_widget_enabled
         FROM global_rules WHERE id = ?
     """, (rule_id,))
     row = cursor.fetchone()
@@ -756,7 +811,55 @@ def get_global_rule(rule_id: int) -> Optional[Dict]:
     d["text_filter_enabled"] = bool(d.get("text_filter_enabled", 1))
     d["image_filter_enabled"] = bool(d.get("image_filter_enabled", 1))
     d["file_filter_enabled"] = bool(d.get("file_filter_enabled", 1))
+    d["pdf_filter_enabled"] = bool(d.get("pdf_filter_enabled", 1))
+    d["video_filter_enabled"] = bool(d.get("video_filter_enabled", 1))
+    d["surf_widget_enabled"] = bool(d.get("surf_widget_enabled", 1))
     return d
+
+
+def check_before_create_global_rule(
+    url: str,
+    action: str = "allow",
+    include_subdomains: bool = False,
+    tags: Optional[List[str]] = None,
+    text_filter_enabled: bool = True,
+    image_filter_enabled: bool = True,
+    file_filter_enabled: bool = True,
+    pdf_filter_enabled: bool = True,
+    video_filter_enabled: bool = True,
+    surf_widget_enabled: bool = True,
+) -> Dict:
+    """Check before creating: exact match (same domain+path+subdomains) and same-domain rules. Returns { exact_match, same_domain_rules, proposed_rule }."""
+    url = _normalize_url(url)
+    domain, path, inferred_subdomains = parse_url(url)
+    if inferred_subdomains:
+        include_subdomains = True
+    domain_pattern = domain
+    if include_subdomains:
+        domain_pattern = f"*.{domain}" if not domain.startswith("*.") else domain
+    path_val = path if path else "/"
+    proposed_rule = {
+        "domain_pattern": domain_pattern,
+        "path_pattern": path_val,
+        "action": action,
+        "include_subdomains": include_subdomains,
+        "tags": tags or [],
+        "text_filter_enabled": text_filter_enabled,
+        "image_filter_enabled": image_filter_enabled,
+        "file_filter_enabled": file_filter_enabled,
+    }
+    exact_id = _global_rule_exists(domain_pattern, path_val, include_subdomains)
+    exact_match = None
+    if exact_id:
+        existing_rule = get_global_rule(exact_id)
+        if existing_rule:
+            identical = _rule_content_identical(
+                existing_rule, action, include_subdomains, tags,
+                text_filter_enabled, image_filter_enabled, file_filter_enabled,
+            )
+            exact_match = {"rule": existing_rule, "identical": identical}
+    same_domain_rules = get_rules_on_same_domain(domain_pattern, exclude_rule_id=exact_id)
+    return {"exact_match": exact_match, "same_domain_rules": same_domain_rules, "proposed_rule": proposed_rule}
 
 
 def create_global_rule(
@@ -767,6 +870,9 @@ def create_global_rule(
     text_filter_enabled: bool = True,
     image_filter_enabled: bool = True,
     file_filter_enabled: bool = True,
+    pdf_filter_enabled: bool = True,
+    video_filter_enabled: bool = True,
+    surf_widget_enabled: bool = True,
     created_by_user_id: Optional[int] = None,
 ) -> Dict:
     """Create a global rule (admin only). Raises if exact duplicate exists."""
@@ -786,9 +892,9 @@ def create_global_rule(
     try:
         cursor = db_connection.execute("""
             INSERT INTO global_rules
-            (domain_pattern, path_pattern, action, include_subdomains, tags, text_filter_enabled, image_filter_enabled, file_filter_enabled, created_at, updated_at, created_by_user_id, updated_by_user_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (domain_pattern, path_val, action, 1 if include_subdomains else 0, tags_str, 1 if text_filter_enabled else 0, 1 if image_filter_enabled else 0, 1 if file_filter_enabled else 0, now, now, created_by_user_id, created_by_user_id))
+            (domain_pattern, path_pattern, action, include_subdomains, tags, text_filter_enabled, image_filter_enabled, file_filter_enabled, pdf_filter_enabled, video_filter_enabled, surf_widget_enabled, created_at, updated_at, created_by_user_id, updated_by_user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (domain_pattern, path_val, action, 1 if include_subdomains else 0, tags_str, 1 if text_filter_enabled else 0, 1 if image_filter_enabled else 0, 1 if file_filter_enabled else 0, 1 if pdf_filter_enabled else 0, 1 if video_filter_enabled else 0, 1 if surf_widget_enabled else 0, now, now, created_by_user_id, created_by_user_id))
         rule_id = cursor.lastrowid
         db_connection.commit()
         return get_global_rule(rule_id)
@@ -806,6 +912,9 @@ def update_global_rule(
     text_filter_enabled: Optional[bool] = None,
     image_filter_enabled: Optional[bool] = None,
     file_filter_enabled: Optional[bool] = None,
+    pdf_filter_enabled: Optional[bool] = None,
+    video_filter_enabled: Optional[bool] = None,
+    surf_widget_enabled: Optional[bool] = None,
     updated_by_user_id: Optional[int] = None,
 ) -> Dict:
     """Update a global rule. Raises if change would create duplicate."""
@@ -835,13 +944,16 @@ def update_global_rule(
     new_text_filter = text_filter_enabled if text_filter_enabled is not None else rule.get("text_filter_enabled", True)
     new_image_filter = image_filter_enabled if image_filter_enabled is not None else rule.get("image_filter_enabled", True)
     new_file_filter = file_filter_enabled if file_filter_enabled is not None else rule.get("file_filter_enabled", True)
+    new_pdf_filter = pdf_filter_enabled if pdf_filter_enabled is not None else rule.get("pdf_filter_enabled", True)
+    new_video_filter = video_filter_enabled if video_filter_enabled is not None else rule.get("video_filter_enabled", True)
+    new_surf_widget = surf_widget_enabled if surf_widget_enabled is not None else rule.get("surf_widget_enabled", True)
     now = int(datetime.now().timestamp())
     db_connection.execute("""
         UPDATE global_rules
         SET domain_pattern = ?, path_pattern = ?, action = ?,
-            include_subdomains = ?, tags = ?, text_filter_enabled = ?, image_filter_enabled = ?, file_filter_enabled = ?, updated_at = ?, updated_by_user_id = ?
+            include_subdomains = ?, tags = ?, text_filter_enabled = ?, image_filter_enabled = ?, file_filter_enabled = ?, pdf_filter_enabled = ?, video_filter_enabled = ?, surf_widget_enabled = ?, updated_at = ?, updated_by_user_id = ?
         WHERE id = ?
-    """, (domain_pattern, path, new_action, 1 if include_subdomains else 0, new_tags_str, 1 if new_text_filter else 0, 1 if new_image_filter else 0, 1 if new_file_filter else 0, now, updated_by_user_id, rule_id))
+    """, (domain_pattern, path, new_action, 1 if include_subdomains else 0, new_tags_str, 1 if new_text_filter else 0, 1 if new_image_filter else 0, 1 if new_file_filter else 0, 1 if new_pdf_filter else 0, 1 if new_video_filter else 0, 1 if new_surf_widget else 0, now, updated_by_user_id, rule_id))
     db_connection.commit()
     return get_global_rule(rule_id)
 
@@ -967,6 +1079,217 @@ def find_and_update_global_rule_to_block(
 def delete_global_rule(rule_id: int) -> bool:
     """Delete a global rule."""
     cursor = db_connection.execute("DELETE FROM global_rules WHERE id = ?", (rule_id,))
+    db_connection.commit()
+    return cursor.rowcount > 0
+
+
+# Site injections (הזרקת קוד והסתרת תוכן לאתר – אדמין)
+def _path_matches_site_injection(rule_path: Optional[str], path: str, path_exact_only: bool) -> bool:
+    """True if path matches: when path_exact_only=True exact match only; when False, prefix match (like rules)."""
+    rp = (rule_path or "").strip() or "/"
+    if rp != "/":
+        rp = rp.rstrip("/")
+    if not path:
+        path = "/"
+    if path != "/" and path.endswith("/"):
+        path = path.rstrip("/")
+    if path_exact_only:
+        return path == rp or (path == "/" and rp == "/")
+    # prefix match (like global rules)
+    if not rule_path or rule_path == "/" or (rule_path or "").strip() == "":
+        return True
+    return path.startswith(rp) or (rp == "/" and path.startswith("/"))
+
+
+def get_site_injections() -> List[Dict]:
+    """Get all site injection rules (admin only)."""
+    cursor = db_connection.execute("""
+        SELECT id, domain_pattern, path_pattern, include_subdomains,
+               head_code, body_code, hide_selectors, enabled, created_at, updated_at,
+               COALESCE(path_exact_only, 1) AS path_exact_only
+        FROM site_injections ORDER BY domain_pattern, path_pattern
+    """)
+    rows = cursor.fetchall()
+    out = []
+    for row in rows:
+        d = dict(row)
+        d["include_subdomains"] = bool(d.get("include_subdomains"))
+        d["enabled"] = bool(d.get("enabled", 1))
+        d["path_exact_only"] = bool(d.get("path_exact_only", 1))
+        if d.get("hide_selectors"):
+            try:
+                import json
+                d["hide_selectors_list"] = json.loads(d["hide_selectors"])
+            except Exception:
+                d["hide_selectors_list"] = [s.strip() for s in (d["hide_selectors"] or "").split("\n") if s.strip()]
+        else:
+            d["hide_selectors_list"] = []
+        out.append(d)
+    return out
+
+
+def resolve_site_injection_for_url(url: str) -> Optional[Dict]:
+    """Return the best matching site injection for this URL, or None. Only enabled rules."""
+    domain, path = _parse_url_for_resolve(url)
+    if not domain:
+        return None
+    rules = [r for r in get_site_injections() if r.get("enabled")]
+    best = None
+    best_score = -1
+    for r in rules:
+        if not _domain_matches_rule(r.get("domain_pattern") or "", domain):
+            continue
+        rpath = r.get("path_pattern") or "/"
+        path_exact_only = r.get("path_exact_only", True)
+        if not _path_matches_site_injection(rpath, path, path_exact_only):
+            continue
+        p_score = len((r.get("path_pattern") or "").rstrip("/"))
+        d_score = 100 if (r.get("domain_pattern") or "").startswith("*.") else 200
+        score = d_score + p_score
+        if score > best_score:
+            best_score = score
+            best = r
+    return best
+
+
+def _site_injection_exists(domain_pattern: str, path: Optional[str], include_subdomains: bool, exclude_id: Optional[int] = None) -> Optional[int]:
+    """Check if site_injection with same (domain, path, subdomains) exists. Returns id or None."""
+    path_val = path if path and path != "/" else None
+    if path_val is None:
+        cursor = db_connection.execute("""
+            SELECT id FROM site_injections
+            WHERE domain_pattern = ? AND path_pattern IS NULL AND include_subdomains = ?
+        """, (domain_pattern, 1 if include_subdomains else 0))
+    else:
+        cursor = db_connection.execute("""
+            SELECT id FROM site_injections
+            WHERE domain_pattern = ? AND path_pattern = ? AND include_subdomains = ?
+        """, (domain_pattern, path_val, 1 if include_subdomains else 0))
+    for row in cursor.fetchall():
+        rid = row["id"]
+        if exclude_id is not None and rid == exclude_id:
+            continue
+        return rid
+    return None
+
+
+def create_site_injection(
+    url: str,
+    head_code: Optional[str] = None,
+    body_code: Optional[str] = None,
+    hide_selectors: Optional[List[str]] = None,
+    include_subdomains: bool = False,
+    path_exact_only: bool = True,
+    enabled: bool = True,
+) -> Dict:
+    """Create a site injection rule. URL format like global rules (domain/path). path_exact_only=True: only this URL; False: path and subpaths."""
+    url = _normalize_url(url)
+    domain, path, inferred_subdomains = parse_url(url)
+    if not domain:
+        raise ValueError("לא ניתן לפרש את הכתובת")
+    if inferred_subdomains:
+        include_subdomains = True
+    domain_pattern = f"*.{domain}" if include_subdomains and not domain.startswith("*.") else domain
+    path_val = path if path and path != "/" else None
+    if _site_injection_exists(domain_pattern, path_val, include_subdomains):
+        raise ValueError("כלל הזרקה לאותו אתר כבר קיים")
+    import json
+    hide_str = json.dumps(hide_selectors or []) if hide_selectors else None
+    now = int(datetime.now().timestamp())
+    cursor = db_connection.execute("""
+        INSERT INTO site_injections
+        (domain_pattern, path_pattern, include_subdomains, head_code, body_code, hide_selectors, path_exact_only, enabled, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (domain_pattern, path_val, 1 if include_subdomains else 0,
+          (head_code or "").strip() or None, (body_code or "").strip() or None, hide_str,
+          1 if path_exact_only else 0, 1 if enabled else 0, now, now))
+    row_id = cursor.lastrowid
+    db_connection.commit()
+    out = get_site_injection(row_id)
+    assert out is not None
+    return out
+
+
+def get_site_injection(injection_id: int) -> Optional[Dict]:
+    """Get a single site injection by ID."""
+    cursor = db_connection.execute("""
+        SELECT id, domain_pattern, path_pattern, include_subdomains,
+               head_code, body_code, hide_selectors, enabled, created_at, updated_at,
+               COALESCE(path_exact_only, 1) AS path_exact_only
+        FROM site_injections WHERE id = ?
+    """, (injection_id,))
+    row = cursor.fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["include_subdomains"] = bool(d.get("include_subdomains"))
+    d["enabled"] = bool(d.get("enabled", 1))
+    d["path_exact_only"] = bool(d.get("path_exact_only", 1))
+    if d.get("hide_selectors"):
+        try:
+            import json
+            d["hide_selectors_list"] = json.loads(d["hide_selectors"])
+        except Exception:
+            d["hide_selectors_list"] = [s.strip() for s in (d["hide_selectors"] or "").split("\n") if s.strip()]
+    else:
+        d["hide_selectors_list"] = []
+    return d
+
+
+def update_site_injection(
+    injection_id: int,
+    url: Optional[str] = None,
+    head_code: Optional[str] = None,
+    body_code: Optional[str] = None,
+    hide_selectors: Optional[List[str]] = None,
+    include_subdomains: Optional[bool] = None,
+    path_exact_only: Optional[bool] = None,
+    enabled: Optional[bool] = None,
+) -> Dict:
+    """Update a site injection rule."""
+    current = get_site_injection(injection_id)
+    if not current:
+        raise ValueError("כלל הזרקה לא נמצא")
+    domain_pattern = current["domain_pattern"]
+    path_pattern = current.get("path_pattern")
+    inc = current.get("include_subdomains", False)
+    pe = path_exact_only if path_exact_only is not None else current.get("path_exact_only", True)
+    if url is not None:
+        url = _normalize_url(url)
+        domain, path, inferred = parse_url(url)
+        if not domain:
+            raise ValueError("לא ניתן לפרש את הכתובת")
+        if inferred or (include_subdomains is True):
+            inc = True
+        elif include_subdomains is False:
+            inc = False
+        domain_pattern = f"*.{domain}" if inc and not domain.startswith("*.") else domain
+        path_pattern = path if path and path != "/" else None
+        if _site_injection_exists(domain_pattern, path_pattern, inc, exclude_id=injection_id):
+            raise ValueError("כלל הזרקה אחר לאותו אתר כבר קיים")
+    head = (head_code if head_code is not None else current.get("head_code")) or None
+    body = (body_code if body_code is not None else current.get("body_code")) or None
+    import json
+    if hide_selectors is not None:
+        hide_str = json.dumps(hide_selectors) if hide_selectors else None
+    else:
+        hide_str = current.get("hide_selectors")
+    en = enabled if enabled is not None else current.get("enabled", True)
+    now = int(datetime.now().timestamp())
+    db_connection.execute("""
+        UPDATE site_injections
+        SET domain_pattern = ?, path_pattern = ?, include_subdomains = ?, head_code = ?, body_code = ?, hide_selectors = ?, path_exact_only = ?, enabled = ?, updated_at = ?
+        WHERE id = ?
+    """, (domain_pattern, path_pattern, 1 if inc else 0, (head or "").strip() or None, (body or "").strip() or None, hide_str, 1 if pe else 0, 1 if en else 0, now, injection_id))
+    db_connection.commit()
+    out = get_site_injection(injection_id)
+    assert out is not None
+    return out
+
+
+def delete_site_injection(injection_id: int) -> bool:
+    """Delete a site injection rule."""
+    cursor = db_connection.execute("DELETE FROM site_injections WHERE id = ?", (injection_id,))
     db_connection.commit()
     return cursor.rowcount > 0
 
@@ -1205,11 +1528,15 @@ def sync_crm_rules_to_core(user_id: Optional[int] = None, set_default: bool = Tr
             tags = r.get("tags") or []
             text_filter_enabled = r.get("text_filter_enabled", True)
             image_filter_enabled = r.get("image_filter_enabled", True)
+            file_filter_enabled = r.get("file_filter_enabled", True)
+            pdf_filter_enabled = r.get("pdf_filter_enabled", True)
+            video_filter_enabled = r.get("video_filter_enabled", True)
+            surf_widget_enabled = r.get("surf_widget_enabled", True)
             existing = next((p for p in core_global if p["domain"] == domain and (p.get("path") or None) == (path or None) and (p.get("type") or "*") == typ), None)
             if existing:
-                core_update_policy(existing["id"], state=state, tags=tags, source="global", text_filter_enabled=text_filter_enabled, image_filter_enabled=image_filter_enabled)
+                core_update_policy(existing["id"], state=state, tags=tags, source="global", text_filter_enabled=text_filter_enabled, image_filter_enabled=image_filter_enabled, file_filter_enabled=file_filter_enabled, pdf_filter_enabled=pdf_filter_enabled, video_filter_enabled=video_filter_enabled, surf_widget_enabled=surf_widget_enabled)
             else:
-                core_add_policy(domain, path, policy_type=typ, state=state, tags=tags, source="global", text_filter_enabled=text_filter_enabled, image_filter_enabled=image_filter_enabled)
+                core_add_policy(domain, path, policy_type=typ, state=state, tags=tags, source="global", text_filter_enabled=text_filter_enabled, image_filter_enabled=image_filter_enabled, file_filter_enabled=file_filter_enabled, pdf_filter_enabled=pdf_filter_enabled, video_filter_enabled=video_filter_enabled, surf_widget_enabled=surf_widget_enabled)
         if sync_user_id is not None:
             core_delete_user_policies(sync_user_id)
         for r in crm_rules:
@@ -1619,6 +1946,21 @@ def sync_allowed_file_downloads_to_core() -> None:
         logger.warning("sync_allowed_file_downloads_to_core failed: %s", e)
 
 
+def sync_site_injections_to_core() -> None:
+    """Sync CRM site_injections to core so the proxy can apply them to HTML responses."""
+    try:
+        import sys
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        from core.policy.policy_database import set_site_injections, init_db_schema
+        init_db_schema()
+        set_site_injections(get_site_injections())
+    except Exception as e:
+        logger.warning("sync_site_injections_to_core failed: %s", e)
+
+
 def remove_allowed_file_url_crm(url: str) -> bool:
     """Remove a URL from the CRM global allowed-file list. Returns True if a row was deleted. Call sync after."""
     url = (url or "").strip()
@@ -1632,8 +1974,37 @@ def remove_allowed_file_url_crm(url: str) -> bool:
     return deleted
 
 
-def approve_rule_request(request_id: int, profile_id: Optional[int] = None, resolved_by_user_id: Optional[int] = None) -> Dict:
-    """Admin approves a request: add or update rule in global list. For file requests, add URL to allowed_file_downloads (separate from sites)."""
+def _rule_content_identical(existing: Dict, action: str, include_subdomains: bool, tags: Optional[List[str]], text_filter: bool, image_filter: bool, file_filter: bool) -> bool:
+    """Compare existing rule with proposed (action, include_subdomains, tags, filter toggles)."""
+    if (existing.get("action") or "allow") != action:
+        return False
+    if bool(existing.get("include_subdomains")) != include_subdomains:
+        return False
+    existing_tags = existing.get("tags") or []
+    if not isinstance(existing_tags, list):
+        existing_tags = _parse_tags(existing_tags) if isinstance(existing_tags, str) else []
+    proposed_tags = sorted(tags or [])
+    if sorted(existing_tags) != proposed_tags:
+        return False
+    if bool(existing.get("text_filter_enabled", True)) != text_filter:
+        return False
+    if bool(existing.get("image_filter_enabled", True)) != image_filter:
+        return False
+    if bool(existing.get("file_filter_enabled", True)) != file_filter:
+        return False
+    return True
+
+
+def approve_rule_request(
+    request_id: int,
+    profile_id: Optional[int] = None,
+    resolved_by_user_id: Optional[int] = None,
+    force_update: bool = False,
+    skip_rule_update: bool = False,
+) -> Dict:
+    """Admin approves a request: add or update rule in global list. For file requests, add URL to allowed_file_downloads.
+    Returns dict: {request} on success; {request, already_existed_identical=True} when rule existed and was identical;
+    {conflict: True, existing_rule, proposed_rule, request} when rule exists with different content (call again with force_update or skip_rule_update)."""
     req = get_rule_request(request_id)
     if not req:
         raise ValueError("בקשה לא נמצאה")
@@ -1641,16 +2012,17 @@ def approve_rule_request(request_id: int, profile_id: Optional[int] = None, reso
         raise ValueError("הבקשה כבר אושרה")
     now = int(datetime.now().timestamp())
     if req.get("request_type") == "file":
-        request_url = (req.get("request_url") or "").strip()
-        if request_url:
-            add_allowed_file_url_crm(request_url)
-            sync_allowed_file_downloads_to_core()
+        request_url = (req.get("request_url") or req.get("url") or "").strip()
+        if not request_url:
+            raise ValueError("חסר קישור לקובץ בבקשה – לא ניתן לאשר")
+        add_allowed_file_url_crm(request_url)
+        sync_allowed_file_downloads_to_core()
         db_connection.execute(
             "UPDATE rule_requests SET status = 'approved', updated_at = ?, approved_rule_id = ?, approved_profile_id = ?, resolved_by_user_id = ? WHERE id = ?",
             (now, None, None, resolved_by_user_id, request_id),
         )
         db_connection.commit()
-        return get_rule_request(request_id)
+        return {"request": get_rule_request(request_id)}
     url_raw = (req.get("url") or "").strip()
     if url_raw:
         url_for_rule = _normalize_url(url_raw)
@@ -1669,41 +2041,85 @@ def approve_rule_request(request_id: int, profile_id: Optional[int] = None, reso
         domain = domain[2:]
     inc = inc or bool(req.get("include_subdomains"))
     domain_pattern = f"*.{domain}" if inc else domain
+    path_val = path if path else "/"
     action = req.get("action") or "allow"
     tags = req.get("tags")
     tf = bool(req.get("text_filter_enabled", True)) if action == "allow" else False
     imgf = bool(req.get("image_filter_enabled", True)) if action == "allow" else False
     filef = bool(req.get("file_filter_enabled", True)) if action == "allow" else False
-    existing_id = _global_rule_exists(domain_pattern, path, inc)
+    existing_id = _global_rule_exists(domain_pattern, path_val, inc)
     if existing_id:
-        updated = update_global_rule(
-            existing_id,
-            action=action,
-            include_subdomains=inc,
-            tags=tags,
-            text_filter_enabled=tf,
-            image_filter_enabled=imgf,
-            file_filter_enabled=filef,
-        )
-        rule_id = updated["id"]
-    else:
-        created = create_global_rule(
-            url=url_for_rule,
-            action=action,
-            include_subdomains=inc,
-            tags=tags,
-            text_filter_enabled=tf,
-            image_filter_enabled=imgf,
-            file_filter_enabled=filef,
-        )
-        rule_id = created["id"]
+        existing_rule = get_global_rule(existing_id)
+        if not existing_rule:
+            existing_id = None
+        else:
+            identical = _rule_content_identical(existing_rule, action, inc, tags, tf, imgf, filef)
+            if identical:
+                db_connection.execute(
+                    "UPDATE rule_requests SET status = 'approved', updated_at = ?, approved_rule_id = ?, approved_profile_id = ?, resolved_by_user_id = ? WHERE id = ?",
+                    (now, existing_id, None, resolved_by_user_id, request_id),
+                )
+                db_connection.commit()
+                return {"request": get_rule_request(request_id), "already_existed_identical": True}
+            if force_update:
+                update_global_rule(
+                    existing_id,
+                    action=action,
+                    include_subdomains=inc,
+                    tags=tags,
+                    text_filter_enabled=tf,
+                    image_filter_enabled=imgf,
+                    file_filter_enabled=filef,
+                )
+                db_connection.execute(
+                    "UPDATE rule_requests SET status = 'approved', updated_at = ?, approved_rule_id = ?, approved_profile_id = ?, resolved_by_user_id = ? WHERE id = ?",
+                    (now, existing_id, None, resolved_by_user_id, request_id),
+                )
+                db_connection.commit()
+                sync_crm_rules_to_core(None)
+                return {"request": get_rule_request(request_id)}
+            if skip_rule_update:
+                db_connection.execute(
+                    "UPDATE rule_requests SET status = 'approved', updated_at = ?, approved_rule_id = ?, approved_profile_id = ?, resolved_by_user_id = ? WHERE id = ?",
+                    (now, existing_id, None, resolved_by_user_id, request_id),
+                )
+                db_connection.commit()
+                return {"request": get_rule_request(request_id)}
+            # conflict: return existing and proposed for UI
+            proposed_rule = {
+                "domain_pattern": domain_pattern,
+                "path_pattern": path_val,
+                "action": action,
+                "include_subdomains": inc,
+                "tags": tags or [],
+                "text_filter_enabled": tf,
+                "image_filter_enabled": imgf,
+                "file_filter_enabled": filef,
+            }
+            return {
+                "conflict": True,
+                "existing_rule": existing_rule,
+                "proposed_rule": proposed_rule,
+                "request": get_rule_request(request_id),
+            }
+    # no existing rule
+    created = create_global_rule(
+        url=url_for_rule,
+        action=action,
+        include_subdomains=inc,
+        tags=tags,
+        text_filter_enabled=tf,
+        image_filter_enabled=imgf,
+        file_filter_enabled=filef,
+    )
+    rule_id = created["id"]
     db_connection.execute(
         "UPDATE rule_requests SET status = 'approved', updated_at = ?, approved_rule_id = ?, approved_profile_id = ?, resolved_by_user_id = ? WHERE id = ?",
         (now, rule_id, None, resolved_by_user_id, request_id),
     )
     db_connection.commit()
     sync_crm_rules_to_core(None)
-    return get_rule_request(request_id)
+    return {"request": get_rule_request(request_id)}
 
 
 def update_rule_request(
@@ -1918,7 +2334,10 @@ def list_my_support_tickets(
             "SELECT COUNT(*) FROM support_replies WHERE ticket_id = ? AND author_id != ? AND created_at > ?",
             (r["id"], user_id, last_read),
         )
-        r["unread_replies_count"] = cursor2.fetchone()[0] or 0
+        unread = cursor2.fetchone()[0] or 0
+        # For owner: unread_replies_count already means "system replies not yet read"
+        r["unread_replies_count"] = unread
+        r["unread_support_replies_for_owner"] = unread
         if r.get("attached_rule_request_id"):
             req = get_rule_request(r["attached_rule_request_id"])
             r["attached_request_status"] = req["status"] if req else None
@@ -1927,29 +2346,61 @@ def list_my_support_tickets(
     return rows, total
 
 
+def _admin_unread_condition() -> str:
+    """SQL condition: ticket has unread content for admin group (user_id=0). Used for filtering."""
+    return """ (
+        NOT EXISTS (SELECT 1 FROM support_ticket_views v WHERE v.ticket_id = t.id AND v.user_id = 0)
+        OR EXISTS (
+            SELECT 1 FROM support_replies r
+            WHERE r.ticket_id = t.id AND r.author_id = t.user_id AND r.is_support_reply = 0
+            AND r.created_at > COALESCE((SELECT v2.last_read_at FROM support_ticket_views v2 WHERE v2.ticket_id = t.id AND v2.user_id = 0 LIMIT 1), 0)
+        )
+    ) """
+
+
+def list_support_ticket_user_ids() -> List[Dict]:
+    """List users that have at least one support ticket (for admin filter dropdown)."""
+    cursor = db_connection.execute(
+        """
+        SELECT DISTINCT t.user_id AS id, u.first_name, u.last_name, u.phone
+        FROM support_tickets t
+        JOIN users u ON u.id = t.user_id
+        ORDER BY u.first_name, u.last_name, u.phone
+        """
+    )
+    return [dict(row) for row in cursor.fetchall()]
+
+
 def list_all_support_tickets(
     page: int = 1,
     page_size: int = 25,
     sort_order: str = "desc",
     search: Optional[str] = None,
     viewer_id: Optional[int] = None,
+    read_filter: Optional[str] = None,
+    user_id_filter: Optional[int] = None,
 ) -> tuple[List[Dict], int]:
-    """List all support tickets (admin). Returns (list, total). When viewer_id is set, unread_replies_count is from that viewer's perspective (so admin sees 0 after reading)."""
+    """List all support tickets (admin). read_filter: 'unread' | 'read' | None (all). user_id_filter: filter by ticket owner."""
     page = max(1, page)
     page_size = max(1, min(100, page_size))
     offset = (page - 1) * page_size
     direction = "DESC" if sort_order == "desc" else "ASC"
-    where = ""
+    where_parts: list = []
     params: list = []
     if search and (q := search.strip()):
         q_like = f"%{q}%"
-        where = """
-        WHERE (
-            t.subject LIKE ? OR t.content LIKE ?
-            OR u.first_name LIKE ? OR u.last_name LIKE ? OR u.phone LIKE ?
+        where_parts.append(
+            "( t.subject LIKE ? OR t.content LIKE ? OR u.first_name LIKE ? OR u.last_name LIKE ? OR u.phone LIKE ? )"
         )
-        """
-        params = [q_like, q_like, q_like, q_like, q_like]
+        params.extend([q_like, q_like, q_like, q_like, q_like])
+    if read_filter == "unread":
+        where_parts.append(_admin_unread_condition())
+    elif read_filter == "read":
+        where_parts.append(" NOT " + _admin_unread_condition())
+    if user_id_filter is not None:
+        where_parts.append(" t.user_id = ? ")
+        params.append(user_id_filter)
+    where = " WHERE " + " AND ".join(where_parts) if where_parts else ""
     cursor = db_connection.execute(
         f"SELECT COUNT(*) FROM support_tickets t LEFT JOIN users u ON u.id = t.user_id {where}",
         params,
@@ -1972,22 +2423,49 @@ def list_all_support_tickets(
     for r in rows:
         r["content_preview"] = _content_preview(r.get("content") or "")
         r["replies_count"] = r.get("replies_count") or 0
-        # unread_replies_count: when viewer_id (admin) is set, count replies after viewer's last read; else owner's unread
+        # unread_replies_count for admins: keep existing behavior (per-admin: any reply after viewer's last read)
         if viewer_id is not None:
-            last_read = _get_ticket_last_read_at(r["id"], viewer_id)
+            last_read_viewer = _get_ticket_last_read_at(r["id"], viewer_id)
             cursor2 = db_connection.execute(
                 "SELECT COUNT(*) FROM support_replies WHERE ticket_id = ? AND created_at > ?",
-                (r["id"], last_read),
+                (r["id"], last_read_viewer),
             )
             r["unread_replies_count"] = cursor2.fetchone()[0] or 0
         else:
             owner_id = r["user_id"]
-            last_read = _get_ticket_last_read_at(r["id"], owner_id)
+            last_read_owner = _get_ticket_last_read_at(r["id"], owner_id)
             cursor2 = db_connection.execute(
                 "SELECT COUNT(*) FROM support_replies WHERE ticket_id = ? AND author_id != ? AND created_at > ?",
-                (r["id"], owner_id, last_read),
+                (r["id"], owner_id, last_read_owner),
             )
             r["unread_replies_count"] = cursor2.fetchone()[0] or 0
+
+        # For both owner and admins: how many system replies the owner has not yet read
+        owner_id = r["user_id"]
+        last_read_owner = _get_ticket_last_read_at(r["id"], owner_id)
+        cursor3 = db_connection.execute(
+            "SELECT COUNT(*) FROM support_replies WHERE ticket_id = ? AND author_id != ? AND is_support_reply = 1 AND created_at > ?",
+            (r["id"], owner_id, last_read_owner),
+        )
+        r["unread_support_replies_for_owner"] = cursor3.fetchone()[0] or 0
+
+        # For admins: how many user messages have not yet been read by any admin (shared across all admins).
+        # Includes the first message (the ticket itself) when no admin has opened the ticket yet.
+        last_read_admin_group = _get_ticket_last_read_at(r["id"], 0)
+        cursor4 = db_connection.execute(
+            """
+            SELECT COUNT(*) FROM support_replies
+            WHERE ticket_id = ?
+              AND author_id = ?
+              AND is_support_reply = 0
+              AND created_at > ?
+            """,
+            (r["id"], owner_id, last_read_admin_group),
+        )
+        count = cursor4.fetchone()[0] or 0
+        if last_read_admin_group == 0:
+            count += 1  # הודעה ראשונה (הפנייה עצמה) נחשבת כלא נקראה עד שמישהו מהמנהלים יפתח
+        r["unread_user_replies_for_admin"] = count
         user = get_user_by_id(r["user_id"])
         r["user_first_name"] = (user or {}).get("first_name")
         r["user_phone"] = (user or {}).get("phone")
@@ -2056,6 +2534,23 @@ def count_all_tickets_with_unread_replies(admin_viewer_id: Optional[int] = None)
         JOIN support_replies r ON r.ticket_id = t.id AND r.author_id != t.user_id
         LEFT JOIN support_ticket_views v ON v.ticket_id = t.id AND v.user_id = t.user_id
         WHERE r.created_at > COALESCE(v.last_read_at, 0)
+        """
+    )
+    return cursor.fetchone()[0] or 0
+
+
+def count_all_tickets_with_unread_for_admin_group() -> int:
+    """פניות שצריך לטפל: משותף לכל המנהלים – כולל הודעה ראשונה שלא נקראה או תגובות משתמש אחרי קריאה."""
+    cursor = db_connection.execute(
+        """
+        SELECT COUNT(DISTINCT t.id) FROM support_tickets t
+        LEFT JOIN support_ticket_views v ON v.ticket_id = t.id AND v.user_id = 0
+        WHERE v.ticket_id IS NULL
+           OR EXISTS (
+             SELECT 1 FROM support_replies r
+             WHERE r.ticket_id = t.id AND r.author_id = t.user_id AND r.is_support_reply = 0
+               AND r.created_at > COALESCE(v.last_read_at, 0)
+           )
         """
     )
     return cursor.fetchone()[0] or 0
@@ -2161,3 +2656,14 @@ def delete_support_ticket(ticket_id: int) -> bool:
     db_connection.execute("DELETE FROM support_tickets WHERE id = ?", (ticket_id,))
     db_connection.commit()
     return True
+
+
+def delete_support_tickets_bulk(ticket_ids: List[int]) -> int:
+    """Delete multiple support tickets (admin). Returns number of tickets deleted."""
+    if not ticket_ids:
+        return 0
+    deleted = 0
+    for tid in ticket_ids:
+        if delete_support_ticket(tid):
+            deleted += 1
+    return deleted

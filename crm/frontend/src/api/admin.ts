@@ -52,6 +52,19 @@ export const adminApi = {
     const response = await apiClient.get<GlobalRule[]>('/api/admin/global-rules');
     return response.data;
   },
+  /** Check before create: exact match (rule + identical), same-domain rules, and proposed_rule for conflict UI. */
+  checkCreateGlobalRule: async (data: GlobalRuleCreate): Promise<{
+    exact_match: { rule: GlobalRule; identical: boolean } | null;
+    same_domain_rules: GlobalRule[];
+    proposed_rule: { domain_pattern: string; path_pattern: string; action: string; include_subdomains: boolean; tags: string[]; text_filter_enabled: boolean; image_filter_enabled: boolean; file_filter_enabled: boolean };
+  }> => {
+    const response = await apiClient.post<{
+      exact_match: { rule: GlobalRule; identical: boolean } | null;
+      same_domain_rules: GlobalRule[];
+      proposed_rule: { domain_pattern: string; path_pattern: string; action: string; include_subdomains: boolean; tags: string[]; text_filter_enabled: boolean; image_filter_enabled: boolean; file_filter_enabled: boolean };
+    }>('/api/admin/global-rules/check-create', data);
+    return response.data;
+  },
   createGlobalRule: async (data: GlobalRuleCreate): Promise<GlobalRule> => {
     const response = await apiClient.post<GlobalRule>('/api/admin/global-rules', data);
     return response.data;
@@ -95,6 +108,27 @@ export const adminApi = {
     await apiClient.delete('/api/admin/allowed-file-downloads', { data: { url: url.trim() } });
   },
 
+  // Site injections (הזרקת קוד והסתרת תוכן לאתר – אדמין)
+  listSiteInjections: async (): Promise<SiteInjection[]> => {
+    const response = await apiClient.get<SiteInjection[]>('/api/admin/site-injections');
+    return response.data;
+  },
+  createSiteInjection: async (data: SiteInjectionCreate): Promise<SiteInjection> => {
+    const response = await apiClient.post<SiteInjection>('/api/admin/site-injections', data);
+    return response.data;
+  },
+  getSiteInjection: async (id: number): Promise<SiteInjection> => {
+    const response = await apiClient.get<SiteInjection>(`/api/admin/site-injections/${id}`);
+    return response.data;
+  },
+  updateSiteInjection: async (id: number, data: SiteInjectionUpdate): Promise<SiteInjection> => {
+    const response = await apiClient.put<SiteInjection>(`/api/admin/site-injections/${id}`, data);
+    return response.data;
+  },
+  deleteSiteInjection: async (id: number): Promise<void> => {
+    await apiClient.delete(`/api/admin/site-injections/${id}`);
+  },
+
   // Filter switches (הפעלה/כיבוי סינונים – אדמין)
   getFilterSwitches: async (): Promise<FilterSwitches> => {
     const response = await apiClient.get<FilterSwitches>('/api/admin/filter-switches');
@@ -119,6 +153,10 @@ export interface FilterSwitches {
   embedded_image_filter: boolean;
   file_download_filter: boolean;
   surf_widget: boolean;
+  pdf_filter_text: boolean;
+  pdf_filter_images: boolean;
+  file_share_block: boolean;
+  google_search_filter: boolean;
 }
 
 export interface GlobalRule {
@@ -131,6 +169,9 @@ export interface GlobalRule {
   text_filter_enabled?: boolean;
   image_filter_enabled?: boolean;
   file_filter_enabled?: boolean;
+  pdf_filter_enabled?: boolean;
+  video_filter_enabled?: boolean;
+  surf_widget_enabled?: boolean;
   created_at: number;
   updated_at: number;
   display_url?: string;
@@ -144,6 +185,9 @@ export interface GlobalRuleCreate {
   text_filter_enabled?: boolean;
   image_filter_enabled?: boolean;
   file_filter_enabled?: boolean;
+  pdf_filter_enabled?: boolean;
+  video_filter_enabled?: boolean;
+  surf_widget_enabled?: boolean;
 }
 
 export interface GlobalRuleUpdate {
@@ -154,11 +198,49 @@ export interface GlobalRuleUpdate {
   text_filter_enabled?: boolean;
   image_filter_enabled?: boolean;
   file_filter_enabled?: boolean;
+  pdf_filter_enabled?: boolean;
+  video_filter_enabled?: boolean;
+  surf_widget_enabled?: boolean;
 }
 
 export interface AllowedFileItem {
   url: string;
   created_at: number;
+}
+
+export interface SiteInjection {
+  id: number;
+  domain_pattern: string;
+  path_pattern?: string;
+  include_subdomains: boolean;
+  path_exact_only: boolean;
+  head_code?: string;
+  body_code?: string;
+  hide_selectors_list: string[];
+  enabled: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface SiteInjectionCreate {
+  url: string;
+  head_code?: string;
+  body_code?: string;
+  hide_selectors?: string[];
+  include_subdomains?: boolean;
+  /** true = only this URL; false = path and all subpaths (like rules). Default true. */
+  path_exact_only?: boolean;
+  enabled?: boolean;
+}
+
+export interface SiteInjectionUpdate {
+  url?: string;
+  head_code?: string;
+  body_code?: string;
+  hide_selectors?: string[];
+  include_subdomains?: boolean;
+  path_exact_only?: boolean;
+  enabled?: boolean;
 }
 
 /** רשומה בלוג אבטחה – צפייה בהקלטת תעבורה */

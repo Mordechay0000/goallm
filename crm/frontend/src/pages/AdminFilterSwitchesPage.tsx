@@ -22,6 +22,10 @@ const FILTER_LABELS: Record<keyof FilterSwitches, string> = {
   embedded_image_filter: 'סינון תמונות מוטמעות – תמונות data: בתוך HTML',
   file_download_filter: 'סינון הורדות קבצים – שליחה לבדיקה עם תיאור הקובץ',
   surf_widget: 'סרגל דיווח (ווידג׳ט) – דחיפת תגית דיווח ומנהל לדפים',
+  pdf_filter_text: 'סינון טקסט ב-PDF – חילוץ טקסט מקובץ PDF וסינון לפי ניתוח',
+  pdf_filter_images: 'סינון תמונות ב-PDF – החלפת תמונות בתוך PDF לפי ניתוח',
+  file_share_block: 'שיתוף קבצים ציבורי – דף "שלח לבדיקה" לקישורים מאתרי שיתוף',
+  google_search_filter: 'סינון תוצאות גוגל – הסתרת תוצאות חסומות/לא ידועות',
 };
 
 const DEFAULT_SWITCHES: FilterSwitches = {
@@ -31,7 +35,83 @@ const DEFAULT_SWITCHES: FilterSwitches = {
   embedded_image_filter: true,
   file_download_filter: true,
   surf_widget: true,
+  pdf_filter_text: true,
+  pdf_filter_images: true,
+  file_share_block: true,
+  google_search_filter: true,
 };
+
+/** Grouped sections for a tidy, intuitive layout */
+const SECTIONS: { title: string; keys: (keyof FilterSwitches)[] }[] = [
+  {
+    title: 'מדיניות וכתובות',
+    keys: ['url_policy'],
+  },
+  {
+    title: 'סינון תוכן בדפים',
+    keys: ['text_filter', 'image_filter', 'embedded_image_filter', 'google_search_filter'],
+  },
+  {
+    title: 'קבצים ו-PDF',
+    keys: ['file_download_filter', 'file_share_block', 'pdf_filter_text', 'pdf_filter_images'],
+  },
+  {
+    title: 'אחר',
+    keys: ['surf_widget'],
+  },
+];
+
+function SwitchRow({
+  switchKey,
+  label,
+  checked,
+  saving,
+  onToggle,
+}: {
+  switchKey: keyof FilterSwitches;
+  label: string;
+  checked: boolean;
+  saving: boolean;
+  onToggle: (key: keyof FilterSwitches, value: boolean) => void;
+}) {
+  return (
+    <Box
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: 2,
+        py: 1.5,
+        px: 0,
+        borderBottom: '1px solid',
+        borderColor: 'divider',
+        '&:last-of-type': { borderBottom: 'none' },
+      }}
+    >
+      <FormControlLabel
+        control={
+          <Switch
+            checked={!!checked}
+            onChange={(_, value) => onToggle(switchKey, value)}
+            disabled={saving}
+            color="primary"
+          />
+        }
+        label={
+          <Typography variant="body1" component="span">
+            {label}
+          </Typography>
+        }
+        labelPlacement="start"
+        sx={{ ml: 0, flex: 1 }}
+      />
+      <Typography variant="caption" color="text.secondary">
+        {checked ? 'מופעל' : 'כבוי'}
+      </Typography>
+    </Box>
+  );
+}
 
 const AdminFilterSwitchesPage: React.FC = () => {
   const [switches, setSwitches] = useState<FilterSwitches>({ ...DEFAULT_SWITCHES });
@@ -97,50 +177,33 @@ const AdminFilterSwitchesPage: React.FC = () => {
           {error}
         </Alert>
       )}
-      <Paper sx={{ p: 3 }}>
-        <Box className="card-header-accent" sx={{ mb: 2 }}>
-          <Typography variant="h6" sx={{ fontWeight: 600 }}>הפעלת סינונים</Typography>
-        </Box>
-        <Stack spacing={2}>
-          {(Object.keys(FILTER_LABELS) as (keyof FilterSwitches)[]).map((key) => (
-            <Box
-              key={key}
-              sx={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                flexWrap: 'wrap',
-                gap: 2,
-                py: 1,
-                borderBottom: '1px solid',
-                borderColor: 'divider',
-                '&:last-of-type': { borderBottom: 'none' },
-              }}
-            >
-              <FormControlLabel
-                control={
-                  <Switch
-                    checked={!!switches[key]}
-                    onChange={(_, checked) => handleToggle(key, checked)}
-                    disabled={saving}
-                    color="primary"
-                  />
-                }
-                label={
-                  <Typography variant="body1" component="span">
-                    {FILTER_LABELS[key]}
-                  </Typography>
-                }
-                labelPlacement="start"
-                sx={{ ml: 0, flex: 1 }}
-              />
-              <Typography variant="caption" color="text.secondary">
-                {switches[key] ? 'מופעל' : 'כבוי'}
+
+      <Stack spacing={3}>
+        {SECTIONS.map((section) => (
+          <Paper key={section.title} sx={{ p: 3 }}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2, color: 'text.secondary' }}>
+              {section.title}
+            </Typography>
+            {section.title === 'קבצים ו-PDF' && (
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+                כששני מתגי ה-PDF כבויים – קובץ ה-PDF לא יעובד ויועבר כמו שהוא.
               </Typography>
-            </Box>
-          ))}
-        </Stack>
-      </Paper>
+            )}
+            <Stack spacing={0}>
+              {section.keys.map((key) => (
+                <SwitchRow
+                  key={key}
+                  switchKey={key}
+                  label={FILTER_LABELS[key]}
+                  checked={!!switches[key]}
+                  saving={saving}
+                  onToggle={handleToggle}
+                />
+              ))}
+            </Stack>
+          </Paper>
+        ))}
+      </Stack>
     </Container>
   );
 };

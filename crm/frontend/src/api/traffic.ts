@@ -22,6 +22,8 @@ export interface TrafficLogEntry {
   time_sec: number;
   content_type: string;
   created_at: number;
+  /** HTTP response status (200, 404, 500, etc.); null when no response (e.g. connection error). */
+  http_status_code?: number | null;
 }
 
 /** Call when page is closing so recording stops. Uses fetch keepalive so the request can complete after the tab closes. */
