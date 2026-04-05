@@ -6,69 +6,75 @@
 
 ## תוכן עניינים
 
-1. [צילומי מסך](#צילומי-מסך)
-2. [ארכיטקטורה](#ארכיטקטורה)
-3. [זרימת הרצה (מפתחים)](#זרימת-הרצה-מפתחים)
-4. [זרימת הסינון (פרוקסי)](#זרימת-הסינון-פרוקסי)
-5. [רכיבים ונקודות כניסה בקוד](#רכיבים-ונקודות-כניסה-בקוד)
-6. [API — מפת נקודות הקצה](#api--מפת-נקודות-הקצה)
-7. [דרישות, התקנה והפעלה](#דרישות-התקנה-והפעלה)
-8. [HTTPS, מסדי נתונים וסביבה](#https-מסדי-נתונים-וסביבה)
-9. [מבנה תיקיות](#מבנה-תיקיות)
-10. [בדיקות ובנייה](#בדיקות-ובנייה)
-11. [תיעוד נוסף ורישיון](#תיעוד-נוסף-ורישיון)
+עוגנים מפורשים (ASCII) להבטחת קישורים בעורכים וב-GitHub.
+
+1. [צילומי מסך](#screenshots)
+2. [ארכיטקטורה](#architecture)
+3. [זרימת הרצה (מפתחים)](#dev-run-flow)
+4. [זרימת הסינון (פרוקסי)](#filter-flow)
+5. [רכיבים ונקודות כניסה בקוד](#components)
+6. [API — מפת נקודות הקצה](#api-endpoints)
+7. [דרישות, התקנה והפעלה](#install-run)
+8. [HTTPS, מסדי נתונים וסביבה](#https-storage-env)
+9. [מבנה תיקיות](#folder-structure)
+10. [בדיקות ובנייה](#tests-build)
+11. [תיעוד נוסף ורישיון](#docs-license)
 
 ---
+
+<a id="screenshots"></a>
 
 ## צילומי מסך
 
 להלן תמונות מממשק הניהול (CRM). ניתן לעדכן כיתובים אם התוכן בכל צילום משתנה.
 
 | 1 | 2 | 3 |
-|---|---|---|
-| ![](docs/assets/readme/screenshot-01.png) | ![](docs/assets/readme/screenshot-02.png) | ![](docs/assets/readme/screenshot-03.png) |
+| --- | --- | --- |
+| ![ממשק CRM — דוגמה 1](docs/assets/readme/screenshot-01.png) | ![ממשק CRM — דוגמה 2](docs/assets/readme/screenshot-02.png) | ![ממשק CRM — דוגמה 3](docs/assets/readme/screenshot-03.png) |
 | ממשק — דוגמה 1 | ממשק — דוגמה 2 | ממשק — דוגמה 3 |
 
 | 4 | 5 | 6 |
-|---|---|---|
-| ![](docs/assets/readme/screenshot-04.png) | ![](docs/assets/readme/screenshot-05.png) | ![](docs/assets/readme/screenshot-06.png) |
+| --- | --- | --- |
+| ![ממשק CRM — דוגמה 4](docs/assets/readme/screenshot-04.png) | ![ממשק CRM — דוגמה 5](docs/assets/readme/screenshot-05.png) | ![ממשק CRM — דוגמה 6](docs/assets/readme/screenshot-06.png) |
 | ממשק — דוגמה 4 | ממשק — דוגמה 5 | ממשק — דוגמה 6 |
 
 | 7 | 8 | 9 |
-|---|---|---|
-| ![](docs/assets/readme/screenshot-07.png) | ![](docs/assets/readme/screenshot-08.png) | ![](docs/assets/readme/screenshot-09.png) |
+| --- | --- | --- |
+| ![ממשק CRM — דוגמה 7](docs/assets/readme/screenshot-07.png) | ![ממשק CRM — דוגמה 8](docs/assets/readme/screenshot-08.png) | ![ממשק CRM — דוגמה 9](docs/assets/readme/screenshot-09.png) |
 | ממשק — דוגמה 7 | ממשק — דוגמה 8 | ממשק — דוגמה 9 |
 
 ---
+
+<a id="architecture"></a>
 
 ## ארכיטקטורה
 
 ```mermaid
 flowchart TB
-  subgraph גולש
-    BR[דפדפן / מכשיר]
+  subgraph sg_browser["גולש"]
+    BR["דפדפן / מכשיר"]
   end
-  subgraph פרוקסי
+  subgraph sg_proxy["פרוקסי"]
     MP[mitmproxy]
     AD[mitmproxy_addon.py]
   end
-  subgraph ליבה
+  subgraph sg_core["ליבה"]
     HP[http_flow_processor]
     POL[policy + SQLite]
-    FIL[filters: text / image / pdf / search]
+    FIL["filters: text / image / pdf / search"]
   end
-  subgraph CRM
+  subgraph sg_crm["CRM"]
     API[FastAPI]
     UI[React SPA]
-    DB[(SQLite ב־.storage)]
+    DB[(SQLite .storage)]
   end
-  BR -->|HTTP(S) דרך פרוקסי| MP
+  BR -->|"HTTP/S דרך פרוקסי"| MP
   MP --> AD
   AD --> HP
   HP --> POL
   HP --> FIL
-  POL <-->|אותם קבצי DB| DB
-  API <-->|קריאה/כתיבה| DB
+  POL <-->|"אותם קבצי DB"| DB
+  API <-->|"קריאה/כתיבה"| DB
   UI --> API
 ```
 
@@ -76,6 +82,8 @@ flowchart TB
 - **אין** עיבוד תוכן על בקשות לדומיין של ממשק ה-CRM עצמו — כדי שלא יישבר ה-UI (ראו `_is_crm_frontend_request` ב־`http_flow_processor.py`).
 
 ---
+
+<a id="dev-run-flow"></a>
 
 ## זרימת הרצה (מפתחים)
 
@@ -94,7 +102,7 @@ sequenceDiagram
 ```
 
 | שלב | פקודה (משורש `goallm/` או יחסי) | תוצאה |
-|-----|-----------------------------------|--------|
+| --- | --- | --- |
 | 1 | `bash setup.sh` (פעם ראשונה) | `venv/`, `npm install`, `.storage/` |
 | 2 | `cd crm && bash run_fastapi.sh` | API על פורט **8000** (`/docs` = Swagger) |
 | 3 | `bash core/proxy/run_proxy.sh` | פרוקסי על **8080** (ברירת mitmproxy) |
@@ -103,6 +111,8 @@ sequenceDiagram
 פריסה לייצור: בניית הפרונט (`npm run build`) והעתקת הפלט ל־`crm/static/` (כבר קיים שם `index.html` + `assets/` לדוגמה). פרטים ופתרון תקלות: **[SETUP.md](SETUP.md)**.
 
 ---
+
+<a id="filter-flow"></a>
 
 ## זרימת הסינון (פרוקסי)
 
@@ -134,10 +144,12 @@ flowchart TD
 
 ---
 
+<a id="components"></a>
+
 ## רכיבים ונקודות כניסה בקוד
 
 | אזור | תפקיד | קבצים מרכזיים |
-|------|--------|----------------|
+| --- | --- | --- |
 | **פרוקסי** | אינטרספציה mitmproxy, IP, Surf | `mitmproxy_addon.py`, `run_proxy.sh`, `surf_widget.py` |
 | **זרימה** | אורקסטרציה של תגובה | `http_flow_processor.py`, `site_policy_pages.py`, `traffic_utils.py` |
 | **מדיניות** | SQLite, טעינת חוקים, התאמת URL | `policy_database.py`, `policy_loader.py`, `url_policy_resolver.py` |
@@ -149,6 +161,8 @@ flowchart TD
 
 ---
 
+<a id="api-endpoints"></a>
+
 ## API — מפת נקודות הקצה
 
 הרשימה המלאה והמעודכנת ביותר זמינה ב־**Swagger**: `http://127.0.0.1:8000/docs` (כאשר ה-Backend רץ). להלן מיפוי לפי נושאים.
@@ -156,7 +170,7 @@ flowchart TD
 ### דפים, אבחון ו-SPA
 
 | שיטה | נתיב | תיאור |
-|------|------|--------|
+| --- | --- | --- |
 | GET | `/` | דף הבית / SPA |
 | GET | `/bind` | דף שיוך IP |
 | GET | `/diagnostic` | דף אבחון סינון (HTML) |
@@ -168,7 +182,7 @@ flowchart TD
 ### אימות
 
 | שיטה | נתיב |
-|------|------|
+| --- | --- |
 | GET | `/api/auth/setup-status` |
 | POST | `/api/auth/register` |
 | POST | `/api/auth/login` |
@@ -180,15 +194,16 @@ flowchart TD
 ### משתמש מחובר
 
 | שיטה | נתיב |
-|------|------|
-| GET, PUT | `/api/user/me` |
+| --- | --- |
+| GET | `/api/user/me` |
+| PUT | `/api/user/me` |
 | POST | `/api/user/me/change-password` |
 | POST | `/api/user/me/avatar` |
 
 ### פרופילים וחוקים
 
 | שיטה | נתיב |
-|------|------|
+| --- | --- |
 | GET, POST | `/api/profiles` |
 | GET, PUT, DELETE | `/api/profiles/{profile_id}` |
 | GET, POST | `/api/profiles/{profile_id}/rules` |
@@ -199,7 +214,7 @@ flowchart TD
 ### תגיות ותזמונים
 
 | שיטה | נתיב |
-|------|------|
+| --- | --- |
 | GET, POST | `/api/tag-rules` |
 | PUT, DELETE | `/api/tag-rules/{rule_id}` |
 | GET, POST | `/api/profiles/{profile_id}/schedules` |
@@ -207,27 +222,28 @@ flowchart TD
 
 ### WebSocket
 
-| נתיב |
-|------|
-| `/ws` |
-| `/ws/traffic` |
+| נתיב | תיאור |
+| --- | --- |
+| `/ws` | WebSocket כללי |
+| `/ws/traffic` | הקלטת תעבורה חיה |
 
 ### Resolver וסנכרון (שילוב core)
 
 | שיטה | נתיב |
-|------|------|
+| --- | --- |
 | GET | `/api/resolver/rules` |
 | GET | `/api/resolver/rules/all` |
 | POST | `/api/resolver/sync` |
 | GET | `/api/resolver/core-mode` |
 | GET | `/api/resolver/active` |
 | POST | `/api/resolver/test-url` |
-| GET, PUT | `/api/admin/filter-switches` |
+| GET | `/api/admin/filter-switches` |
+| PUT | `/api/admin/filter-switches` |
 
 ### Surf widget (מנהלים דרך פרוקסי)
 
 | שיטה | נתיב |
-|------|------|
+| --- | --- |
 | GET | `/api/surf-widget/context` |
 | POST | `/api/surf-widget/block` |
 | POST | `/api/surf-widget/update-rule-to-block` |
@@ -237,10 +253,12 @@ flowchart TD
 ### בקשות שינוי חוק
 
 | שיטה | נתיב |
-|------|------|
+| --- | --- |
 | POST | `/api/rule-requests` |
 | GET | `/api/rule-requests` |
-| GET, PUT, DELETE | `/api/rule-requests/{request_id}` |
+| GET | `/api/rule-requests/{request_id}` |
+| PUT | `/api/rule-requests/{request_id}` |
+| DELETE | `/api/rule-requests/{request_id}` |
 | POST | `/api/admin/rule-requests/{request_id}/approve` |
 | POST | `/api/admin/rule-requests/{request_id}/reject` |
 | GET | `/api/admin/all-profiles` |
@@ -248,29 +266,36 @@ flowchart TD
 ### תמיכה
 
 | שיטה | נתיב |
-|------|------|
+| --- | --- |
 | POST | `/api/support/upload` |
-| POST, GET | `/api/support/tickets` |
+| POST | `/api/support/tickets` |
+| GET | `/api/support/tickets` |
 | GET | `/api/support/tickets/users` |
 | POST | `/api/support/tickets/bulk-delete` |
 | GET | `/api/support/stats` |
-| GET, DELETE | `/api/support/tickets/{ticket_id}` |
-| GET, POST | `/api/support/tickets/{ticket_id}/replies` |
+| GET | `/api/support/tickets/{ticket_id}` |
+| DELETE | `/api/support/tickets/{ticket_id}` |
+| GET | `/api/support/tickets/{ticket_id}/replies` |
+| POST | `/api/support/tickets/{ticket_id}/replies` |
 
 ### אדמין — כללים גלובליים, הזרקות, משתמשים, קבצים
 
 | שיטה | נתיב (דוגמאות) |
-|------|------------------|
-| GET, POST, GET/PUT/DELETE | `/api/admin/global-rules`, `/api/admin/global-rules/{rule_id}` |
-| GET, POST, DELETE | `/api/admin/global-rules/resolve`, `check-create` |
-| GET, POST, DELETE | `/api/admin/allowed-file-downloads` |
-| CRUD | `/api/admin/site-injections`, `.../{injection_id}` |
-| GET, PUT, DELETE | `/api/admin/users`, `.../{user_id}/admin`, `locked-settings` |
+| --- | --- |
+| GET / POST | `/api/admin/global-rules` |
+| GET / PUT / DELETE | `/api/admin/global-rules/{rule_id}` |
+| GET | `/api/admin/global-rules/resolve` |
+| POST | `/api/admin/global-rules/check-create` |
+| GET / POST / DELETE | `/api/admin/allowed-file-downloads` |
+| CRUD | `/api/admin/site-injections`, `/api/admin/site-injections/{injection_id}` |
+| GET | `/api/admin/users` |
+| PUT | `/api/admin/users/{user_id}/admin` |
+| GET / POST / DELETE | `/api/admin/users/{user_id}/locked-settings` |
 
 ### הקלטת תעבורה וצפייה
 
 | שיטה | נתיב |
-|------|------|
+| --- | --- |
 | POST | `/api/traffic/start` |
 | POST | `/api/traffic/stop` |
 | GET | `/api/traffic/status` |
@@ -282,20 +307,23 @@ flowchart TD
 ### שיוך IP ומידע «אני»
 
 | שיטה | נתיב |
-|------|------|
+| --- | --- |
 | GET | `/api/me` |
-| GET, POST | `/api/me/bindings` |
+| GET | `/api/me/bindings` |
+| POST | `/api/me/bindings` |
 | DELETE | `/api/me/bindings/{binding_id}` |
 | GET | `/api/me/client-ip` |
 
 ### פנימי (פרוקסי + סוד משותף)
 
 | שיטה | נתיב |
-|------|------|
+| --- | --- |
 | GET | `/api/internal/surf-user-info` |
 | POST | `/api/internal/touch-ip` |
 
 ---
+
+<a id="install-run"></a>
 
 ## דרישות, התקנה והפעלה
 
@@ -321,10 +349,10 @@ cd crm/frontend && bash run_dev.sh
 ```
 
 | שירות | כתובת |
-|--------|--------|
-| פרוקסי | http://127.0.0.1:8080 |
-| API | http://127.0.0.1:8000 — תיעוד: `/docs` |
-| CRM (Vite) | http://localhost:5173 |
+| --- | --- |
+| פרוקסי | <http://127.0.0.1:8080> |
+| API | <http://127.0.0.1:8000> (תיעוד: `/docs`) |
+| CRM (Vite) | <http://localhost:5173> |
 
 **מצבי פרוקסי:** `bash core/proxy/run_proxy.sh mitmweb` או `mitmdump`. **אימות פרוקסי (ברירת מחדל):** משתמש `filter`, סיסמה `f123456Ab` — ניתן לדרוס עם `PROXY_AUTH=user:pass`. פירוט: [`core/proxy/README.md`](core/proxy/README.md).
 
@@ -332,17 +360,21 @@ cd crm/frontend && bash run_dev.sh
 
 ---
 
+<a id="https-storage-env"></a>
+
 ## HTTPS, מסדי נתונים וסביבה
 
-- **HTTPS:** בפעם הראשונה התקן את תעודת ה-CA של mitmproxy דרך https://mitm.it כשהפרוקסי פעיל.
+- **HTTPS:** בפעם הראשונה התקן את תעודת ה-CA של mitmproxy דרך <https://mitm.it> כשהפרוקסי פעיל.
 - **מסדי נתונים:** נוצרים אוטומטית תחת `.storage/` (למשל `crm.db`, `policies.db`, `image_status.db`). אפשר לדרוס נתיב עם `GOALLM_STORAGE_DIR`.
 - **ייצור:** חובה לקבוע `SECRET_KEY`, `CRM_PROXY_SECRET`, ו־`PROXY_AUTH` מתאימים; ראו [`data/constants.py`](data/constants.py).
 
 ---
 
+<a id="folder-structure"></a>
+
 ## מבנה תיקיות
 
-```
+```text
 goallm/
 ├── config/llm/              # פרומפטים / חוזי פלט ל-LLM (אופציונלי)
 ├── core/
@@ -366,6 +398,8 @@ goallm/
 
 ---
 
+<a id="tests-build"></a>
+
 ## בדיקות ובנייה
 
 ```bash
@@ -379,10 +413,12 @@ cd crm/frontend && npm run build
 
 ---
 
+<a id="docs-license"></a>
+
 ## תיעוד נוסף ורישיון
 
 | מסמך | תוכן |
-|------|------|
+| --- | --- |
 | [SETUP.md](SETUP.md) | הרצה מפורטת, רשת, SSH, פתרון בעיות |
 | [core/README.md](core/README.md) | מבנה הליבה |
 | [crm/SECURITY.md](crm/SECURITY.md) | אבטחה |
