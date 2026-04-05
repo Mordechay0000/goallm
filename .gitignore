@@ -1,0 +1,15 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+venv/
+.venv/
+models/
+__pycache__/
+*.py[cod]
+*$py.class
+*.cpython*
+ca/
+.storage/
+.vscode/
+mitmdump_log.txt

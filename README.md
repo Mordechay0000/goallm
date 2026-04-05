@@ -1,83 +1,305 @@
 # Goallm
 
-**פרוקסי חכם לסינון תוכן בזמן אמת** — הדפדפן גולש דרך [mitmproxy](https://mitmproxy.org/), והמערכת מנתחת תגובות HTTP: טקסט, תמונות, ומסמכי PDF, לפי **מדיניות אתר**, **פרופילי משתמש** ו**חוקים** שמנוהלים מממשק CRM מודרני.
-
-זהו פרויקט למי שרוצה להבין או לבנות **שכבת בקרה** בין המשתמש לאינטרנט: לא חוסם רק לפי דומיין, אלא יכול להחליט **לכל כתובת** אם לאפשר, לחסום, לשלוח לבדיקה, ולהחיל סינון מלל ותמונות עם מעקב סטטוס ותורים לעיבוד כבד.
+פרוקסי סינון מבוסס [mitmproxy](https://mitmproxy.org/) שמעבד בזמן אמת תגובות HTTP/HTTPS (טקסט, HTML, תמונות, PDF) לפי **מדיניות אתר**, **פרופילים** ו**חוקים** שנשלטים מממשק **CRM** (FastAPI + React). המערכת מתאימה למי שרוצה שכבת בקרה עמוקה — לא רק חסימת דומיין, אלא החלטות לפי כתובת, תזמונים, תגיות וסוג תוכן.
 
 ---
 
-## מה הפרויקט עושה — בקצרה
+## תוכן עניינים
 
-| רכיב | תפקיד |
-|------|--------|
-| **פרוקסי (mitmproxy)** | יושב בין המשתמש לאתרים; רואה תעבורה HTTPS (אחרי התקנת CA); מפעיל את לוגיקת הסינון על כל תגובה רלוונטית. |
-| **Core** | מחבר מדיניות URL, סינון טקסט, סינון תמונות (כולל תמונות מוטמעות ב-HTML), PDF, דפי “חסום / שלח לבדיקה”, ויומן תעבורה למשתמשים מקושרים. |
-| **CRM (FastAPI + React)** | משתמשים, מנהלים, פרופילים, חוקים, תזמונים, תמיכה, כלי ניהול; ה-API מסנכרן חוקים למסדי הנתונים שהפרוקסי קורא. |
-
-התוצאה: ארגון או הורה יכולים להגדיר **מי רואה מה**, מתי לאתר נדרש אישור, ואיך מטופלות תמונות ומלל — הכל נשלט מממשק אחד, והפרוקסי מיישם בפועל.
-
----
-
-## איך זה עובד — זרימה וחלקים
-
-### 1. שכבת הפרוקסי (`core/proxy/`)
-
-- **`mitmproxy_addon.py`** — נקודת הכניסה של mitmproxy: מזהה את כתובת ה-IP של הגולש, בודק אם היא **מקושרת למשתמש** ב-CRM, מפנה לא מקושרים לדף קישור (אם מופעל) או חוסם, ומעביר תגובות HTTP לעיבוד.
-- **`run_proxy.sh`** — מריץ את הכלי עם האדון ועם **אימות פרוקסי** (ברירת מחדל: משתמש `filter`, סיסמה `f123456Ab`) — כדי שרק מי שמכיר את הפרטים יוכל לגלוש דרך הפרוקסי.
-- **`surf_widget.py`** — ווידג’ט “גלישה” למנהלים: טוקן חתום (סוד משותף עם ה-CRM) מאפשר פעולות כמו חסימת אתר ישירות מהדף.
-
-**חשוב:** גלישת HTTPS דורשת התקנת **תעודת CA** של mitmproxy בפעם הראשונה (ראו [הפעלה — HTTPS](#הפעלה--https-ורישיון-ca)).
-
-### 2. עיבוד תגובות (`core/flow/`)
-
-- **`http_flow_processor.py`** — אורקסטרציה: לפי מדיניות האתר והפרופיל — האם לעבור סינון, להחזיר דף חסימה/בדיקה, או להעביר הלאה; משלב סינון טקסט, תמונות (כולל מוטמעות), ו-PDF לפי הצורך.
-- **`site_policy_pages.py`** — דפי HTML מותאמים (חסום, שלח לבדיקה וכו’) במקום התוכן המקורי כשהמדיניות כך קובעת.
-- **`traffic_utils.py`** — עזרי לוגיקה לתעבורה (למשל סטטוסים לרישום).
-
-### 3. מדיניות ומסדי נתונים (`core/policy/`)
-
-- **`policy_database.py`** — SQLite: חוקי URL, פרופילים, שיוך IP למשתמש, הקלטות תעבורה, מפתחות “מפסקים” לסינונים, ועוד — מה שהפרוקסי וה-CRM חולקים.
-- **`policy_loader.py` / `url_policy_resolver.py`** — טעינת כללים ופתרון “מה המדיניות לכתובת הזו?” (אפשר, חסום, בדיקה, היקף דומיין וכו’).
-
-### 4. מסנני תוכן (`core/filters/`)
-
-- **`filters/text/`** — סינון מלל לפי רשימות מילים, ספים וחומרה (`word_lists/` לעברית ואנגלית).
-- **`filters/image/`** — חילוץ תמונות מהתגובה, תור עיבוד, סטטוסים (מאושר / חסום / ממתין), החלפה ב-placeholder כשצריך, אנליזרים (סימולציה או LLM אופציונלי).
-- **`filters/pdf/`** — חילוץ וסינון בתוך PDF.
-- **`filters/search/`** — הוקים לסינון הקשר חיפוש (למשל Google).
-
-### 5. CRM (`crm/`)
-
-- **Backend (`crm/main.py` ושכבת שירותים)** — REST API: אימות (JWT), משתמשים, חוקים, פרופילים, תזמונים, תמיכה, נקודות קצה פנימיות לפרוקסי (סוד משותף, עדכון שיוך IP).
-- **Frontend (React + Vite + MUI)** — ממשק בעברית (RTL): לוח בקרה, ניהול חוקים, כלי אדמין, הקלטת תעבורה לניפוי וכו’.
-- **`data/constants.py`** — נקודת אמת לכתובות CRM, סוד פרוקסי, אחסון, דגלי LLM — ניתן לדריסה במלואה או בחלקה דרך **משתני סביבה** (בייצור: `SECRET_KEY`, `CRM_PROXY_SECRET`, `PROXY_AUTH` וכו’).
-
-### 6. נתונים ואחסון
-
-- תיקיית **`.storage/`** (או `GOALLM_STORAGE_DIR`) — נוצרת אוטומטית; כוללת מסדי SQLite (CRM, מדיניות, סטטוס תמונות) והעלאות. **לא לפרסם** את התיקייה הזו — היא מקומית לסביבה.
-
-פירוט מבנה הליבה: [`core/README.md`](core/README.md).
+1. [צילומי מסך](#צילומי-מסך)
+2. [ארכיטקטורה](#ארכיטקטורה)
+3. [זרימת הרצה (מפתחים)](#זרימת-הרצה-מפתחים)
+4. [זרימת הסינון (פרוקסי)](#זרימת-הסינון-פרוקסי)
+5. [רכיבים ונקודות כניסה בקוד](#רכיבים-ונקודות-כניסה-בקוד)
+6. [API — מפת נקודות הקצה](#api--מפת-נקודות-הקצה)
+7. [דרישות, התקנה והפעלה](#דרישות-התקנה-והפעלה)
+8. [HTTPS, מסדי נתונים וסביבה](#https-מסדי-נתונים-וסביבה)
+9. [מבנה תיקיות](#מבנה-תיקיות)
+10. [בדיקות ובנייה](#בדיקות-ובנייה)
+11. [תיעוד נוסף ורישיון](#תיעוד-נוסף-ורישיון)
 
 ---
 
-## דרישות מקדימות
+## צילומי מסך
 
-| כלי | גרסה מינימלית | בדיקה |
-|-----|----------------|--------|
-| Python | 3.10+ | `python3 --version` |
-| Node.js | 18+ | `node --version` |
-| npm | מגיע עם Node | `npm --version` |
-| Git | לשכפול הריפו | `git --version` |
+להלן תמונות מממשק הניהול (CRM). ניתן לעדכן כיתובים אם התוכן בכל צילום משתנה.
 
-ב-macOS אפשר להתקין Node עם Homebrew: `brew install node`. ב-Ubuntu/Debian: `sudo apt install nodejs npm`.
+| 1 | 2 | 3 |
+|---|---|---|
+| ![](docs/assets/readme/screenshot-01.png) | ![](docs/assets/readme/screenshot-02.png) | ![](docs/assets/readme/screenshot-03.png) |
+| ממשק — דוגמה 1 | ממשק — דוגמה 2 | ממשק — דוגמה 3 |
+
+| 4 | 5 | 6 |
+|---|---|---|
+| ![](docs/assets/readme/screenshot-04.png) | ![](docs/assets/readme/screenshot-05.png) | ![](docs/assets/readme/screenshot-06.png) |
+| ממשק — דוגמה 4 | ממשק — דוגמה 5 | ממשק — דוגמה 6 |
+
+| 7 | 8 | 9 |
+|---|---|---|
+| ![](docs/assets/readme/screenshot-07.png) | ![](docs/assets/readme/screenshot-08.png) | ![](docs/assets/readme/screenshot-09.png) |
+| ממשק — דוגמה 7 | ממשק — דוגמה 8 | ממשק — דוגמה 9 |
 
 ---
 
-## התקנה — צעד אחר צעד
+## ארכיטקטורה
 
-כל הפקודות below מניחות שאתה בתיקיית הפרויקט אחרי שכפול.
+```mermaid
+flowchart TB
+  subgraph גולש
+    BR[דפדפן / מכשיר]
+  end
+  subgraph פרוקסי
+    MP[mitmproxy]
+    AD[mitmproxy_addon.py]
+  end
+  subgraph ליבה
+    HP[http_flow_processor]
+    POL[policy + SQLite]
+    FIL[filters: text / image / pdf / search]
+  end
+  subgraph CRM
+    API[FastAPI]
+    UI[React SPA]
+    DB[(SQLite ב־.storage)]
+  end
+  BR -->|HTTP(S) דרך פרוקסי| MP
+  MP --> AD
+  AD --> HP
+  HP --> POL
+  HP --> FIL
+  POL <-->|אותם קבצי DB| DB
+  API <-->|קריאה/כתיבה| DB
+  UI --> API
+```
 
-### אופן א׳: התקנה אוטומטית (מומלץ)
+- ה**פרוקסי** קורא מסדי מדיניות ושיוך IP מהדיסק; ה-**CRM** מעדכן אותם דרך ה-API (סנכרון חוקים, משתמשים, קישור IP).
+- **אין** עיבוד תוכן על בקשות לדומיין של ממשק ה-CRM עצמו — כדי שלא יישבר ה-UI (ראו `_is_crm_frontend_request` ב־`http_flow_processor.py`).
+
+---
+
+## זרימת הרצה (מפתחים)
+
+```mermaid
+sequenceDiagram
+  participant Dev as מפתח
+  participant T1 as טרמינל 1 — פרוקסי
+  participant T2 as טרמינל 2 — Backend
+  participant T3 as טרמינל 3 — Vite
+  Dev->>T2: bash crm/run_fastapi.sh
+  Note over T2: מאתחל DB, סנכרון ל־core
+  Dev->>T1: bash core/proxy/run_proxy.sh
+  Note over T1: מאזין 8080 + אימות proxy
+  Dev->>T3: bash crm/frontend/run_dev.sh
+  Note over T3: dev server 5173
+```
+
+| שלב | פקודה (משורש `goallm/` או יחסי) | תוצאה |
+|-----|-----------------------------------|--------|
+| 1 | `bash setup.sh` (פעם ראשונה) | `venv/`, `npm install`, `.storage/` |
+| 2 | `cd crm && bash run_fastapi.sh` | API על פורט **8000** (`/docs` = Swagger) |
+| 3 | `bash core/proxy/run_proxy.sh` | פרוקסי על **8080** (ברירת mitmproxy) |
+| 4 | `cd crm/frontend && bash run_dev.sh` | CRM פיתוח על **5173** |
+
+פריסה לייצור: בניית הפרונט (`npm run build`) והעתקת הפלט ל־`crm/static/` (כבר קיים שם `index.html` + `assets/` לדוגמה). פרטים ופתרון תקלות: **[SETUP.md](SETUP.md)**.
+
+---
+
+## זרימת הסינון (פרוקסי)
+
+הפונקציה המרכזית היא **`process_http_response`** ב־[`core/flow/http_flow_processor.py`](core/flow/http_flow_processor.py). האדון ב־[`core/proxy/mitmproxy_addon.py`](core/proxy/mitmproxy_addon.py) מזהה משתמש לפי IP מקושר, מפעיל רישום תעבורה (אם רלוונטי), ואז קורא ל־`process_http_response`.
+
+```mermaid
+flowchart TD
+  A[תגובת HTTP נכנסת] --> B{בקשה לדומיין CRM?}
+  B -->|כן| Z[העברה ללא שינוי]
+  B -->|לא| C[רישום תעבורה / סטטוס חסימה ללוג]
+  C --> D{סוג תוכן}
+  D -->|HTML| E[מדיניות URL — חסום / בדיקה / המשך]
+  E --> F[סינון טקסט]
+  F --> G[תמונות מוטמעות ב-HTML]
+  G --> H[הזרקות אתר admin]
+  D -->|תמונה| I[מסלול תמונה — סטטוס / placeholder]
+  D -->|PDF| J[pdf_filter]
+  D -->|דף חיפוש Google| K[google_search_filter]
+  D -->|הורדת קובץ attachment| L[כללי קבצים מורשים + מדיניות]
+  D -->|אחר| M[כללים נוספים לפי Content-Type]
+```
+
+**עקרונות:**
+
+- **מדיניות אתר** נקבעת ב־resolver (SQLite) לפי URL, פרופיל פעיל ותזמונים; תוצאות כמו «חסום» מחזירות דף HTML ייעודי מ־`site_policy_pages.py`.
+- **סינון טקסט** — רשימות מילים וספים תחת `core/filters/text/` (כולל `word_lists/` HE/EN).
+- **תמונות** — חילוץ, תור, סטטוס ב־`image_status.db`, אנליזר סימולציה או LLM אופציונלי, החלפה ב־`image_replacement`.
+- **PDF** — חילוץ וסינון דרך `core/filters/pdf/`.
+
+---
+
+## רכיבים ונקודות כניסה בקוד
+
+| אזור | תפקיד | קבצים מרכזיים |
+|------|--------|----------------|
+| **פרוקסי** | אינטרספציה mitmproxy, IP, Surf | `mitmproxy_addon.py`, `run_proxy.sh`, `surf_widget.py` |
+| **זרימה** | אורקסטרציה של תגובה | `http_flow_processor.py`, `site_policy_pages.py`, `traffic_utils.py` |
+| **מדיניות** | SQLite, טעינת חוקים, התאמת URL | `policy_database.py`, `policy_loader.py`, `url_policy_resolver.py` |
+| **מסננים** | טקסט / תמונה / PDF / חיפוש | תחת `core/filters/` |
+| **CRM** | API + שירותים + סנכרון ל־core | `crm/main.py`, `crm/services.py`, `crm/database.py` |
+| **קבועים** | בסיס URLs, סודות, אחסון | [`data/constants.py`](data/constants.py) |
+
+רשימת יעדים עתידיים (בעברית): [`docs/planning/ROADMAP.he.md`](docs/planning/ROADMAP.he.md).
+
+---
+
+## API — מפת נקודות הקצה
+
+הרשימה המלאה והמעודכנת ביותר זמינה ב־**Swagger**: `http://127.0.0.1:8000/docs` (כאשר ה-Backend רץ). להלן מיפוי לפי נושאים.
+
+### דפים, אבחון ו-SPA
+
+| שיטה | נתיב | תיאור |
+|------|------|--------|
+| GET | `/` | דף הבית / SPA |
+| GET | `/bind` | דף שיוך IP |
+| GET | `/diagnostic` | דף אבחון סינון (HTML) |
+| GET | `/diagnostic/check` | בדיקת מצב |
+| GET | `/diagnostic/cert` | הורדת/מידע על תעודת CA |
+| GET | `/surf-rule-apply` | יישום חוק מ-Surf (HTML) |
+| GET | `/{full_path}` | נתיבי SPA (React) |
+
+### אימות
+
+| שיטה | נתיב |
+|------|------|
+| GET | `/api/auth/setup-status` |
+| POST | `/api/auth/register` |
+| POST | `/api/auth/login` |
+| POST | `/api/auth/request-phone-code` |
+| POST | `/api/auth/verify-phone-code` |
+| POST | `/api/auth/request-email-code` |
+| POST | `/api/auth/verify-email-code` |
+
+### משתמש מחובר
+
+| שיטה | נתיב |
+|------|------|
+| GET, PUT | `/api/user/me` |
+| POST | `/api/user/me/change-password` |
+| POST | `/api/user/me/avatar` |
+
+### פרופילים וחוקים
+
+| שיטה | נתיב |
+|------|------|
+| GET, POST | `/api/profiles` |
+| GET, PUT, DELETE | `/api/profiles/{profile_id}` |
+| GET, POST | `/api/profiles/{profile_id}/rules` |
+| GET, PUT, DELETE | `/api/rules/{rule_id}` |
+| GET | `/api/profiles/{profile_id}/rules/export` |
+| POST | `/api/profiles/{profile_id}/rules/import` |
+
+### תגיות ותזמונים
+
+| שיטה | נתיב |
+|------|------|
+| GET, POST | `/api/tag-rules` |
+| PUT, DELETE | `/api/tag-rules/{rule_id}` |
+| GET, POST | `/api/profiles/{profile_id}/schedules` |
+| PUT, DELETE | `/api/schedules/{schedule_id}` |
+
+### WebSocket
+
+| נתיב |
+|------|
+| `/ws` |
+| `/ws/traffic` |
+
+### Resolver וסנכרון (שילוב core)
+
+| שיטה | נתיב |
+|------|------|
+| GET | `/api/resolver/rules` |
+| GET | `/api/resolver/rules/all` |
+| POST | `/api/resolver/sync` |
+| GET | `/api/resolver/core-mode` |
+| GET | `/api/resolver/active` |
+| POST | `/api/resolver/test-url` |
+| GET, PUT | `/api/admin/filter-switches` |
+
+### Surf widget (מנהלים דרך פרוקסי)
+
+| שיטה | נתיב |
+|------|------|
+| GET | `/api/surf-widget/context` |
+| POST | `/api/surf-widget/block` |
+| POST | `/api/surf-widget/update-rule-to-block` |
+| POST | `/api/surf-widget/quick-rule` |
+| POST | `/api/admin/surf-update-rule-to-block` |
+
+### בקשות שינוי חוק
+
+| שיטה | נתיב |
+|------|------|
+| POST | `/api/rule-requests` |
+| GET | `/api/rule-requests` |
+| GET, PUT, DELETE | `/api/rule-requests/{request_id}` |
+| POST | `/api/admin/rule-requests/{request_id}/approve` |
+| POST | `/api/admin/rule-requests/{request_id}/reject` |
+| GET | `/api/admin/all-profiles` |
+
+### תמיכה
+
+| שיטה | נתיב |
+|------|------|
+| POST | `/api/support/upload` |
+| POST, GET | `/api/support/tickets` |
+| GET | `/api/support/tickets/users` |
+| POST | `/api/support/tickets/bulk-delete` |
+| GET | `/api/support/stats` |
+| GET, DELETE | `/api/support/tickets/{ticket_id}` |
+| GET, POST | `/api/support/tickets/{ticket_id}/replies` |
+
+### אדמין — כללים גלובליים, הזרקות, משתמשים, קבצים
+
+| שיטה | נתיב (דוגמאות) |
+|------|------------------|
+| GET, POST, GET/PUT/DELETE | `/api/admin/global-rules`, `/api/admin/global-rules/{rule_id}` |
+| GET, POST, DELETE | `/api/admin/global-rules/resolve`, `check-create` |
+| GET, POST, DELETE | `/api/admin/allowed-file-downloads` |
+| CRUD | `/api/admin/site-injections`, `.../{injection_id}` |
+| GET, PUT, DELETE | `/api/admin/users`, `.../{user_id}/admin`, `locked-settings` |
+
+### הקלטת תעבורה וצפייה
+
+| שיטה | נתיב |
+|------|------|
+| POST | `/api/traffic/start` |
+| POST | `/api/traffic/stop` |
+| GET | `/api/traffic/status` |
+| GET | `/api/traffic/sessions` |
+| GET | `/api/traffic/log` |
+| GET | `/api/traffic/view/{token}` |
+| GET | `/api/admin/traffic-recording-views` |
+
+### שיוך IP ומידע «אני»
+
+| שיטה | נתיב |
+|------|------|
+| GET | `/api/me` |
+| GET, POST | `/api/me/bindings` |
+| DELETE | `/api/me/bindings/{binding_id}` |
+| GET | `/api/me/client-ip` |
+
+### פנימי (פרוקסי + סוד משותף)
+
+| שיטה | נתיב |
+|------|------|
+| GET | `/api/internal/surf-user-info` |
+| POST | `/api/internal/touch-ip` |
+
+---
+
+## דרישות, התקנה והפעלה
+
+**דרישות:** Python **3.10+**, Node.js **18+**, Git.
 
 ```bash
 git clone <repo-url> goallm
@@ -85,151 +307,71 @@ cd goallm
 bash setup.sh
 ```
 
-**מה `setup.sh` עושה:**
-
-1. יוצר סביבה וירטואלית Python בשם **`venv/`** בשורש הפרויקט.
-2. מתקין תלויות מ־`requirements.txt`.
-3. מריץ `npm install` בתוך `crm/frontend/`.
-4. יוצר את תיקיית **`.storage/`** לאחסון מסדים והעלאות.
-
-### אופן ב׳: התקנה ידנית
+**הרצה (3 טרמינלים):**
 
 ```bash
-git clone <repo-url> goallm
-cd goallm
-
-python3 -m venv venv
-source venv/bin/activate          # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-deactivate                        # אופציונלי
-
-cd crm/frontend
-npm install
-cd ../..
-mkdir -p .storage && chmod 755 .storage
-```
-
-> **הערה:** סקריפטי ההרצה מחפשים קודם `venv/` ואז `.venv/` בשורש (רק `run_fastapi.sh` תומך ב־`.venv`). `setup.sh` יוצר תמיד `venv/`.
-
----
-
-## הפעלה — שלושה טרמינלים
-
-יש להריץ **משלושה חלונות טרמינל נפרדים**, בסדר כלשהו (בדרך כלל: קודם Backend כדי שמסדי הנתונים יאותחלו, אחר כך פרוקסי ופרונט).
-
-| # | שירות | תיקיית עבודה | פקודה |
-|---|--------|----------------|--------|
-| 1 | **פרוקסי** | שורש `goallm/` | `bash core/proxy/run_proxy.sh` |
-| 2 | **Backend (FastAPI)** | `goallm/crm/` | `bash run_fastapi.sh` |
-| 3 | **Frontend (Vite)** | `goallm/crm/frontend/` | `bash run_dev.sh` |
-
-**דוגמה מלאה (החלף את הנתיב):**
-
-```bash
-# טרמינל 1 — פרוקסי
-cd /path/to/goallm
+# 1 — פרוקסי (משורש הפרויקט)
 bash core/proxy/run_proxy.sh
+
+# 2 — Backend
+cd crm && bash run_fastapi.sh
+
+# 3 — Frontend פיתוח
+cd crm/frontend && bash run_dev.sh
 ```
 
-```bash
-# טרמינל 2 — API
-cd /path/to/goallm/crm
-bash run_fastapi.sh
-```
+| שירות | כתובת |
+|--------|--------|
+| פרוקסי | http://127.0.0.1:8080 |
+| API | http://127.0.0.1:8000 — תיעוד: `/docs` |
+| CRM (Vite) | http://localhost:5173 |
 
-```bash
-# טרמינל 3 — ממשק
-cd /path/to/goallm/crm/frontend
-bash run_dev.sh
-```
+**מצבי פרוקסי:** `bash core/proxy/run_proxy.sh mitmweb` או `mitmdump`. **אימות פרוקסי (ברירת מחדל):** משתמש `filter`, סיסמה `f123456Ab` — ניתן לדרוס עם `PROXY_AUTH=user:pass`. פירוט: [`core/proxy/README.md`](core/proxy/README.md).
 
-### כתובות ברירת מחדל
-
-| שירות | כתובת מקומית | הערות |
-|--------|----------------|--------|
-| פרוקסי | http://127.0.0.1:8080 | הגדר בדפדפן/מערכת: HTTP(S) proxy → `127.0.0.1:8080` |
-| Backend | http://127.0.0.1:8000 | Swagger/OpenAPI: http://127.0.0.1:8000/docs |
-| CRM (פיתוח) | http://localhost:5173 | הפרוקסי מאזין על 8080; ה-Vite על 5173 |
-
-ה-Backend מוגדר להאזין על `0.0.0.0` — גישה אפשרית גם ממכונות אחרות ברשת (אחריות אבטחה עליך).
-
-### מצבי פרוקסי (אופציונלי)
-
-אותו סקריפט, ארגומנט שני:
-
-```bash
-bash core/proxy/run_proxy.sh          # mitmproxy טרמינלי (ברירת מחדל)
-bash core/proxy/run_proxy.sh mitmweb  # ממשק דפדפן
-bash core/proxy/run_proxy.sh mitmdump # לוג בלבד
-```
-
-פורט אחר (דוגמה): הוסף בסוף את ארגומנטי mitmproxy, למשל `-p 8888`.
-
-**שינוי אימות פרוקסי:**  
-`PROXY_AUTH=משתמש:סיסמה bash core/proxy/run_proxy.sh`  
-**ביטול אימות (לא מומלץ בייצור):**  
-`PROXY_AUTH= bash core/proxy/run_proxy.sh`
-
-פרטים נוספים: [`core/proxy/README.md`](core/proxy/README.md).
+**התקנה ידנית** (ללא `setup.sh`): ראו [SETUP.md](SETUP.md).
 
 ---
 
-## הפעלה — HTTPS ורישיון CA
+## HTTPS, מסדי נתונים וסביבה
 
-בפעם הראשונה שגולשים דרך הפרוקסי לאתרי HTTPS, יש להתקין את **תעודת ה-CA** של mitmproxy. גלוש ל-**https://mitm.it** דרך הפרוקסי ובחר התקנה לפי מערכת ההפעלה.
-
----
-
-## מסדי נתונים (אוטומטי)
-
-אין צורך ליצור קבצים ידנית. בפעם הראשונה שמריצים את השירותים, נוצרים קבצים תחת `.storage/` (למשל `crm.db`, `policies.db`, `image_status.db`). ראה גם [SETUP.md](SETUP.md) סעיף מסדי נתונים.
+- **HTTPS:** בפעם הראשונה התקן את תעודת ה-CA של mitmproxy דרך https://mitm.it כשהפרוקסי פעיל.
+- **מסדי נתונים:** נוצרים אוטומטית תחת `.storage/` (למשל `crm.db`, `policies.db`, `image_status.db`). אפשר לדרוס נתיב עם `GOALLM_STORAGE_DIR`.
+- **ייצור:** חובה לקבוע `SECRET_KEY`, `CRM_PROXY_SECRET`, ו־`PROXY_AUTH` מתאימים; ראו [`data/constants.py`](data/constants.py).
 
 ---
 
-## משתני סביבה (תקציר)
-
-הגדרות מרוכזות ב-[`data/constants.py`](data/constants.py) עם תיעוד inline. לייצון חובה לדרוס לפחות:
-
-- `SECRET_KEY` — חתימת JWT  
-- `CRM_PROXY_SECRET` — אימות בין פרוקסי ל-CRM  
-- `PROXY_AUTH` — אימות גלישה בפרוקסי (פורמט `user:pass`)
-
-אופציונלי: `CRM_BASE_URL`, `GOALLM_STORAGE_DIR`, `USE_LLM_IMAGE_ANALYZER`, ועוד — ראה קובץ הקבועים.
-
----
-
-## מבנה התיקיות (מעודכן)
+## מבנה תיקיות
 
 ```
 goallm/
-├── config/                 # תצורות LLM (פרומפטים, חוזים) — אופציונלי לניתוח תמונות
+├── config/llm/              # פרומפטים / חוזי פלט ל-LLM (אופציונלי)
 ├── core/
-│   ├── flow/               # עיבוד תגובות HTTP, דפי מדיניות
-│   ├── filters/            # טקסט, תמונה, PDF, חיפוש
-│   ├── policy/             # מסד מדיניות, טעינת חוקים, resolver לכתובות
-│   ├── proxy/              # אדון mitmproxy, Surf widget, סקריפט הרצה
-│   └── logger/             # הגדרות לוג
-├── crm/                    # FastAPI + React (ממשק ניהול)
-├── data/                   # קבועים גלובליים (constants, דפי נחיתה וכו')
-├── test/                   # בדיקות ושרתי עזר
+│   ├── flow/                 # עיבוד תגובות HTTP
+│   ├── filters/              # טקסט, תמונה, PDF, חיפוש
+│   ├── policy/               # DB מדיניות, resolver
+│   ├── proxy/                # אדון mitmproxy
+│   └── logger/
+├── crm/                      # Backend + frontend + static build
+├── data/                     # constants, דפי נחיתה
+├── docs/
+│   ├── assets/readme/        # צילומי מסך ל-README
+│   └── planning/             # ROADMAP (עברית)
+├── test/
+├── LICENSE
+├── README.md
+├── SETUP.md
 ├── requirements.txt
-├── setup.sh
-└── SETUP.md                # מדריך מפורט, פתרון בעיות, שרת SSH
+└── setup.sh
 ```
 
 ---
 
-## בדיקות
-
-עם ה-venv מופעל משורש הפרויקט:
+## בדיקות ובנייה
 
 ```bash
-source venv/bin/activate
-pip install pytest   # אם חסר
+source venv/bin/activate   # או .venv
 pytest test/ -q
 ```
-
-בניית פרודקשן של הפרונט:
 
 ```bash
 cd crm/frontend && npm run build
@@ -237,19 +379,13 @@ cd crm/frontend && npm run build
 
 ---
 
-## תיעוד נוסף
+## תיעוד נוסף ורישיון
 
 | מסמך | תוכן |
 |------|------|
-| [SETUP.md](SETUP.md) | הרצה מאפס, התקנה ידנית, מסדי נתונים, רשת, פתרון בעיות |
-| [core/README.md](core/README.md) | מבנה הליבה ודוגמאות ייבוא |
-| [core/REFACTOR_SUMMARY.md](core/REFACTOR_SUMMARY.md) | היסטוריית רפקטור |
-| [core/filters/text/word_lists/README.md](core/filters/text/word_lists/README.md) | רשימות מילים |
-| [crm/README.md](crm/README.md), [crm/START.md](crm/START.md) | CRM |
+| [SETUP.md](SETUP.md) | הרצה מפורטת, רשת, SSH, פתרון בעיות |
+| [core/README.md](core/README.md) | מבנה הליבה |
 | [crm/SECURITY.md](crm/SECURITY.md) | אבטחה |
+| [docs/planning/ROADMAP.he.md](docs/planning/ROADMAP.he.md) | רעיונות והמשך פיתוח |
 
----
-
-## רישיון
-
-הפרויקט מוגן תחת **[רישיון שימוש אישי בלבד](LICENSE)** — מותר שימוש, העתקה ושינוי **למטרות אישיות ולא מסחריות** בלבד. **אסור שימוש מסחרי** (כולל שירות בתשלום, SaaS, או שימוש ארגוני עסקי) ללא **אישור מראש ובכתב** מבעלי זכויות היוצרים. ראה את קובץ [`LICENSE`](LICENSE) לניסוח המלא (אנגלית, עם תמצית בעברית).
+**רישיון:** שימוש **אישי ולא מסחרי** בלבד — ראו [`LICENSE`](LICENSE).
