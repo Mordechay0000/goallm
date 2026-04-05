@@ -189,27 +189,6 @@
       color: var(--danger);
     }
 
-    .spoiler-btn {
-      display: none;
-      margin-top: 12px;
-      background: none;
-      color: var(--accent);
-      border: none;
-      cursor: pointer;
-      font-size: 14px;
-    }
-
-    .details {
-      display: none;
-      margin-top: 12px;
-      text-align: right;
-      background: #f9fafb;
-      border-radius: 14px;
-      padding: 12px;
-      font-size: 13px;
-      color: var(--text);
-      white-space: pre-wrap;
-    }
   </style>
 </head>
 
@@ -246,20 +225,10 @@
 
     <div class="result">
       <div id="decision" class="decision"></div>
-      <button class="spoiler-btn" id="spoilerBtn" onclick="toggleDetails()">הצג פירוט</button>
-      <div class="details" id="details"></div>
     </div>
   </div>
 
   <script>
-
-    const CONDITION_LABELS = {
-      "female_visible_9_plus": "נשים/בנות מעל גיל 9?",
-      "female_3_to_9_partial_clothing": "ילדות (3-9) בלבוש לא הולם",
-      "female_under_3_minimal_clothing": "ילדות מתחת לגיל 3 בלבוש מינימלי או בלי לבוש בכלל",
-      "boys_teens_men_exposed_or_bathing": "ילדים/נערים/גברים חשופים או מתרחצים",
-      "any_visible_body_exposure": "חשיפה נראית לעין",
-    };
 
     let selectedFile = null;
     let isAnalyzing = false;
@@ -396,17 +365,9 @@
     // ---------- reset result UI ----------
     function resetResultUI() {
       const decision = document.getElementById("decision");
-      const details = document.getElementById("details");
-      const spoilerBtn = document.getElementById("spoilerBtn");
-
       decision.style.display = "none";
       decision.className = "decision";
       decision.textContent = "";
-
-      details.style.display = "none";
-      details.innerHTML = "";
-
-      spoilerBtn.style.display = "none";
     }
 
 
@@ -460,25 +421,11 @@
         /* ---------- שלב 3: מחיקה מהשרת ---------- */
         fetch(`/result/${task_id}`, { method: "DELETE" });
 
-        const conditions = data["result"];
-
-        const hasYes = Object.values(conditions).includes("Yes");
-
-        const decision = document.getElementById("decision");
-        decision.style.display = "block";
-        decision.className = "decision " + (hasYes ? "blocked" : "allowed");
-        decision.textContent = hasYes ? "❌ אסור" : "✔ מותר";
-
-        document.getElementById("spoilerBtn").style.display = "inline";
-
-        document.getElementById("details").innerHTML =
-          Object.entries(conditions)
-            .map(([key, value]) => {
-              const label = CONDITION_LABELS[key] || key;
-              const ok = value === "No";
-              return `• ${label} — <strong>${ok ? "לא" : "כן"}</strong>`;
-            })
-            .join("<br>");
+        const decisionEl = document.getElementById("decision");
+        decisionEl.style.display = "block";
+        const blocked = data.result === "blocked";
+        decisionEl.className = "decision " + (blocked ? "blocked" : "allowed");
+        decisionEl.textContent = blocked ? "❌ אסור" : "✔ מותר";
 
 
       } catch (err) {
@@ -489,15 +436,6 @@
         button.disabled = false;
         button.textContent = "נתח תמונה";
       }
-    }
-
-    function toggleDetails() {
-      const d = document.getElementById("details");
-      const btn = document.getElementById("spoilerBtn");
-
-      const open = d.style.display === "none";
-      d.style.display = open ? "block" : "none";
-      btn.textContent = open ? "הסתר פירוט" : "הצג פירוט";
     }
 
   </script>

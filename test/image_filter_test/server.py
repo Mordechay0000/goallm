@@ -1,13 +1,23 @@
-import base64
-import json
+import os
+from pathlib import Path
+
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.responses import JSONResponse, FileResponse
 import uuid
 import magic
 import requests
 
-from core.filters.image.llm_image_analyzer import LLMImageAnalyzer
 from core.filters.image.image_processing_queue import ImageProcessingQueue, TaskStatus
+
+# Use SimulatedImageAnalyzer when USE_SIMULATED_ANALYZER=1 (no LLM model needed)
+if os.environ.get("USE_SIMULATED_ANALYZER"):
+    from core.filters.image.simulated_image_analyzer import SimulatedImageAnalyzer
+    _ANALYZER = SimulatedImageAnalyzer()
+    print("[server] Using SimulatedImageAnalyzer (no LLM)")
+else:
+    from core.filters.image.llm_image_analyzer import LLMImageAnalyzer
+    _ANALYZER = LLMImageAnalyzer()
+    print("[server] Using LLMImageAnalyzer")
 
 app = FastAPI()
 
@@ -20,10 +30,13 @@ def on_task_update(task_id, status, result=None, image_details=None, error=None)
         print(f"[CALLBACK] {short_id} started")
 
     elif status == TaskStatus.DONE:
-        print(f"[CALLBACK] {result}")
+        # Only send allowed/blocked to frontend – no condition details
+        has_yes = any(v == "Yes" for v in (result or {}).values())
+        decision = "blocked" if has_yes else "allowed"
+        print(f"[CALLBACK] {short_id} -> {decision}")
         TASK_RESULTS[task_id] = {
             "status": "done",
-            "result": result
+            "result": decision
         }
 
     elif status == TaskStatus.ERROR:
@@ -34,14 +47,17 @@ def on_task_update(task_id, status, result=None, image_details=None, error=None)
 
 
 QUEUE = ImageProcessingQueue(
-        LLMImageAnalyzer(),
+        _ANALYZER,
         on_task_done=on_task_update
     )
+
+_THIS_DIR = Path(__file__).resolve().parent
 
 @app.get("/")
 def index():
     # Serve the HTML file when accessing /
-    return FileResponse("test_image_filter/index.html", media_type="text/html")
+    html_path = _THIS_DIR / "index.html"
+    return FileResponse(html_path, media_type="text/html")
 
 def detect_image_mime(data: bytes) -> str | None:
     """זיהוי סוג MIME של תמונה מבוסס על חתימה בינארית."""
@@ -116,3 +132,8 @@ def get_result(task_id: str):
 def delete_result(task_id: str):
     TASK_RESULTS.pop(task_id, None)
     return {"status": "deleted"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=8765)
