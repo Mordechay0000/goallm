@@ -16,6 +16,7 @@ from core.flow.site_policy_pages import (
     get_send_for_review_page_bytes,
     get_send_for_review_file_page_bytes,
 )
+from core.flow.traffic_utils import blocked_traffic_status
 from core.filters.image.embedded_image_filter import filter_embedded_images_in_html
 from core.filters.text.text_filter import filter_text_content, _encode_debug_b64, format_text_filter_debug_readable
 from core.filters.image.image_status_manager import get_image_with_status
@@ -129,16 +130,6 @@ def _is_pdf_response(flow: http.HTTPFlow) -> bool:
     return ct == "application/pdf"
 
 
-def _blocked_traffic_status(rule: dict, is_file: bool) -> str:
-    """Return traffic_status for a block: blocked_user / blocked_global or file_blocked_user / file_blocked_global."""
-    prefix = "file_blocked_" if is_file else "blocked_"
-    if rule.get("source") == "global":
-        return prefix + "global"
-    if rule.get("source") == "user" or rule.get("block_reason") == "user_settings":
-        return prefix + "user"
-    return prefix + "global"
-
-
 def _is_public_file_share_request(url: str) -> bool:
     """True when request URL is a public file-share link (domain in list and path/query indicates file)."""
     if not url or not PUBLIC_FILE_SHARE_DOMAINS:
@@ -188,7 +179,7 @@ def _apply_site_policy_for_html(flow: http.HTTPFlow, user_id: Optional[int] = No
                     {"Content-Type": "text/html; charset=utf-8", "Content-Length": str(len(body))},
                 )
                 if getattr(flow, "metadata", None) is not None:
-                    flow.metadata["traffic_status"] = _blocked_traffic_status(rule, is_file=False)
+                    flow.metadata["traffic_status"] = blocked_traffic_status(rule, is_file=False)
                 logger.info(
                     "Site blocked by policy - URL: %s - rule: %s - reason: %s",
                     url,
@@ -610,7 +601,7 @@ def process_http_response(flow: http.HTTPFlow) -> None:
                             {"Content-Type": "text/html; charset=utf-8", "Content-Length": str(len(body))},
                         )
                         if getattr(flow, "metadata", None) is not None:
-                            flow.metadata["traffic_status"] = _blocked_traffic_status(rule, is_file=True)
+                            flow.metadata["traffic_status"] = blocked_traffic_status(rule, is_file=True)
                         logger.info("PDF blocked by policy - URL: %s", url)
                         return
                     if state == "review":

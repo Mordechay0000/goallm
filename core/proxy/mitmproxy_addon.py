@@ -24,6 +24,7 @@ import urllib.request
 from mitmproxy import ctx, http
 
 from core.flow.http_flow_processor import process_http_response
+from core.flow.traffic_utils import blocked_traffic_status
 from core.flow.site_policy_pages import (
     get_blocked_page_bytes,
     get_send_for_review_page_bytes,
@@ -115,17 +116,6 @@ def _looks_like_file_request(flow: http.HTTPFlow) -> bool:
     if any(x in path for x in ("/file/", "/download", "/attachment", "/open?id=", "/export?", "/uc?export=download")):
         return True
     return False
-
-
-def _blocked_traffic_status(rule: dict, is_file: bool) -> str:
-    """Return traffic_status for a block: blocked_user / blocked_global or file_blocked_user / file_blocked_global."""
-    prefix = "file_blocked_" if is_file else "blocked_"
-    # rule from resolver may have source (global/user) or only block_reason (user_settings = user)
-    if rule.get("source") == "global":
-        return prefix + "global"
-    if rule.get("source") == "user" or rule.get("block_reason") == "user_settings":
-        return prefix + "user"
-    return prefix + "global"  # fallback
 
 
 class FilterAddon:
@@ -223,7 +213,7 @@ class FilterAddon:
                                 {"Content-Type": "text/html; charset=utf-8", "Content-Length": str(len(body))},
                             )
                             flow.metadata["policy_handled_in_request"] = True
-                            _blocked_status = _blocked_traffic_status(rule, _looks_like_file_request(flow))
+                            _blocked_status = blocked_traffic_status(rule, _looks_like_file_request(flow))
                             flow.metadata["traffic_status"] = _blocked_status
                             logger.info(
                                 "Request blocked by policy - URL: %s - rule: %s",
