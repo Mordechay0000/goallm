@@ -26,22 +26,32 @@
 
 ## צילומי מסך
 
-להלן תמונות מממשק הניהול (CRM). ניתן לעדכן כיתובים אם התוכן בכל צילום משתנה.
+להלן תמונות מממשק הניהול (CRM). הנתיבים **יחסיים ל־README** (`./docs/...`) כדי שייטענו בתצוגה המקדימה של Cursor/VS Code **וב־GitHub**.
 
-| 1 | 2 | 3 |
-| --- | --- | --- |
-| ![ממשק CRM — דוגמה 1](docs/assets/readme/screenshot-01.png) | ![ממשק CRM — דוגמה 2](docs/assets/readme/screenshot-02.png) | ![ממשק CRM — דוגמה 3](docs/assets/readme/screenshot-03.png) |
-| ממשק — דוגמה 1 | ממשק — דוגמה 2 | ממשק — דוגמה 3 |
+אם בתצוגה מקומית לא מופיעות תמונות: פתח את התצוגה המקדימה כשהקובץ השמור הוא `README.md` **בשורש הפרויקט** (אותו תיקייה שבה נמצאת תיקיית `docs/`).
 
-| 4 | 5 | 6 |
-| --- | --- | --- |
-| ![ממשק CRM — דוגמה 4](docs/assets/readme/screenshot-04.png) | ![ממשק CRM — דוגמה 5](docs/assets/readme/screenshot-05.png) | ![ממשק CRM — דוגמה 6](docs/assets/readme/screenshot-06.png) |
-| ממשק — דוגמה 4 | ממשק — דוגמה 5 | ממשק — דוגמה 6 |
+<!-- גלריה ב-HTML: תמונות בתוך תאי טבלת Markdown לעיתים לא נטענות בתצוגה מקדימה; כאן זה עובד ב-GitHub ובעורך -->
 
-| 7 | 8 | 9 |
-| --- | --- | --- |
-| ![ממשק CRM — דוגמה 7](docs/assets/readme/screenshot-07.png) | ![ממשק CRM — דוגמה 8](docs/assets/readme/screenshot-08.png) | ![ממשק CRM — דוגמה 9](docs/assets/readme/screenshot-09.png) |
-| ממשק — דוגמה 7 | ממשק — דוגמה 8 | ממשק — דוגמה 9 |
+<p align="center">
+  <img src="./docs/assets/readme/screenshot-01.png" alt="ממשק CRM — דוגמה 1" width="280" />
+  <img src="./docs/assets/readme/screenshot-02.png" alt="ממשק CRM — דוגמה 2" width="280" />
+  <img src="./docs/assets/readme/screenshot-03.png" alt="ממשק CRM — דוגמה 3" width="280" />
+</p>
+<p align="center"><sub>דוגמה 1 · דוגמה 2 · דוגמה 3</sub></p>
+
+<p align="center">
+  <img src="./docs/assets/readme/screenshot-04.png" alt="ממשק CRM — דוגמה 4" width="280" />
+  <img src="./docs/assets/readme/screenshot-05.png" alt="ממשק CRM — דוגמה 5" width="280" />
+  <img src="./docs/assets/readme/screenshot-06.png" alt="ממשק CRM — דוגמה 6" width="280" />
+</p>
+<p align="center"><sub>דוגמה 4 · דוגמה 5 · דוגמה 6</sub></p>
+
+<p align="center">
+  <img src="./docs/assets/readme/screenshot-07.png" alt="ממשק CRM — דוגמה 7" width="280" />
+  <img src="./docs/assets/readme/screenshot-08.png" alt="ממשק CRM — דוגמה 8" width="280" />
+  <img src="./docs/assets/readme/screenshot-09.png" alt="ממשק CRM — דוגמה 9" width="280" />
+</p>
+<p align="center"><sub>דוגמה 7 · דוגמה 8 · דוגמה 9</sub></p>
 
 ---
 
