@@ -2,48 +2,52 @@
 
 מריצים **מתוך שורש הפרויקט** (`goallm/`), אחרי `bash setup.sh` או התקנה ידנית.
 
-**אימות פרוקסי:** גלישה דרך הפרוקסי דורשת שם משתמש וסיסמה. ברירת מחדל: `filter` / `f123456Ab`.
+## אימות וזיהוי המשתמש
 
-## הפעלה מומלצת (עם אימות)
+ה-addon עצמו מאמת כל חיבור (לא `--set proxyauth` של mitmproxy). **אין סיסמת ברירת מחדל קבועה.**
+
+| דרך | איך | זיהוי |
+| --- | --- | --- |
+| **פרטי התחברות אישיים (מומלץ)** | כל משתמש יוצר אותם ב-CRM → "חיבורים" (שם משתמש `u<id>` + סיסמה שמוצגת פעם אחת) | לפי המשתמש – עובד גם כשכמה בתים חולקים IP (סלולר / CGNAT) |
+| סיסמה משותפת (legacy) | `PROXY_AUTH=user:pass` | לפי שיוך IP (דף bind) |
+| בלי סיסמה | `PROXY_REQUIRE_AUTH=0` – רק לפיתוח / רשת סגורה | לפי שיוך IP |
+
+`X-Forwarded-For` / `X-Real-IP` נלקחים בחשבון **רק** כשהחיבור מגיע מכתובת שב-`TRUSTED_PROXY_IPS` (ברירת מחדל `127.0.0.1,::1`).
+אחרת כל גולש יכול היה "להתחזות" ל-IP של בית אחר.
+
+## הפעלה
 
 ```bash
 cd /path/to/goallm
-bash core/proxy/run_proxy.sh
+bash core/proxy/run_proxy.sh            # mitmproxy (ממשק טרמינל)
+bash core/proxy/run_proxy.sh mitmdump   # בלי ממשק – לשרת
+bash core/proxy/run_proxy.sh mitmweb    # ממשק ווב
+bash core/proxy/run_proxy.sh mitmdump -p 8888   # פורט אחר
 ```
 
-או: `bash core/proxy/run_proxy.sh mitmweb` | `bash core/proxy/run_proxy.sh mitmdump`
+ידנית: `mitmdump -s core/proxy/mitmproxy_addon.py`.
 
-## אופציות הפעלה (ידנית)
+## מנתח התמונות
 
-### 1. mitmproxy (ממשק אינטראקטיבי בטרמינל)
+| `IMAGE_ANALYZER` | מתי |
+| --- | --- |
+| `simulated` (ברירת מחדל) | פיתוח בלבד – **התוצאה לא תלויה בתוכן התמונה** |
+| `llama_cpp` | מודל GGUF מקומי תחת `models/`; בקשה אחת בכל רגע |
+| `openai` | **ייצור**: שרת תואם OpenAI (vLLM / SGLang / llama-server). `VLM_API_BASE`, `VLM_MODEL` (ברירת מחדל `Qwen/Qwen3.5-9B`) |
+
+דוגמה עם vLLM:
+
 ```bash
-mitmproxy -s core/proxy/mitmproxy_addon.py --set proxyauth=filter:f123456Ab
-```
-ברירת מחדל: `http://127.0.0.1:8080`. הגדירו בדפדפן/מערכת את הפרוקסי ל־`127.0.0.1:8080`.
-
-### 2. mitmweb (ממשק ווב)
-```bash
-mitmweb -s core/proxy/mitmproxy_addon.py --set proxyauth=filter:f123456Ab
-```
-פותח דפדפן עם ממשק לצפייה ב־flows. הפרוקסי על פורט 8080.
-
-### 3. mitmdump (ללא ממשק, לוג בלבד)
-```bash
-mitmdump -s core/proxy/mitmproxy_addon.py --set proxyauth=filter:f123456Ab
+vllm serve Qwen/Qwen3.5-9B --port 8001 --max-model-len 16384
+IMAGE_ANALYZER=openai VLM_API_BASE=http://127.0.0.1:8001/v1 bash core/proxy/run_proxy.sh mitmdump
 ```
 
-## פורט אחר
-```bash
-mitmproxy -s core/proxy/mitmproxy_addon.py --set proxyauth=filter:f123456Ab -p 8888
-```
+מדידה לפני בחירת מודל: `python -m tools.eval_golden_set <dir>` (דיוק מול סט מתויג) ו-`python -m tools.benchmark_vlm <dir> 32` (תפוקה ועלות).
 
 ## שימוש
-1. הפעילו את mitmproxy כאחד מהפקודות למעלה.
-2. בדפדפן או במערכת ההפעלה הגדירו HTTP/HTTPS proxy ל־`127.0.0.1:8080` (או לפורט שבחרתם).
-3. כשמופיעה בקשת אימות – הזינו שם משתמש `filter` וסיסמה `f123456Ab`.
-4. גלשו לאתרים – התמונות יעברו דרך האדון (סינון/החלפה לפי policy ו־image status).
 
-**שינוי פרטי אימות:** `PROXY_AUTH=user:pass ./run_proxy.sh` או `--set proxyauth=user:pass` בפקודה ידנית.  
-**ביטול אימות:** `PROXY_AUTH= ./run_proxy.sh` או השמטת `--set proxyauth`.
+1. הגדירו במכשיר HTTP/HTTPS proxy לכתובת השרת והפורט (ברירת מחדל 8080).
+2. כשהדפדפן מבקש אימות – שם המשתמש והסיסמה האישיים מעמוד "חיבורים" ב-CRM.
+3. **HTTPS:** בפעם הראשונה התקינו את תעודת ה-CA (דרך `mitm.it` או דף האבחון ב-CRM).
 
-**HTTPS:** mitmproxy יציג תעודת CA. בפעם הראשונה גלשו ל־`mitm.it` והתקינו את התעודה לפי ההנחיות.
+אתרים רגישים (בנקים, קופות חולים, gov.il – `SENSITIVE_PASSTHROUGH_DOMAINS`) עוברים בלי פתיחת ההצפנה, אם הם מותרים ברשימה.

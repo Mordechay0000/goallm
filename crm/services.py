@@ -32,6 +32,9 @@ def create_user(email: str, password: str, first_name: str, last_name: str,
     existing_phone = get_user_by_phone(phone)
     if existing_phone:
         raise ValueError("מספר טלפון זה כבר רשום במערכת")
+    email = email.strip().lower()
+    if db_connection.execute("SELECT 1 FROM users WHERE LOWER(email) = ?", (email,)).fetchone():
+        raise ValueError("כתובת אימייל זו כבר רשומה במערכת")
     
     # Hash password using bcrypt
     password_hash = get_password_hash(password)
@@ -48,11 +51,16 @@ def create_user(email: str, password: str, first_name: str, last_name: str,
 
         # Only the first user can become admin: set is_admin=1 only when this row is the sole user in the table.
         # Runs in same transaction as INSERT, so no race – only one INSERT can ever see COUNT(*)=1 after itself.
-        upd = db_connection.execute("""
-            UPDATE users SET is_admin = 1
-            WHERE id = ? AND (SELECT COUNT(*) FROM users) = 1
-        """, (user_id,))
-        is_admin = upd.rowcount == 1
+        # GOALLM_FIRST_USER_ADMIN=0 disables this (then promote with: python -m crm.manage set-admin <phone>),
+        # so a server exposed to the internet before its owner registered cannot be claimed by a stranger.
+        from data.constants import FIRST_USER_ADMIN
+        is_admin = False
+        if FIRST_USER_ADMIN:
+            upd = db_connection.execute("""
+                UPDATE users SET is_admin = 1
+                WHERE id = ? AND (SELECT COUNT(*) FROM users) = 1
+            """, (user_id,))
+            is_admin = upd.rowcount == 1
         
         # Create default profile: blacklist = everything open by default, user adds blocks
         db_connection.execute("""
@@ -61,6 +69,7 @@ def create_user(email: str, password: str, first_name: str, last_name: str,
         """, (user_id, "ברירת מחדל", "blacklist", 1, now, now))
         
         db_connection.commit()
+        sync_users_to_core()
         
         return {
             "id": user_id,
@@ -125,18 +134,18 @@ def _validate_phone_format(phone: str) -> None:
 
 
 def get_user_by_phone(phone: str) -> Optional[Dict]:
-    """Get user by phone (normalized digits)."""
+    """Get user by phone (normalized digits). Normalization runs in SQL (was: load every user into Python per login)."""
     normalized = _normalize_phone(phone)
     if not normalized:
         return None
-    cursor = db_connection.execute("""
+    row = db_connection.execute("""
         SELECT id, email, password_hash, first_name, last_name, phone, avatar_url, created_at, updated_at
         FROM users
-    """)
-    for row in cursor.fetchall():
-        u = dict(row)
-        if _normalize_phone(u.get("phone") or "") == normalized:
-            return u
+        WHERE REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone, '-', ''), ' ', ''), '(', ''), ')', ''), '+', ''), '.', '') = ?
+        ORDER BY id ASC LIMIT 1
+    """, (normalized,)).fetchone()
+    if row:
+        return dict(row)
     return None
 
 
@@ -177,6 +186,12 @@ def update_user(user_id: int, email: Optional[str] = None, first_name: Optional[
     if not user:
         raise ValueError("משתמש לא נמצא")
     
+    if email is not None and email.strip().lower() != (user.get("email") or "").strip().lower():
+        email = email.strip().lower()
+        other = db_connection.execute("SELECT id FROM users WHERE LOWER(email) = ? AND id != ?", (email, user_id)).fetchone()
+        if other:
+            raise ValueError("כתובת אימייל זו כבר רשומה במערכת")
+
     # Check if phone already exists (if changing phone)
     if phone and phone != user["phone"]:
         _validate_phone_format(phone)
@@ -1460,104 +1475,142 @@ def get_user_ids_with_profiles() -> List[int]:
     return [row["user_id"] for row in cursor.fetchall()]
 
 
-def sync_crm_rules_to_core(user_id: Optional[int] = None, set_default: bool = True) -> None:
+_GLOBAL_FLAG_FIELDS = (
+    "text_filter_enabled",
+    "image_filter_enabled",
+    "file_filter_enabled",
+    "pdf_filter_enabled",
+    "video_filter_enabled",
+    "surf_widget_enabled",
+)
+
+
+def _core_db():
+    import sys
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    from core.policy import policy_database
+    return policy_database
+
+
+def _policy_key(domain: str, path: Optional[str], typ: Optional[str]) -> tuple:
+    # Same normalization core applies on insert (lowercase, no "www."), so CRM and core keys always compare equal.
+    d = (domain or "").strip().lower()
+    if d.startswith("www."):
+        d = d[4:]
+    return (d, (path.strip() if path else None) or None, typ or "*")
+
+
+def _safe(action: str, fn, *args, **kwargs) -> None:
+    """One bad row must not abort the whole (single-transaction) sync forever."""
+    try:
+        fn(*args, **kwargs)
+    except ValueError as e:
+        logger.warning("sync: %s skipped: %s", action, e)
+
+
+def _sync_global_rules(core) -> None:
+    """Diff-based: touch only rows that changed (the old code rewrote every global rule on every sync)."""
+    desired = {}
+    for r in get_global_rules():
+        desired[_policy_key(r["domain_pattern"], r.get("path_pattern"), r.get("type"))] = {
+            "state": r.get("action") or "allow",
+            "tags": sorted(r.get("tags") or []),
+            **{f: bool(r.get(f, True)) for f in _GLOBAL_FLAG_FIELDS},
+        }
+    existing = {
+        _policy_key(p["domain"], p.get("path"), p.get("type")): p
+        for p in core.get_all_policies(source_filter="global")
+    }
+    for key, p in existing.items():
+        if key not in desired:
+            core.delete_policy(p["id"])
+    for key, want in desired.items():
+        cur = existing.get(key)
+        if cur is None:
+            _safe(f"global {key}", core.add_policy, key[0], key[1], policy_type=key[2], source="global", **want)
+            continue
+        have = {
+            "state": cur.get("state"),
+            "tags": sorted(cur.get("tags") or []),
+            **{f: bool(cur.get(f, True)) for f in _GLOBAL_FLAG_FIELDS},
+        }
+        if have != want:
+            _safe(f"global {key}", core.update_policy, cur["id"], source="global", **want)
+
+
+def _sync_user_rules(core, user_id: int) -> None:
+    from .resolver_integration import get_system_active_profile_and_rules
+    mode, crm_rules, _ = get_system_active_profile_and_rules(user_id=user_id)
+    row = core.db_connection.execute(
+        "SELECT value FROM resolver_settings_user WHERE user_id = ? AND key = 'profile_mode'", (user_id,)
+    ).fetchone()
+    if not row or row[0] != mode:
+        core.set_profile_mode(mode, user_id)
+    desired = {
+        _policy_key(r["domain"], r.get("path"), r.get("type")): (r.get("state") or "block", sorted(r.get("tags") or []))
+        for r in crm_rules
+    }
+    existing = {
+        _policy_key(p["domain"], p.get("path"), p.get("type")): p
+        for p in core.get_all_policies(source_filter="user", user_id=user_id)
+    }
+    for key, p in existing.items():
+        if key not in desired:
+            core.delete_policy(p["id"])
+    for key, (state, tags) in desired.items():
+        cur = existing.get(key)
+        if cur is None:
+            _safe(f"user {user_id} {key}", core.add_policy, key[0], key[1], policy_type=key[2], state=state, tags=tags, source="user", user_id=user_id)
+        elif cur.get("state") != state or sorted(cur.get("tags") or []) != tags:
+            _safe(f"user {user_id} {key}", core.update_policy, cur["id"], state=state, tags=tags)
+
+
+def _sync_tag_rules(core) -> None:
+    crm_tag_rules = get_tag_rules(enabled_only=False)
+    wanted = {tr["tag"]: tr for tr in crm_tag_rules}
+    current = {tr["tag"]: tr for tr in core.get_tag_rules(enabled_only=False)}
+    for tag, tr in current.items():
+        if tag not in wanted:
+            core.delete_tag_rule(tr["id"])
+    for tag, tr in wanted.items():
+        cur = current.get(tag)
+        if cur is None:
+            _safe(f"tag {tag}", core.add_tag_rule, tag, tr["state"], bool(tr["enabled"]))
+        elif cur["state"] != tr["state"] or bool(cur["enabled"]) != bool(tr["enabled"]):
+            _safe(f"tag {tag}", core.update_tag_rule, cur["id"], state=tr["state"], enabled=bool(tr["enabled"]))
+
+
+def sync_crm_rules_to_core(
+    user_id: Optional[int] = None,
+    set_default: bool = True,
+    include_global: bool = True,
+) -> None:
     """
-    Sync CRM global rules (base whitelist) + active user profile rules and tag_rules to core policy_database.
-    Global rules go to core with source='global'; user's active profile rules with source='user'.
-    When user_id is None, sync first user's active profile for user layer.
-    When set_default is False, do not update core default_user_id (for periodic schedule sync of all users).
+    Sync CRM global rules (base whitelist) + the user's active profile rules + tag rules to core.
+    Runs as ONE core transaction: the proxy never observes a half-synced state
+    (the old delete-then-reinsert left a window where the user's blocks were missing).
+    user_id None → first user (system default for unbound flows; only then is default_user_id updated).
     """
     try:
-        import sys
-        from pathlib import Path
-        root = Path(__file__).resolve().parent.parent
-        if str(root) not in sys.path:
-            sys.path.insert(0, str(root))
-        from .resolver_integration import get_system_active_profile_and_rules
-        from core.policy.policy_database import (
-            get_all_policies,
-            add_policy as core_add_policy,
-            update_policy as core_update_policy,
-            delete_policy as core_delete_policy,
-            delete_user_policies as core_delete_user_policies,
-            get_tag_rules as core_get_tag_rules,
-            add_tag_rule as core_add_tag_rule,
-            update_tag_rule as core_update_tag_rule,
-            delete_tag_rule as core_delete_tag_rule,
-            set_profile_mode as core_set_profile_mode,
-            set_default_user_id as core_set_default_user_id,
-        )
-        # Which user to sync for user layer (None → first user for backward compat)
+        core = _core_db()
         sync_user_id = user_id
         if sync_user_id is None:
             row = db_connection.execute("SELECT id FROM users ORDER BY id ASC LIMIT 1").fetchone()
             if row:
                 sync_user_id = row["id"]
-
-        # Global rules (base whitelist) – from CRM global_rules
-        crm_global = get_global_rules()
-        crm_global_keys = {(r["domain_pattern"], r.get("path_pattern") or None, r.get("type") or "*") for r in crm_global}
-        # User's active profile rules
-        mode, crm_rules, crm_tag_rules = get_system_active_profile_and_rules(user_id=user_id)
-        if sync_user_id is not None:
-            core_set_profile_mode(mode, sync_user_id)
-            if set_default:
-                core_set_default_user_id(sync_user_id)  # so unbound flows use this user when binding is disabled
-        else:
-            core_set_profile_mode(mode)
-        crm_user_keys = {(r["domain"], r.get("path") or None, r.get("type") or "*") for r in crm_rules}
-
-        core_global = get_all_policies(enabled_only=False, source_filter="global")
-        core_user = get_all_policies(enabled_only=False, source_filter="user", user_id=sync_user_id) if sync_user_id is not None else []
-        for p in core_global:
-            key = (p["domain"], p.get("path") or None, p.get("type") or "*")
-            if key not in crm_global_keys:
-                core_delete_policy(p["id"])
-        for p in core_user:
-            key = (p["domain"], p.get("path") or None, p.get("type") or "*")
-            if key not in crm_user_keys:
-                core_delete_policy(p["id"])
-
-        core_global = get_all_policies(enabled_only=False, source_filter="global")
-        core_user = get_all_policies(enabled_only=False, source_filter="user", user_id=sync_user_id) if sync_user_id is not None else []
-        for r in crm_global:
-            domain = r["domain_pattern"]
-            path = r.get("path_pattern")
-            typ = r.get("type") or "*"
-            state = r.get("action") or "allow"
-            tags = r.get("tags") or []
-            text_filter_enabled = r.get("text_filter_enabled", True)
-            image_filter_enabled = r.get("image_filter_enabled", True)
-            file_filter_enabled = r.get("file_filter_enabled", True)
-            pdf_filter_enabled = r.get("pdf_filter_enabled", True)
-            video_filter_enabled = r.get("video_filter_enabled", True)
-            surf_widget_enabled = r.get("surf_widget_enabled", True)
-            existing = next((p for p in core_global if p["domain"] == domain and (p.get("path") or None) == (path or None) and (p.get("type") or "*") == typ), None)
-            if existing:
-                core_update_policy(existing["id"], state=state, tags=tags, source="global", text_filter_enabled=text_filter_enabled, image_filter_enabled=image_filter_enabled, file_filter_enabled=file_filter_enabled, pdf_filter_enabled=pdf_filter_enabled, video_filter_enabled=video_filter_enabled, surf_widget_enabled=surf_widget_enabled)
-            else:
-                core_add_policy(domain, path, policy_type=typ, state=state, tags=tags, source="global", text_filter_enabled=text_filter_enabled, image_filter_enabled=image_filter_enabled, file_filter_enabled=file_filter_enabled, pdf_filter_enabled=pdf_filter_enabled, video_filter_enabled=video_filter_enabled, surf_widget_enabled=surf_widget_enabled)
-        if sync_user_id is not None:
-            core_delete_user_policies(sync_user_id)
-        for r in crm_rules:
-            domain = r["domain"]
-            path = r.get("path")
-            typ = r.get("type") or "*"
-            state = r.get("state") or "block"
-            tags = r.get("tags") or []
-            core_add_policy(domain, path, policy_type=typ, state=state, tags=tags, source="user", user_id=sync_user_id or 0)
-
-        core_tag_rules = core_get_tag_rules(enabled_only=False)
-        crm_tag_set = {tr["tag"] for tr in crm_tag_rules}
-        for tr in core_tag_rules:
-            if tr["tag"] not in crm_tag_set:
-                core_delete_tag_rule(tr["id"])
-        core_tag_by_tag = {tr["tag"]: tr for tr in core_get_tag_rules(enabled_only=False)}
-        for tr in crm_tag_rules:
-            if tr["tag"] in core_tag_by_tag:
-                core_update_tag_rule(core_tag_by_tag[tr["tag"]]["id"], state=tr["state"], enabled=bool(tr["enabled"]))
-            else:
-                core_add_tag_rule(tr["tag"], tr["state"], bool(tr["enabled"]))
+        with core.transaction():
+            if include_global:
+                _sync_global_rules(core)
+                _sync_tag_rules(core)
+            if sync_user_id is not None:
+                _sync_user_rules(core, sync_user_id)
+                # Only the system sync may change the default user: a regular user's action
+                # must not make their rules apply to everyone else's unbound traffic.
+                if set_default and user_id is None and core.get_default_user_id() != sync_user_id:
+                    core.set_default_user_id(sync_user_id)
     except Exception as e:
         logger.warning("sync_crm_rules_to_core failed: %s", e)
 
@@ -1726,8 +1779,12 @@ def delete_user(user_id: int) -> None:
         db_connection.execute("DELETE FROM schedules WHERE profile_id = ?", (pid,))
         db_connection.execute("DELETE FROM rules WHERE profile_id = ?", (pid,))
     db_connection.execute("DELETE FROM profiles WHERE user_id = ?", (user_id,))
+    # Bindings of a deleted user would keep routing that IP to a user that no longer exists.
+    db_connection.execute("DELETE FROM ip_bindings WHERE user_id = ?", (user_id,))
     db_connection.execute("DELETE FROM users WHERE id = ?", (user_id,))
     db_connection.commit()
+    sync_ip_bindings_to_core()
+    sync_users_to_core()
 
 
 def set_user_admin(user_id: int, is_admin: bool) -> Dict:
@@ -1741,7 +1798,61 @@ def set_user_admin(user_id: int, is_admin: bool) -> Dict:
         (1 if is_admin else 0, now, user_id),
     )
     db_connection.commit()
+    sync_users_to_core()
     return get_user_by_id(user_id)
+
+
+# ---------- Personal proxy credentials ----------
+
+def _hash_proxy_secret(secret: str) -> str:
+    import hashlib
+    return hashlib.sha256(secret.encode("utf-8")).hexdigest()
+
+
+def get_proxy_credentials(user_id: int) -> Dict:
+    row = db_connection.execute(
+        "SELECT proxy_username, proxy_secret_hash FROM users WHERE id = ?", (user_id,)
+    ).fetchone()
+    if not row:
+        raise ValueError("משתמש לא נמצא")
+    return {"username": row["proxy_username"], "has_password": bool(row["proxy_secret_hash"])}
+
+
+def rotate_proxy_credentials(user_id: int) -> Dict:
+    """Create (or replace) the user's personal proxy password. The plain password is returned once and never stored."""
+    import secrets as _secrets
+    username = f"u{user_id}"
+    password = _secrets.token_urlsafe(18)
+    now = int(datetime.now().timestamp())
+    cur = db_connection.execute(
+        "UPDATE users SET proxy_username = ?, proxy_secret_hash = ?, updated_at = ? WHERE id = ?",
+        (username, _hash_proxy_secret(password), now, user_id),
+    )
+    if cur.rowcount == 0:
+        raise ValueError("משתמש לא נמצא")
+    db_connection.commit()
+    sync_users_to_core()
+    return {"username": username, "password": password}
+
+
+def sync_users_to_core() -> None:
+    """Push admin flags and proxy credential hashes to core (the proxy reads them; no HTTP call per request)."""
+    try:
+        core = _core_db()
+        rows = db_connection.execute(
+            "SELECT id, COALESCE(is_admin, 0) AS is_admin, proxy_username, proxy_secret_hash FROM users"
+        ).fetchall()
+        core.set_proxy_users([
+            {
+                "user_id": r["id"],
+                "is_admin": bool(r["is_admin"]),
+                "proxy_username": r["proxy_username"],
+                "proxy_secret_hash": r["proxy_secret_hash"],
+            }
+            for r in rows
+        ])
+    except Exception as e:
+        logger.warning("sync_users_to_core failed: %s", e)
 
 
 # ---------- Locked settings (admin locks a setting for a user) ----------

@@ -17,13 +17,18 @@ from core.flow.site_policy_pages import (
     get_send_for_review_file_page_bytes,
 )
 from core.flow.traffic_utils import blocked_traffic_status
+from core.proxy.image_refresh import REFRESH_SCRIPT
 from core.filters.image.embedded_image_filter import filter_embedded_images_in_html
 from core.filters.text.text_filter import filter_text_content, _encode_debug_b64, format_text_filter_debug_readable
 from core.filters.image.image_status_manager import get_image_with_status
 from core.filters.pdf.pdf_filter import filter_pdf_response
 from core.filters.search.google_search_filter import filter_google_search_html, is_google_search_page
-from core.policy.policy_loader import get_policy_resolver
-from core.policy.policy_database import get_profile_mode, get_filter_switches, get_site_injection_for_url
+from core.policy.policy_cache import (
+    get_filter_switches,
+    get_policy_resolver,
+    get_profile_mode,
+    get_site_injection_for_url,
+)
 from data.constants import CRM_FRONTEND_URL, PUBLIC_FILE_SHARE_DOMAINS, FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS
 
 logger = logging.getLogger(__name__)
@@ -54,6 +59,21 @@ def _is_crm_frontend_request(url: str) -> bool:
         return host == _CRM_FRONTEND_HOST
     except Exception:
         return False
+
+
+_UNANALYZABLE_ACCEPT_TYPES = ("image/avif", "image/jxl", "image/heic", "image/heif")
+
+
+def rewrite_request_accept_header(flow: http.HTTPFlow) -> None:
+    """Ask servers for JPEG/PNG/WebP instead of AVIF/JPEG-XL/HEIC (content negotiation).
+    Those formats are still detected and filtered if a server sends them anyway, but the common formats
+    are cheaper to decode and every VLM server accepts them."""
+    accept = flow.request.headers.get("accept")
+    if not accept or "image/" not in accept:
+        return
+    parts = [p for p in accept.split(",") if p.strip().split(";")[0].strip().lower() not in _UNANALYZABLE_ACCEPT_TYPES]
+    if len(parts) != len(accept.split(",")):
+        flow.request.headers["accept"] = ",".join(p.strip() for p in parts) or "*/*"
 
 
 def _is_html_response(flow: http.HTTPFlow) -> bool:
@@ -232,7 +252,31 @@ def _apply_site_policy_for_html(flow: http.HTTPFlow, user_id: Optional[int] = No
         logger.info("No policy for site (treat as review), showing send-for-review - URL: %s", url)
         return (True, None)
     except Exception as e:
+        # Fail closed (this used to return None, which crashed the caller into a 500).
         logger.warning("Policy resolution failed for HTML %s: %s; showing send-for-review", url, e)
+        body = get_send_for_review_page_bytes(request_url=url)
+        flow.response = http.Response.make(
+            FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS,
+            body,
+            {"Content-Type": "text/html; charset=utf-8", "Content-Length": str(len(body)), "Cache-Control": "no-store"},
+        )
+        if getattr(flow, "metadata", None) is not None:
+            flow.metadata["traffic_status"] = "error"
+        return (True, None)
+
+
+def _inject_before_body_end(body: bytes, encoding: str, snippet: str) -> bytes:
+    try:
+        text = body.decode(encoding, errors="replace")
+    except LookupError:
+        encoding = "utf-8"
+        text = body.decode(encoding, errors="replace")
+    idx = text.lower().rfind("</body")
+    text = text[:idx] + snippet + text[idx:] if idx >= 0 else text + snippet
+    try:
+        return text.encode(encoding, errors="replace")
+    except LookupError:
+        return text.encode("utf-8", errors="replace")
 
 
 def _strip_elements_by_selectors(html_text: str, selectors: list) -> str:
@@ -321,6 +365,8 @@ def process_http_response(flow: http.HTTPFlow) -> None:
     url = flow.request.url
     referer_url = flow.request.headers.get("Referer")
     method = flow.request.method
+    if getattr(flow.response, "stream", False):
+        return  # body was streamed (allowed media) or discarded (blocked video) at headers time
     switches = get_filter_switches()
     user_id: Optional[int] = None
     if getattr(flow, "metadata", None) is not None:
@@ -369,6 +415,11 @@ def process_http_response(flow: http.HTTPFlow) -> None:
             )
             return
         logger.debug("Public file-share: skipped (file_filter_enabled=False for rule) - URL: %s", url[:80] if url else "")
+
+    extracted = extract_image_content(flow)
+    if extracted is not None:
+        _process_image(flow, extracted, url, referer_url, switches, user_id)
+        return
 
     logger.info("Processing HTTP response - Method: %s, URL: %s (user_id=%s)", method, url, user_id)
     logger.debug(
@@ -513,6 +564,14 @@ def process_http_response(flow: http.HTTPFlow) -> None:
                     body_before_len,
                     len(body_to_send),
                 )
+            # Reload "checking" placeholders automatically once their analysis finishes.
+            if (
+                not replaced
+                and user_id is not None
+                and switches.get("image_filter", True)
+                and (rule is None or rule.get("image_filter_enabled", True))
+            ):
+                body_to_send = _inject_before_body_end(body_to_send, enc, REFRESH_SCRIPT)
             # Site injections (admin-defined head/body code and hide selectors per site)
             try:
                 injection = get_site_injection_for_url(url)
@@ -536,11 +595,17 @@ def process_http_response(flow: http.HTTPFlow) -> None:
             try:
                 resolver = get_policy_resolver(user_id)
                 rule = resolver.resolve(url, "html")
-                if rule is not None and rule.get("state") in ("block", "review"):
-                    logger.debug("Text/JSON response: policy block/review - URL: %s (pass through)", url)
-                    rule = None
             except Exception as e:
-                logger.warning("Policy resolution failed for text/json %s: %s", url, e)
+                logger.warning("Policy resolution failed for text/json %s: %s – blocking", url, e)
+                rule = {"state": "review"}
+            if rule is not None and rule.get("state") in ("block", "review"):
+                # Normally stopped at request time; if not (e.g. that check failed), never pass it through.
+                flow.response = http.Response.make(
+                    FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS, b"", {"Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store"}
+                )
+                flow.metadata["traffic_status"] = "blocked_global" if rule.get("state") == "block" else "review"
+                logger.debug("Text/JSON response blocked by policy - URL: %s", url)
+                return
         text_switch_on = switches.get("text_filter", True)
         if not url_policy_on:
             text_filter_on = text_switch_on
@@ -695,11 +760,12 @@ def process_http_response(flow: http.HTTPFlow) -> None:
                 return
         logger.debug("File download: passed through (file_download_filter off or file_filter_enabled=False for rule) - URL: %s", url[:80] if url else "")
 
-    # Direct image responses
-    extracted = extract_image_content(flow)
-    if extracted is None:
-        logger.debug("Response is not an image, skipping processing for URL: %s", url)
-        return
+    return
+
+
+def _process_image(flow: http.HTTPFlow, extracted, url: str, referer_url, switches: dict, user_id) -> None:
+    """Images (any declared content type – detection is by content, so an image labelled text/html or
+    application/octet-stream does not skip the filter)."""
 
     # URL policy for images: when url_policy is on and site is block/review, image filter still runs and returns placeholder.
     # When site is "allow" we no longer skip – image filter always runs when its switch is on (independent).
@@ -740,7 +806,7 @@ def process_http_response(flow: http.HTTPFlow) -> None:
         referer_url,
     )
 
-    image_result, _, image_status = get_image_with_status(
+    image_result, content_type_override, image_status = get_image_with_status(
         image_data=image_content,
         image_url=url,
         referer_url=referer_url,
@@ -748,6 +814,11 @@ def process_http_response(flow: http.HTTPFlow) -> None:
     )
     logger.debug("Got image result, size: %s bytes, status: %s", len(image_result), image_status)
 
+    if image_status != "allowed":
+        flow.response.headers.pop("content-encoding", None)
+        if content_type_override:
+            flow.response.headers["Content-Type"] = content_type_override
+        flow.response.headers["X-Goallm-Image-Status"] = image_status
     flow.response.raw_content = image_result
     flow.response.headers["Content-Length"] = str(len(image_result))
     if image_status in ("checking", "pending", "error"):

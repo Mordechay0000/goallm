@@ -1,12 +1,16 @@
 """
-mitmproxy addon: intercepts HTTP traffic and processes responses (e.g. image filtering).
-Traffic recording and filtering apply only to IPs bound to a registered user.
-- When FILTER_BIND_BASE_URL is set: unbound IPs are redirected to the bind page.
-- When FILTER_BIND_BASE_URL is not set: unbound IPs get a 403 error page (connection not filtered by us).
+mitmproxy addon: intercepts HTTP traffic and processes responses (policy, text, images, PDF, video).
+
+Identity of the surfer:
+- Personal proxy credentials (created in the CRM, "חיבורים" page) → that user. Works behind shared/NAT IPs.
+- Legacy shared credential (PROXY_AUTH) or no auth (PROXY_REQUIRE_AUTH=0) → user bound to the client IP.
+  Unbound IPs are redirected to the bind page (FILTER_BIND_BASE_URL) or get a 403 page.
+
+The client IP is the TCP peer. X-Forwarded-For / X-Real-IP are honored only when the peer is a trusted
+proxy (TRUSTED_PROXY_IPS) – otherwise any client could claim another family's IP.
 """
 from pathlib import Path
 import sys
-import os
 from urllib.parse import quote, urlparse
 
 # Ensure project root is on path for mitmproxy
@@ -14,29 +18,40 @@ _project_root = Path(__file__).resolve().parent.parent.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
+import asyncio
 import json
 import logging
 import threading
 import time
-import traceback
 import urllib.request
 
-from mitmproxy import ctx, http
+from mitmproxy import http, tls
 
-from core.flow.http_flow_processor import process_http_response
+from core.flow.http_flow_processor import process_http_response, rewrite_request_accept_header
 from core.flow.traffic_utils import blocked_traffic_status
 from core.flow.site_policy_pages import (
     get_blocked_page_bytes,
     get_send_for_review_page_bytes,
 )
-from core.logger.logging_config import setup_logging
-from core.policy.policy_database import (
-    get_user_id_for_ip,
-    get_active_traffic_session_id,
-    add_traffic_log_entry,
-    get_filter_switches,
+from core.filters.video.video_filter import (
+    block_response_headers,
+    is_streamable_media,
+    is_video_response,
+    video_allowed_for_rule,
 )
-from core.policy.policy_loader import get_policy_resolver
+from core.logger.logging_config import setup_logging
+from core.net_utils import resolve_client_ip
+from core.policy.policy_cache import (
+    get_active_traffic_session_id,
+    get_filter_switches,
+    get_policy_resolver,
+    get_user_id_for_ip,
+)
+from core.policy.policy_database import add_traffic_log_entry
+from core.proxy.image_refresh import STATUS_PATH, strip_reload_param_from_request
+from core.proxy.proxy_auth import ProxyAuthenticator
+from core.proxy_identity import HEADER as PROXY_USER_HEADER, sign_user
+from core.filters.image.image_status_manager import get_url_statuses
 from core.proxy.utils import format_flow_error, format_response_error
 from data.constants import (
     FILTER_BIND_BASE_URL,
@@ -45,6 +60,8 @@ from data.constants import (
     FILTER_DIAGNOSTIC_HOST,
     FILTER_DIAGNOSTIC_HOST_ALIAS,
     FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS,
+    SENSITIVE_PASSTHROUGH_DOMAINS,
+    TOUCH_IP_MIN_INTERVAL_SEC,
 )
 from data.landing_pages import UNBOUND_IP_HTML
 
@@ -52,24 +69,23 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 
-def _client_ip_from_flow(flow: http.HTTPFlow) -> str | None:
-    """IP of the surfer: from X-Forwarded-For / X-Real-IP (when proxy is behind another proxy), else connection peername."""
-    if flow.request and flow.request.headers:
-        forwarded = flow.request.headers.get("x-forwarded-for")
-        if forwarded:
-            # First IP in the list is the original client (surfer)
-            ip = forwarded.split(",")[0].strip()
-            if ip:
-                return ip
-        real = flow.request.headers.get("x-real-ip")
-        if real and real.strip():
-            return real.strip()
+def _peer_ip(flow: http.HTTPFlow) -> str | None:
     if flow.client_conn and getattr(flow.client_conn, "peername", None):
         try:
             return flow.client_conn.peername[0]
         except (IndexError, TypeError):
-            pass
+            return None
     return None
+
+
+def _client_ip_from_flow(flow: http.HTTPFlow) -> str | None:
+    """IP of the surfer. Forwarding headers count only when the TCP peer is a trusted proxy."""
+    headers = flow.request.headers if flow.request else {}
+    return resolve_client_ip(
+        _peer_ip(flow),
+        headers.get("x-forwarded-for") if headers else None,
+        headers.get("x-real-ip") if headers else None,
+    )
 
 
 def _request_host_normalized(flow: http.HTTPFlow) -> str:
@@ -110,7 +126,6 @@ def _looks_like_file_request(flow: http.HTTPFlow) -> bool:
     if not flow.request or not flow.request.path:
         return False
     path = (flow.request.path or "").split("?")[0].lower()
-    # Common file extensions
     if path.endswith((".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar", ".7z", ".exe", ".dmg", ".pkg")):
         return True
     if any(x in path for x in ("/file/", "/download", "/attachment", "/open?id=", "/export?", "/uc?export=download")):
@@ -118,21 +133,104 @@ def _looks_like_file_request(flow: http.HTTPFlow) -> bool:
     return False
 
 
+def _host_matches(host: str, domains) -> bool:
+    host = (host or "").lower().rstrip(".")
+    return any(host == d or host.endswith("." + d) for d in domains)
+
+
+def _html_response(status: int, body: bytes, no_cache: bool = False) -> http.Response:
+    headers = {"Content-Type": "text/html; charset=utf-8", "Content-Length": str(len(body))}
+    if no_cache:
+        headers.update({"Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "no-cache", "Expires": "0"})
+    return http.Response.make(status, body, headers)
+
+
 class FilterAddon:
-    """mitmproxy addon that processes HTTP responses (e.g. image filtering)."""
+    """mitmproxy addon: identity, request-time URL policy, response filtering."""
+
+    def __init__(self) -> None:
+        self.auth = ProxyAuthenticator()
+        self._touch_lock = threading.Lock()
+        self._touched: dict[str, float] = {}
+
+    # ---------- identity ----------
+
+    def http_connect(self, flow: http.HTTPFlow) -> None:
+        self.auth.http_connect(flow)
+
+    def requestheaders(self, flow: http.HTTPFlow) -> None:
+        self.auth.requestheaders(flow)
+
+    def _resolve_user(self, flow: http.HTTPFlow, client_ip: str | None) -> int | None:
+        identity = flow.metadata.get("goallm_identity")
+        if identity is not None and identity.kind == "user":
+            return identity.user_id
+        return get_user_id_for_ip(client_ip) if client_ip else None
+
+    def _touch_ip(self, client_ip: str) -> None:
+        """Update the binding's last_used_at – at most once per TOUCH_IP_MIN_INTERVAL_SEC per IP
+        (was: a new thread + HTTP request to the CRM for every single request)."""
+        if FILTER_BIND_BASE_URL is None:
+            return
+        now = time.monotonic()
+        with self._touch_lock:
+            last = self._touched.get(client_ip, 0.0)
+            if now - last < TOUCH_IP_MIN_INTERVAL_SEC:
+                return
+            self._touched[client_ip] = now
+            if len(self._touched) > 100000:
+                self._touched.clear()
+
+        def _send():
+            try:
+                req = urllib.request.Request(
+                    f"{FILTER_BIND_BASE_URL}/api/internal/touch-ip",
+                    data=json.dumps({"ip": client_ip, "secret": CRM_PROXY_SECRET}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                urllib.request.urlopen(req, timeout=2)
+            except Exception as e:
+                logger.debug("Touch IP failed (non-fatal): %s", e)
+
+        threading.Thread(target=_send, daemon=True).start()
+
+    # ---------- TLS passthrough for sensitive sites ----------
+
+    def tls_clienthello(self, data: tls.ClientHelloData) -> None:
+        """Banks / HMOs / gov: pass the encrypted connection through without opening it – if the site is allowed.
+        (Privacy, and apps with certificate pinning.) A site that is not allowed is intercepted as usual so the
+        block page can be shown."""
+        sni = (data.client_hello.sni or "").lower()
+        if not sni or not SENSITIVE_PASSTHROUGH_DOMAINS or not _host_matches(sni, SENSITIVE_PASSTHROUGH_DOMAINS):
+            return
+        try:
+            client = data.context.client
+            identity = self.auth.identity_for_conn(client)
+            user_id = identity.user_id if identity is not None and identity.kind == "user" else None
+            if user_id is None:
+                ip = resolve_client_ip(client.peername[0] if client.peername else None)
+                user_id = get_user_id_for_ip(ip) if ip else None
+            if user_id is None:
+                return
+            rule = get_policy_resolver(user_id).resolve(f"https://{sni}/", "*")
+            if rule is not None and rule.get("state") == "allow":
+                data.ignore_connection = True
+                logger.info("TLS passthrough for sensitive allowed site %s (user_id=%s)", sni, user_id)
+        except Exception as e:
+            logger.debug("tls_clienthello passthrough check failed for %s: %s", sni, e)
+
+    # ---------- request ----------
 
     async def request(self, flow: http.HTTPFlow) -> None:
-        if not hasattr(flow, "metadata"):
-            flow.metadata = {}
-        # For traffic recording: measure real request duration (request → response)
+        if flow.response is not None:
+            return  # e.g. 407 set by authentication
         flow.metadata["request_start_time"] = time.perf_counter()
-        # IP of the surfer (real client): needed for binding and for traffic recording of all request types
         client_ip = _client_ip_from_flow(flow)
 
-        # Diagnostic host (filter.check / 1.2.3.4) – הפניה ל־CRM/diagnostic בלבד.
+        # Diagnostic host (filter.check / 1.2.3.4) – redirect to CRM /diagnostic.
         if _is_request_to_diagnostic_host(flow):
-            if client_ip:
-                flow.metadata["user_id"] = get_user_id_for_ip(client_ip)
+            flow.metadata["user_id"] = self._resolve_user(flow, client_ip)
             diagnostic_url = f"{CRM_BASE_URL.rstrip('/')}/diagnostic"
             flow.response = http.Response.make(
                 302,
@@ -140,198 +238,197 @@ class FilterAddon:
                 {"Location": diagnostic_url, "Content-Type": "text/html; charset=utf-8"},
             )
             flow.metadata["redirected_to_bind"] = True
-            logger.info("Redirecting diagnostic host to %s", diagnostic_url)
             return
-        # When the request goes to the bind host (CRM), inject the real client IP so the CRM sees the same IP
-        # we use for binding checks. Otherwise the CRM would see the proxy's IP and bind the wrong address.
-        if client_ip and _is_request_to_bind_host(flow):
-            existing = (flow.request.headers.get("x-forwarded-for") or "").strip()
-            new_val = client_ip if not existing else f"{client_ip}, {existing}"
-            flow.request.headers["x-forwarded-for"] = new_val
-            flow.request.headers["x-real-ip"] = client_ip
-        # Security: traffic recording and filtering only for IPs bound to a user. Unbound IPs get redirect or error.
-        if client_ip and not _is_request_to_bind_host(flow):
-            user_id = get_user_id_for_ip(client_ip)
-            if user_id is None:
-                if FILTER_BIND_BASE_URL is not None:
-                    return_url = flow.request.pretty_url if flow.request else ""
-                    bind_url = f"{FILTER_BIND_BASE_URL}/bind?return_url={quote(return_url, safe='')}"
-                    logger.info("Unbound IP %s → redirect to bind: %s", client_ip, bind_url)
-                    flow.response = http.Response.make(
-                        302,
-                        b"",
-                        {"Location": bind_url, "Content-Type": "text/html; charset=utf-8"},
-                    )
-                    flow.metadata["redirected_to_bind"] = True  # so response() skips processing and does not overwrite
-                    return
-                # No bind URL: show error – connection not filtered/recorded for unregistered IPs
-                logger.warning("Unbound IP %s → blocking (connection not filtered by us)", client_ip)
-                flow.response = http.Response.make(
-                    403,
-                    UNBOUND_IP_HTML.encode("utf-8"),
-                    {"Content-Type": "text/html; charset=utf-8", "Content-Length": str(len(UNBOUND_IP_HTML.encode("utf-8")))},
-                )
-                flow.metadata["redirected_to_bind"] = True  # skip response() processing
-                return
-            flow.metadata["user_id"] = user_id
-            logger.info("Bound connection: IP=%s -> user_id=%s (filter settings apply to this user)", client_ip, user_id)
-            # Update last_used_at for this binding (fire-and-forget in thread so we don't block the event loop).
-            if FILTER_BIND_BASE_URL is not None:
-                def _touch_ip_background():
-                    try:
-                        req = urllib.request.Request(
-                            f"{FILTER_BIND_BASE_URL}/api/internal/touch-ip",
-                            data=json.dumps({"ip": client_ip, "secret": CRM_PROXY_SECRET}).encode("utf-8"),
-                            headers={"Content-Type": "application/json"},
-                            method="POST",
-                        )
-                        urllib.request.urlopen(req, timeout=2)
-                    except Exception as e:
-                        logger.debug("Touch IP failed (non-fatal): %s", e)
-                t = threading.Thread(target=_touch_ip_background, daemon=True)
-                t.start()
-            # Apply URL policy at request time for every request: only URLs defined as allowed may load.
-            # Any other URL (block/review) is blocked here; we respond with the appropriate HTML page
-            # (blocked or send-for-review) so the user sees the right message. This blocks all resource
-            # types (pages, video, API, etc.) from non-allowed addresses.
-            if get_filter_switches().get("url_policy", True):
-                try:
-                    resolver = get_policy_resolver(user_id)
-                    rule = resolver.resolve(flow.request.url, "*")
-                    if rule is not None:
-                        state = rule.get("state", "block")
-                        if state == "block":
-                            body = get_blocked_page_bytes(
-                                request_url=flow.request.url,
-                                rule=rule,
-                                tags=rule.get("tags") or [],
-                                block_reason=rule.get("block_reason") or "",
-                            )
-                            flow.response = http.Response.make(
-                                FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS,
-                                body,
-                                {"Content-Type": "text/html; charset=utf-8", "Content-Length": str(len(body))},
-                            )
-                            flow.metadata["policy_handled_in_request"] = True
-                            _blocked_status = blocked_traffic_status(rule, _looks_like_file_request(flow))
-                            flow.metadata["traffic_status"] = _blocked_status
-                            logger.info(
-                                "Request blocked by policy - URL: %s - rule: %s",
-                                flow.request.url,
-                                rule.get("domain") or rule.get("path") or "—",
-                            )
-                            return
-                        if state == "review":
-                            body = get_send_for_review_page_bytes(request_url=flow.request.url)
-                            flow.response = http.Response.make(
-                                FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS,
-                                body,
-                                {
-                                    "Content-Type": "text/html; charset=utf-8",
-                                    "Content-Length": str(len(body)),
-                                    "Cache-Control": "no-store, no-cache, must-revalidate",
-                                    "Pragma": "no-cache",
-                                    "Expires": "0",
-                                },
-                            )
-                            flow.metadata["policy_handled_in_request"] = True
-                            flow.metadata["traffic_status"] = "file_review" if _looks_like_file_request(flow) else "review"
-                            logger.info("Request send-for-review by policy - URL: %s", flow.request.url)
-                            return
-                except Exception as e:
-                    logger.warning("Request-time policy check failed for %s: %s", flow.request.url, e)
-        else:
-            flow.metadata["user_id"] = get_user_id_for_ip(client_ip) if client_ip else None
 
-        logger.debug(
-            "HTTP Request - Method: %s, URL: %s",
-            flow.request.method,
-            flow.request.pretty_url,
+        if _is_request_to_bind_host(flow):
+            # The CRM must see the real client IP. Overwrite (not prepend to) whatever the client sent,
+            # so a forged X-Forwarded-For can never reach the CRM's binding logic.
+            if client_ip:
+                flow.request.headers["x-forwarded-for"] = client_ip
+                flow.request.headers["x-real-ip"] = client_ip
+            else:
+                flow.request.headers.pop("x-forwarded-for", None)
+                flow.request.headers.pop("x-real-ip", None)
+            # Signed proof for the CRM that this connection is filtered (needed for credential-based users,
+            # who have no IP binding). Any client-supplied copy is dropped first.
+            flow.request.headers.pop(PROXY_USER_HEADER, None)
+            identity = flow.metadata.get("goallm_identity")
+            if identity is not None and identity.kind == "user":
+                flow.request.headers[PROXY_USER_HEADER] = sign_user(identity.user_id)
+            flow.metadata["crm_user_id"] = self._resolve_user(flow, client_ip)
+            return
+
+        rewrite_request_accept_header(flow)
+        strip_reload_param_from_request(flow)
+
+        user_id = self._resolve_user(flow, client_ip)
+        if user_id is None:
+            if FILTER_BIND_BASE_URL is not None:
+                return_url = flow.request.pretty_url if flow.request else ""
+                bind_url = f"{FILTER_BIND_BASE_URL}/bind?return_url={quote(return_url, safe='')}"
+                logger.info("Unbound IP %s → redirect to bind", client_ip)
+                flow.response = http.Response.make(
+                    302,
+                    b"",
+                    {"Location": bind_url, "Content-Type": "text/html; charset=utf-8"},
+                )
+            else:
+                logger.warning("Unbound IP %s → blocking (connection not filtered by us)", client_ip)
+                flow.response = _html_response(403, UNBOUND_IP_HTML.encode("utf-8"))
+            flow.metadata["redirected_to_bind"] = True
+            return
+
+        flow.metadata["user_id"] = user_id
+        if flow.request.path.split("?", 1)[0] == STATUS_PATH and flow.request.method == "POST":
+            self._answer_image_status(flow)
+            return
+        identity = flow.metadata.get("goallm_identity")
+        if client_ip and (identity is None or identity.kind != "user"):
+            self._touch_ip(client_ip)
+
+        # Request-time URL policy for every request type: only allowed URLs may load.
+        if not get_filter_switches().get("url_policy", True):
+            return
+        try:
+            rule = get_policy_resolver(user_id).resolve(flow.request.url, "*")
+        except Exception as e:
+            # Fail closed: an error must never open a URL that would otherwise be blocked.
+            logger.warning("Request-time policy check failed for %s: %s – blocking", flow.request.url, e)
+            body = get_send_for_review_page_bytes(request_url=flow.request.url)
+            flow.response = _html_response(FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS, body, no_cache=True)
+            flow.metadata["policy_handled_in_request"] = True
+            flow.metadata["traffic_status"] = "error"
+            return
+        if rule is None:
+            return
+        state = rule.get("state", "block")
+        if state == "block":
+            body = get_blocked_page_bytes(
+                request_url=flow.request.url,
+                rule=rule,
+                tags=rule.get("tags") or [],
+                block_reason=rule.get("block_reason") or "",
+            )
+            flow.response = _html_response(FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS, body)
+            flow.metadata["policy_handled_in_request"] = True
+            flow.metadata["traffic_status"] = blocked_traffic_status(rule, _looks_like_file_request(flow))
+            logger.info("Request blocked by policy - URL: %s", flow.request.url)
+            return
+        if state == "review":
+            body = get_send_for_review_page_bytes(request_url=flow.request.url)
+            flow.response = _html_response(FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS, body, no_cache=True)
+            flow.metadata["policy_handled_in_request"] = True
+            flow.metadata["traffic_status"] = "file_review" if _looks_like_file_request(flow) else "review"
+            logger.info("Request send-for-review by policy - URL: %s", flow.request.url)
+            return
+        flow.metadata["request_rule"] = rule
+
+    @staticmethod
+    def _answer_image_status(flow: http.HTTPFlow) -> None:
+        """Answered by the proxy itself (never forwarded): which placeholder images are now decided."""
+        try:
+            payload = json.loads(flow.request.get_text() or "{}")
+            urls = [u for u in (payload.get("urls") or []) if isinstance(u, str)]
+            statuses = get_url_statuses(urls)
+        except Exception as e:
+            logger.debug("image-status request failed: %s", e)
+            statuses = {}
+        body = json.dumps(statuses).encode("utf-8")
+        flow.response = http.Response.make(
+            200, body, {"Content-Type": "application/json", "Cache-Control": "no-store", "Content-Length": str(len(body))}
         )
+        flow.metadata["redirected_to_bind"] = True  # skip response processing
+        flow.metadata["traffic_status"] = "internal"
+
+    # ---------- response ----------
+
+    def responseheaders(self, flow: http.HTTPFlow) -> None:
+        """Decide on video/streaming media before the body is read: blocked video is discarded unbuffered,
+        allowed media is streamed instead of being held whole in proxy memory."""
+        if flow.metadata.get("redirected_to_bind") or flow.metadata.get("user_id") is None or not flow.response:
+            return
+        ct = (flow.response.headers.get("content-type") or "")
+        if not is_video_response(ct, flow.request.path if flow.request else ""):
+            return
+        switches = get_filter_switches()
+        rule = flow.metadata.get("request_rule")
+        if video_allowed_for_rule(rule, switches.get("video_filter", True)):
+            if is_streamable_media(ct):
+                flow.response.stream = True
+                flow.metadata["streamed"] = True
+            return
+        block_response_headers(flow, FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS)
+        flow.metadata["streamed"] = True
+        flow.metadata["traffic_status"] = "video_blocked"
+        logger.info("Video blocked (headers stage) - URL: %s", flow.request.pretty_url if flow.request else "")
 
     async def response(self, flow: http.HTTPFlow) -> None:
         url = flow.request.pretty_url if flow.request else "Unknown URL"
-        # Do not process redirects we set in request() (unbound IP → bind page); otherwise they get overwritten with send-for-review page
-        if not flow.metadata.get("redirected_to_bind"):
-            logger.info(
-                "HTTP Response received - URL: %s, Status: %s",
-                url,
-                flow.response.status_code,
-            )
-            logger.debug("Response headers: %s", dict(flow.response.headers))
-
+        # Only identified users' traffic is processed: a 407 (auth required), the diagnostic redirect or a
+        # request to the CRM itself must reach the client untouched (the 407 used to be replaced by a block page).
+        if (
+            flow.metadata.get("user_id") is not None
+            and not flow.metadata.get("redirected_to_bind")
+            and not flow.metadata.get("streamed")
+        ):
             try:
-                process_http_response(flow)
-                logger.debug("Response processing completed for URL: %s", url)
+                # Heavy work (HTML parsing, image hashing, PDF) runs in a worker thread so one large page
+                # does not stall every other user's traffic on the event loop.
+                await asyncio.to_thread(process_http_response, flow)
             except Exception as e:
                 logger.exception(format_response_error(url, e))
-                print(f"\n{'=' * 80}")
-                print("[RESPONSE PROCESSING ERROR]")
-                print(f"  URL: {url}")
-                print(f"  Error: {type(e).__name__}: {e}")
-                traceback.print_exc()
-                print(f"{'=' * 80}\n")
-
                 flow.response = http.Response.make(
                     500,
                     b"Internal Server Error",
                     {"Content-Type": "text/plain"},
                 )
-        else:
-            logger.debug("Skipping response processing (redirect to bind)")
 
-        # Traffic recording: log every request when user has active session (including redirects we injected, e.g. diagnostic)
-        user_id = flow.metadata.get("user_id") if getattr(flow, "metadata", None) else None
-        if user_id is not None:
-            session_id = get_active_traffic_session_id(user_id)
-            if session_id is not None:
-                try:
-                    t0 = flow.metadata.get("request_start_time")
-                    time_sec = (time.perf_counter() - t0) if isinstance(t0, (int, float)) else 0.0
-                    status = flow.metadata.get("traffic_status", "open")
-                    protocol = (flow.request.scheme or "https") if flow.request else ""
-                    content_type = ""
-                    if flow.response and flow.response.headers:
-                        content_type = (flow.response.headers.get("content-type") or "").strip() or ""
-                    http_status = flow.response.status_code if flow.response else None
-                    add_traffic_log_entry(
-                        session_id=session_id,
-                        user_id=user_id,
-                        url=url,
-                        protocol=protocol,
-                        status=status,
-                        time_sec=time_sec,
-                        content_type=content_type or None,
-                        http_status_code=http_status,
-                    )
-                except Exception as log_err:
-                    logger.debug("Traffic log entry failed: %s", log_err)
+        # Traffic recording: log every request when the user has an active session.
+        user_id = flow.metadata.get("user_id")
+        if user_id is None or flow.metadata.get("traffic_status") == "internal":
+            return
+        session_id = get_active_traffic_session_id(user_id)
+        if session_id is None:
+            return
+        try:
+            t0 = flow.metadata.get("request_start_time")
+            time_sec = (time.perf_counter() - t0) if isinstance(t0, (int, float)) else 0.0
+            content_type = (flow.response.headers.get("content-type") or "").strip() if flow.response else ""
+            await asyncio.to_thread(
+                add_traffic_log_entry,
+                session_id=session_id,
+                user_id=user_id,
+                url=url,
+                protocol=(flow.request.scheme or "https") if flow.request else "",
+                status=flow.metadata.get("traffic_status", "open"),
+                time_sec=time_sec,
+                content_type=content_type or None,
+                http_status_code=flow.response.status_code if flow.response else None,
+            )
+        except Exception as log_err:
+            logger.debug("Traffic log entry failed: %s", log_err)
 
     def error(self, flow: http.HTTPFlow) -> None:
         """Handle errors during request/response (e.g. SSL, connection)."""
         if not flow.error:
             return
-
-        # Traffic recording: log failed request (e.g. cert error) with real time until error.
-        # Resolve user_id from metadata or from client_ip (in case error ran before request() set it).
         user_id = flow.metadata.get("user_id") if getattr(flow, "metadata", None) else None
         if user_id is None and getattr(flow, "request", None):
             client_ip = _client_ip_from_flow(flow)
             if client_ip:
-                user_id = get_user_id_for_ip(client_ip)
+                user_id = self._resolve_user(flow, client_ip)
         if user_id is not None:
             session_id = get_active_traffic_session_id(user_id)
             if session_id is not None:
                 try:
                     t0 = flow.metadata.get("request_start_time")
                     time_sec = (time.perf_counter() - t0) if isinstance(t0, (int, float)) else 0.0
-                    url = flow.request.pretty_url if flow.request else "Unknown URL"
                     err_str = str(flow.error)
                     status = "cert_missing" if "certificate" in err_str.lower() or "ssl" in err_str.lower() else "error"
                     add_traffic_log_entry(
                         session_id=session_id,
                         user_id=user_id,
-                        url=url,
+                        url=flow.request.pretty_url if flow.request else "Unknown URL",
                         protocol=(flow.request.scheme or "") if flow.request else "",
                         status=status,
                         time_sec=time_sec,
@@ -344,49 +441,12 @@ class FilterAddon:
         details = format_flow_error(flow)
         if not details:
             return
-
         full_msg = "\n  ".join(details)
         error_str = str(flow.error)
-        is_http2 = "HTTP/2 protocol error" in error_str or "ConnectionState" in error_str
-
-        if is_http2:
-            logger.warning(
-                "[MITMPROXY HTTP/2 PROTOCOL ERROR (usually non-critical)]\n  %s",
-                full_msg,
-            )
+        if "HTTP/2 protocol error" in error_str or "ConnectionState" in error_str:
+            logger.warning("[MITMPROXY HTTP/2 PROTOCOL ERROR (usually non-critical)]\n  %s", full_msg)
         else:
             logger.error("[MITMPROXY ERROR]\n  %s", full_msg)
-
-        url = flow.request.pretty_url if flow.request else "Unknown URL"
-        method = flow.request.method if flow.request else "Unknown"
-        host = flow.request.host if flow.request else "Unknown"
-        port = flow.request.port if flow.request else "Unknown"
-
-        print(f"\n{'=' * 80}")
-        if is_http2:
-            print(
-                f"[MITMPROXY HTTP/2 PROTOCOL ERROR] {type(flow.error).__name__} "
-                "(usually non-critical)"
-            )
-            print("  ⚠️  This is typically a server-side issue, not a problem with your code")
-        else:
-            print(f"[MITMPROXY ERROR] {type(flow.error).__name__}")
-        print(f"  Message: {error_str}")
-        print(f"  URL: {url}")
-        print(f"  Method: {method}")
-        print(f"  Host: {host}:{port}")
-        if hasattr(flow, "state"):
-            print(f"  Flow State: {flow.state}")
-        if hasattr(flow.error, "args") and flow.error.args:
-            print(f"  Error Args: {flow.error.args}")
-        if isinstance(flow.error, Exception) and getattr(
-            flow.error, "__traceback__", None
-        ):
-            print("  Traceback:")
-            traceback.print_exception(
-                type(flow.error), flow.error, flow.error.__traceback__
-            )
-        print(f"{'=' * 80}\n")
 
 
 logger.info("Initializing FilterAddon")

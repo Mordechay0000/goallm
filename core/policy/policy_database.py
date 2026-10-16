@@ -4,7 +4,6 @@ Stores policies in SQLite database (pattern similar to image_status_db).
 DB path is fixed relative to project root so CRM and proxy (mitmdump) use the same file
 regardless of CWD (e.g. running uvicorn from crm/ vs mitmdump from project root).
 """
-import contextlib
 import sqlite3
 import logging
 import os
@@ -13,6 +12,7 @@ from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 
+from core.db_utils import ThreadLocalSQLite
 from data.constants import POLICIES_TABLE_NAME, TAG_RULES_TABLE_NAME, GOALLM_STORAGE_DIR
 
 logger = logging.getLogger(__name__)
@@ -31,18 +31,19 @@ os.makedirs(str(_storage_dir), mode=0o755, exist_ok=True)
 _db_path = _storage_dir / "policies.db"
 
 try:
-    db_connection = sqlite3.connect(str(_db_path), check_same_thread=False, timeout=10)
+    db_connection = ThreadLocalSQLite(str(_db_path))
 except sqlite3.OperationalError:
     _fallback = Path.home() / ".goallm" / "storage"
     if _fallback.resolve() != _storage_dir.resolve():
         os.makedirs(str(_fallback), mode=0o755, exist_ok=True)
         _db_path = _fallback / "policies.db"
-        db_connection = sqlite3.connect(str(_db_path), check_same_thread=False, timeout=10)
+        db_connection = ThreadLocalSQLite(str(_db_path))
         logger.warning("Using fallback policies DB at %s", _db_path)
     else:
         raise
-db_connection.execute("PRAGMA journal_mode=WAL;")
-db_connection.execute("PRAGMA synchronous=NORMAL;")
+
+# Group several writes into one commit (atomic for readers in other processes).
+transaction = db_connection.transaction
 
 
 def init_db_schema():
@@ -162,6 +163,21 @@ def init_db_schema():
         db_connection.commit()
         logger.info("Added user_id to url_policies")
 
+    # The user_id migration above recreates the table without the per-filter columns that were added
+    # later; on a fresh install that dropped them. Make sure they exist after every migration.
+    for col, default in (
+        ("text_filter_enabled", 1),
+        ("image_filter_enabled", 1),
+        ("file_filter_enabled", 1),
+        ("pdf_filter_enabled", 1),
+        ("video_filter_enabled", 1),
+        ("surf_widget_enabled", 1),
+    ):
+        cols = [r[1] for r in db_connection.execute(f"PRAGMA table_info({POLICIES_TABLE_NAME})").fetchall()]
+        if col not in cols:
+            db_connection.execute(f"ALTER TABLE {POLICIES_TABLE_NAME} ADD COLUMN {col} INTEGER NOT NULL DEFAULT {default}")
+            logger.info("Added %s to url_policies", col)
+
     db_connection.execute(f"""
         CREATE INDEX IF NOT EXISTS idx_domain_path 
         ON {POLICIES_TABLE_NAME}(domain, path)
@@ -224,6 +240,7 @@ def init_db_schema():
         "pdf_filter_images",
         "file_share_block",
         "google_search_filter",
+        "video_filter",
     ):
         db_connection.execute(
             "INSERT OR IGNORE INTO filter_switches (key, value) VALUES (?, 1)",
@@ -322,8 +339,39 @@ def init_db_schema():
         db_connection.commit()
         logger.info("Added http_status_code to traffic_log")
 
+    # Change counter: every write that affects filtering bumps it, so the proxy can cache
+    # resolvers/switches in memory and refresh only when something actually changed.
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS meta (
+            key TEXT PRIMARY KEY,
+            value INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+    db_connection.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('policy_version', 0)")
+
+    # Per-user proxy credentials + admin flag (synced from CRM). Identity by credentials, not by IP.
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS proxy_users (
+            user_id INTEGER PRIMARY KEY,
+            is_admin INTEGER NOT NULL DEFAULT 0,
+            proxy_username TEXT UNIQUE,
+            proxy_secret_hash TEXT
+        )
+    """)
+    db_connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_log_created ON traffic_log(created_at)")
+
     db_connection.commit()
     logger.info("Policies database schema initialized successfully")
+
+
+def _bump_policy_version() -> None:
+    """Mark that filtering data changed (committed together with the caller's write)."""
+    db_connection.execute("UPDATE meta SET value = value + 1 WHERE key = 'policy_version'")
+
+
+def get_policy_version() -> int:
+    row = db_connection.execute("SELECT value FROM meta WHERE key = 'policy_version'").fetchone()
+    return int(row[0]) if row else 0
 
 
 def set_profile_mode(mode: str, user_id: Optional[int] = None) -> None:
@@ -340,6 +388,7 @@ def set_profile_mode(mode: str, user_id: Optional[int] = None) -> None:
             "INSERT OR REPLACE INTO resolver_settings (key, value) VALUES ('profile_mode', ?)",
             (mode,),
         )
+    _bump_policy_version()
     db_connection.commit()
     logger.info("Profile mode set to %s (core DB: %s)%s", mode, _db_path, f" user_id={user_id}" if user_id is not None else "")
 
@@ -365,6 +414,7 @@ def set_default_user_id(user_id: Optional[int]) -> None:
         "INSERT OR REPLACE INTO resolver_settings (key, value) VALUES ('default_user_id', ?)",
         (val,),
     )
+    _bump_policy_version()
     db_connection.commit()
 
 
@@ -412,6 +462,7 @@ def set_ip_bindings(bindings: list) -> None:
                 "INSERT OR REPLACE INTO ip_bindings (ip, user_id) VALUES (?, ?)",
                 (ip, int(user_id)),
             )
+    _bump_policy_version()
     db_connection.commit()
     logger.info("ip_bindings updated: %s entries", len(bindings))
 
@@ -432,6 +483,7 @@ FILTER_SWITCH_KEYS = (
     "pdf_filter_images",
     "file_share_block",
     "google_search_filter",
+    "video_filter",
 )
 
 
@@ -463,6 +515,7 @@ def set_filter_switch(key: str, enabled: bool, updated_by_user_id: Optional[int]
         "INSERT OR REPLACE INTO filter_switches (key, value, updated_by_user_id, updated_at) VALUES (?, ?, ?, ?)",
         (key, 1 if enabled else 0, updated_by_user_id, now),
     )
+    _bump_policy_version()
     db_connection.commit()
     logger.info("Filter switch %s set to %s", key, enabled)
 
@@ -477,6 +530,7 @@ def set_filter_switches(switches: Dict[str, bool], updated_by_user_id: Optional[
                 "INSERT OR REPLACE INTO filter_switches (key, value, updated_by_user_id, updated_at) VALUES (?, ?, ?, ?)",
                 (key, 1 if enabled else 0, updated_by_user_id, now),
             )
+    _bump_policy_version()
     db_connection.commit()
     logger.info("Filter switches updated: %s", switches)
 
@@ -492,6 +546,7 @@ def set_allowed_file_urls(urls: List[str]) -> None:
                 "INSERT INTO allowed_file_downloads (url, created_at) VALUES (?, ?)",
                 (u, now),
             )
+    _bump_policy_version()
     db_connection.commit()
     logger.info("Allowed file URLs synced from CRM: %s entries", len([u for u in (urls or []) if (u or "").strip()]))
 
@@ -567,6 +622,7 @@ def set_site_injections(injections: List[Dict]) -> None:
                VALUES (?, ?, ?, ?, ?, ?, ?, 1)""",
             (domain, path, inc, head, body, hide, path_exact),
         )
+    _bump_policy_version()
     db_connection.commit()
     logger.info("Site injections synced from CRM: %s entries", len([i for i in (injections or []) if i.get("enabled")]))
 
@@ -725,6 +781,7 @@ def add_policy(domain: str, path: Optional[str] = None,
             (domain, path, type, state, description, enabled, created_at, updated_at, tags, source, text_filter_enabled, image_filter_enabled, file_filter_enabled, pdf_filter_enabled, video_filter_enabled, surf_widget_enabled, user_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (domain, path, policy_type, state, description, 1 if enabled else 0, now, now, tags_str, source, tf, imgf, ff, pf, vf, sw, user_id))
+        _bump_policy_version()
         db_connection.commit()
         
         cursor = db_connection.execute(f"""
@@ -793,6 +850,7 @@ def update_policy(policy_id: int, domain: Optional[str] = None,
         """, (new_domain, new_path, new_type, new_state,
               new_description, 1 if new_enabled else 0, now, new_tags_str, new_source,
               1 if new_text_filter else 0, 1 if new_image_filter else 0, 1 if new_file_filter else 0, 1 if new_pdf_filter else 0, 1 if new_video_filter else 0, 1 if new_surf_widget else 0, policy_id))
+        _bump_policy_version()
         db_connection.commit()
         
         # Return updated policy
@@ -811,6 +869,7 @@ def delete_policy(policy_id: int) -> bool:
     cursor = db_connection.execute(f"""
         DELETE FROM {POLICIES_TABLE_NAME} WHERE id = ?
     """, (policy_id,))
+    _bump_policy_version()
     db_connection.commit()
     return cursor.rowcount > 0
 
@@ -818,6 +877,7 @@ def delete_policy(policy_id: int) -> bool:
 def delete_user_policies(user_id: int) -> None:
     """Delete all user policies for a given user_id (used when syncing that user from CRM)."""
     db_connection.execute(f"DELETE FROM {POLICIES_TABLE_NAME} WHERE source = 'user' AND user_id = ?", (user_id,))
+    _bump_policy_version()
     db_connection.commit()
 
 
@@ -925,6 +985,7 @@ def add_tag_rule(tag: str, state: str = "block", enabled: bool = True) -> Dict:
             INSERT INTO {TAG_RULES_TABLE_NAME} (tag, state, enabled, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?)
         """, (tag, state, 1 if enabled else 0, now, now))
+        _bump_policy_version()
         db_connection.commit()
         cursor = db_connection.execute(
             f"SELECT * FROM {TAG_RULES_TABLE_NAME} WHERE tag = ?", (tag,)
@@ -956,6 +1017,7 @@ def update_tag_rule(rule_id: int, tag: Optional[str] = None, state: Optional[str
         UPDATE {TAG_RULES_TABLE_NAME} SET tag = ?, state = ?, enabled = ?, updated_at = ?
         WHERE id = ?
     """, (new_tag, new_state, 1 if new_enabled else 0, now, rule_id))
+    _bump_policy_version()
     db_connection.commit()
     cursor = db_connection.execute(f"SELECT * FROM {TAG_RULES_TABLE_NAME} WHERE id = ?", (rule_id,))
     row = cursor.fetchone()
@@ -965,6 +1027,7 @@ def update_tag_rule(rule_id: int, tag: Optional[str] = None, state: Optional[str
 def delete_tag_rule(rule_id: int) -> bool:
     """Delete a tag rule by ID."""
     cursor = db_connection.execute(f"DELETE FROM {TAG_RULES_TABLE_NAME} WHERE id = ?", (rule_id,))
+    _bump_policy_version()
     db_connection.commit()
     return cursor.rowcount > 0
 
@@ -1030,6 +1093,7 @@ def start_traffic_session(user_id: int) -> int:
         "INSERT INTO traffic_recording_sessions (user_id, started_at, ended_at) VALUES (?, ?, NULL)",
         (user_id, now),
     )
+    _bump_policy_version()
     db_connection.commit()
     return cursor.lastrowid
 
@@ -1068,6 +1132,7 @@ def stop_traffic_session(user_id: int) -> Optional[Tuple[int, Optional[str]]]:
             "UPDATE traffic_recording_sessions SET ended_at = ? WHERE id = ?",
             (now, session_id),
         )
+        _bump_policy_version()
         db_connection.commit()
         return (session_id, None)
     share_token = secrets.token_urlsafe(32)
@@ -1075,6 +1140,7 @@ def stop_traffic_session(user_id: int) -> Optional[Tuple[int, Optional[str]]]:
         "UPDATE traffic_recording_sessions SET ended_at = ?, share_token = ? WHERE id = ?",
         (now, share_token, session_id),
     )
+    _bump_policy_version()
     db_connection.commit()
     return (session_id, share_token)
 
@@ -1131,17 +1197,14 @@ def get_traffic_sessions(user_id: int) -> List[Dict]:
 
 
 def get_traffic_log(session_id: int, user_id: int) -> List[Dict]:
-    """Get log entries for a session. Session must belong to user_id.
-    Uses a dedicated connection so it is safe when called from a thread (e.g. asyncio.to_thread).
-    """
-    with contextlib.closing(sqlite3.connect(str(_db_path), timeout=10)) as conn:
-        cursor = conn.execute(
-            "SELECT id FROM traffic_recording_sessions WHERE id = ? AND user_id = ?",
-            (session_id, user_id),
-        )
-        if not cursor.fetchone():
-            return []
-        return _get_traffic_log_rows(session_id, conn)
+    """Get log entries for a session. Session must belong to user_id. Safe from any thread."""
+    cursor = db_connection.execute(
+        "SELECT id FROM traffic_recording_sessions WHERE id = ? AND user_id = ?",
+        (session_id, user_id),
+    )
+    if not cursor.fetchone():
+        return []
+    return _get_traffic_log_rows(session_id)
 
 
 def get_traffic_session_by_token(token: str) -> Optional[Dict]:
@@ -1166,13 +1229,11 @@ def get_traffic_session_by_token(token: str) -> Optional[Dict]:
 
 def get_traffic_log_by_session_id(session_id: int) -> List[Dict]:
     """Get log entries for a session (public – no user check). Use with get_traffic_session_by_token."""
-    return _get_traffic_log_rows(session_id, None)
+    return _get_traffic_log_rows(session_id)
 
 
-def _get_traffic_log_rows(session_id: int, conn: Optional[sqlite3.Connection] = None) -> List[Dict]:
-    """conn: if provided (e.g. from get_traffic_log thread), use it; else use global db_connection."""
-    connection = conn if conn is not None else db_connection
-    cursor = connection.execute(
+def _get_traffic_log_rows(session_id: int) -> List[Dict]:
+    cursor = db_connection.execute(
         """SELECT id, session_id, url, protocol, status, time_sec, content_type, created_at, http_status_code
            FROM traffic_log WHERE session_id = ? ORDER BY id ASC""",
         (session_id,),
@@ -1191,6 +1252,57 @@ def _get_traffic_log_rows(session_id: int, conn: Optional[sqlite3.Connection] = 
         }
         for row in cursor.fetchall()
     ]
+
+
+# --- Per-user proxy credentials and admin flags (synced from CRM) ---
+
+
+def set_proxy_users(users: List[Dict]) -> None:
+    """Replace proxy_users with CRM data: [{user_id, is_admin, proxy_username, proxy_secret_hash}]."""
+    with transaction():
+        db_connection.execute("DELETE FROM proxy_users")
+        for u in users or []:
+            db_connection.execute(
+                "INSERT INTO proxy_users (user_id, is_admin, proxy_username, proxy_secret_hash) VALUES (?, ?, ?, ?)",
+                (
+                    int(u["user_id"]),
+                    1 if u.get("is_admin") else 0,
+                    (u.get("proxy_username") or None),
+                    (u.get("proxy_secret_hash") or None),
+                ),
+            )
+        _bump_policy_version()
+        db_connection.commit()
+
+
+def get_proxy_credential(username: str) -> Optional[Tuple[int, str]]:
+    """Return (user_id, secret_hash) for a proxy username, or None."""
+    if not username:
+        return None
+    row = db_connection.execute(
+        "SELECT user_id, proxy_secret_hash FROM proxy_users WHERE proxy_username = ?",
+        (username,),
+    ).fetchone()
+    if not row or not row[1]:
+        return None
+    return int(row[0]), str(row[1])
+
+
+def get_user_is_admin(user_id: Optional[int]) -> bool:
+    if user_id is None:
+        return False
+    row = db_connection.execute("SELECT is_admin FROM proxy_users WHERE user_id = ?", (int(user_id),)).fetchone()
+    return bool(row and row[0])
+
+
+def purge_traffic_logs_older_than(days: int) -> int:
+    """Privacy: delete traffic log rows (full URLs) older than `days`. Returns rows deleted."""
+    if days <= 0:
+        return 0
+    cutoff = int(datetime.now().timestamp()) - days * 86400
+    cur = db_connection.execute("DELETE FROM traffic_log WHERE created_at < ?", (cutoff,))
+    db_connection.commit()
+    return cur.rowcount or 0
 
 
 # Initialize schema on import

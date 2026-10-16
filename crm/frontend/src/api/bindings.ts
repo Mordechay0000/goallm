@@ -10,7 +10,21 @@ export interface IpBinding {
   last_used_at?: number | null;
 }
 
+export interface ProxyCredentials {
+  username: string | null;
+  has_password?: boolean;
+  password?: string;
+  proxy_host: string;
+  proxy_port: number;
+}
+
 export const bindingsApi = {
+  getProxyCredentials: (): Promise<ProxyCredentials> =>
+    apiClient.get('/api/me/proxy-credentials').then((r) => r.data),
+
+  rotateProxyCredentials: (): Promise<ProxyCredentials> =>
+    apiClient.post('/api/me/proxy-credentials/rotate').then((r) => r.data),
+
   list: (): Promise<IpBinding[]> =>
     apiClient.get('/api/me/bindings').then((r) => r.data),
 

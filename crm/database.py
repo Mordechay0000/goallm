@@ -362,6 +362,10 @@ def init_db_schema():
         CREATE INDEX IF NOT EXISTS idx_verification_target_type 
         ON verification_codes(target, type)
     """)
+    vc_cols = [row[1] for row in db_connection.execute("PRAGMA table_info(verification_codes)").fetchall()]
+    if "attempts" not in vc_cols:
+        db_connection.execute("ALTER TABLE verification_codes ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
+        logger.info("Added attempts column to verification_codes")
 
     # is_admin on users (migration)
     cursor = db_connection.execute("PRAGMA table_info(users)")
@@ -369,6 +373,12 @@ def init_db_schema():
     if "is_admin" not in user_cols:
         db_connection.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
         logger.info("Added is_admin column to users")
+    # Personal proxy credentials (identity by credentials instead of by IP). Secret stored as SHA-256 only.
+    for col in ("proxy_username", "proxy_secret_hash"):
+        if col not in user_cols:
+            db_connection.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
+            logger.info("Added %s column to users", col)
+    db_connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_proxy_username ON users(proxy_username)")
 
     # user_locked_settings: which settings are locked by admin for a user
     db_connection.execute("""

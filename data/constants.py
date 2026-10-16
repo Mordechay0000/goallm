@@ -3,17 +3,26 @@
 מאוחד כאן כדי שיהיה קל לעבוד עם כל ההגדרות ממקום אחד.
 כל הערכים מהסביבה מוחלים כאן.
 
-משתני סביבה:
-  CRM_PROXY_SECRET         – סוד משותף בין הפרוקסי ל-CRM (touch-ip, Surf token).
-  PROXY_AUTH               – אימות פרוקסי בפורמט username:password (ברירת מחדל: filter:f123456Ab).
+משתני סביבה (עיקריים):
+  SECRET_KEY               – מפתח ל-JWT. אם לא מוגדר – נוצר אקראית ונשמר ב-.storage/secret_key (לא ברירת מחדל קבועה).
+  CRM_PROXY_SECRET         – סוד משותף בין הפרוקסי ל-CRM. אם לא מוגדר – נוצר אקראית ונשמר ב-.storage/crm_proxy_secret.
+                             כשהפרוקסי וה-CRM רצים על מכונות שונות – חובה להגדיר אותו ידנית בשתיהן.
+  TRUSTED_PROXY_IPS        – רשימת IP/CIDR (מופרדת בפסיקים) של פרוקסים מהימנים. רק מהם מכבדים X-Forwarded-For.
+                             ברירת מחדל: 127.0.0.1,::1. בייצור – להוסיף את כתובת שרת הפרוקסי ואת ה-reverse proxy של ה-CRM.
+  PROXY_REQUIRE_AUTH       – "1" (ברירת מחדל) = חובה להזדהות מול הפרוקסי. "0" = מותר בלי סיסמה (זיהוי לפי IP בלבד, לפיתוח/רשת סגורה).
+  PROXY_AUTH               – (אופציונלי, legacy) שם משתמש:סיסמה משותפים. מי שמתחבר איתם מזוהה לפי שיוך IP.
+                             אין יותר ברירת מחדל קבועה. הדרך המומלצת: פרטי התחברות אישיים לכל משתמש (נוצרים ב-CRM).
   FILTER_BIND_BASE_URL     – כתובת דף הקישור (unbound IP). "off"/"0" = כבוי.
   CRM_API_URL              – כתובת API של ה-CRM.
   CRM_FRONTEND_URL         – כתובת פרונט ה-CRM.
+  CORS_ALLOW_ORIGINS       – מקורות מותרים ל-CORS (מופרד בפסיקים). ברירת מחדל: כתובת ה-CRM + שרת הפיתוח.
   GOALLM_STORAGE_DIR       – תיקיית אחסון (מאגר, DB). ברירת מחדל: .storage בשורש.
-  USE_LLM_IMAGE_ANALYZER   – "1"/"true"/"yes" = שימוש ב-LLM לניתוח תמונות.
-  SECRET_KEY               – מפתח ל-JWT (חובה בייצור).
+  IMAGE_ANALYZER           – simulated | llama_cpp | openai (שרת תואם OpenAI כמו vLLM / llama-server).
+  USE_LLM_IMAGE_ANALYZER   – (legacy) "1" = llama_cpp.
 """
 import os
+import secrets as _secrets
+from pathlib import Path as _Path
 
 # ========== שמות טבלאות (SQLite) ==========
 # שם הטבלה שמאחסנת סטטוס תמונות (allowed/blocked/pending) ב־SQLite של הסינון.
@@ -33,16 +42,70 @@ TAG_RULES_TABLE_NAME = "tag_rules"
 DEFAULT_CRM_BASE_URL = "https://filter.forum-dev.com"
 CRM_BASE_URL = (os.environ.get("CRM_BASE_URL") or DEFAULT_CRM_BASE_URL).strip().rstrip("/")
 
-# ברירת מחדל לסוד המשותף – דרוס עם CRM_PROXY_SECRET בסביבה.
-DEFAULT_CRM_PROXY_SECRET = "dev-secret"
-# ערך אפקטיבי: מסביבה או ברירת מחדל. משמש אימות touch-ip ו־Surf token.
-CRM_PROXY_SECRET = (os.environ.get("CRM_PROXY_SECRET") or DEFAULT_CRM_PROXY_SECRET).strip()
+# ========== אחסון ==========
+# אם מוגדר – נתיב תיקיית האחסון (מאגר, DB). אם None – .storage בשורש הפרויקט.
+GOALLM_STORAGE_DIR = os.environ.get("GOALLM_STORAGE_DIR")
+PROJECT_ROOT = _Path(__file__).resolve().parent.parent
+STORAGE_DIR = _Path(GOALLM_STORAGE_DIR) if GOALLM_STORAGE_DIR else PROJECT_ROOT / ".storage"
 
-# אימות פרוקסי – משתמשים חייבים להזין שם משתמש וסיסמה כדי לגלוש דרך הפרוקסי.
-# פורמט: "username:password". דרוס עם PROXY_AUTH בסביבה (למשל PROXY_AUTH=user:pass).
-# "" = ללא אימות. mitmproxy מקבל את הערך ב־--set proxyauth=...
-DEFAULT_PROXY_AUTH = "filter:f123456Ab"
-PROXY_AUTH = (os.environ.get("PROXY_AUTH") or DEFAULT_PROXY_AUTH).strip()
+
+def _load_or_create_secret(env_name: str, filename: str) -> str:
+    """
+    סוד מהסביבה, ואם אין – מקובץ ב-STORAGE_DIR, ואם אין – יוצרים אקראי ושומרים (הרשאות 600).
+    כך אין אף פעם ערך ברירת מחדל קבוע שידוע לכל מי שקרא את הקוד.
+    הפרוקסי וה-CRM על אותה מכונה קוראים את אותו קובץ ולכן מסונכרנים.
+    """
+    value = (os.environ.get(env_name) or "").strip()
+    if value:
+        return value
+    path = STORAGE_DIR / filename
+    try:
+        existing = path.read_text(encoding="utf-8").strip()
+        if existing:
+            return existing
+    except FileNotFoundError:
+        pass
+    STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    value = _secrets.token_urlsafe(48)
+    try:
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(value)
+        return value
+    except FileExistsError:
+        # תהליך אחר (פרוקסי / CRM) יצר את הקובץ במקביל
+        return path.read_text(encoding="utf-8").strip()
+
+
+# סוד משותף בין הפרוקסי ל-CRM (נקודות קצה פנימיות כמו touch-ip).
+CRM_PROXY_SECRET = _load_or_create_secret("CRM_PROXY_SECRET", "crm_proxy_secret")
+
+# פרוקסים מהימנים – רק מהם מכבדים X-Forwarded-For / X-Real-IP (IP/CIDR מופרדים בפסיקים).
+TRUSTED_PROXY_IPS = (os.environ.get("TRUSTED_PROXY_IPS") or "127.0.0.1,::1").strip()
+
+# אימות מול הפרוקסי. ברירת מחדל: חובה. הזדהות אישית לכל משתמש נוצרת ב-CRM (עמוד "חיבורים").
+PROXY_REQUIRE_AUTH = (os.environ.get("PROXY_REQUIRE_AUTH") or "1").strip().lower() not in ("0", "false", "no", "off")
+# (legacy) שם משתמש:סיסמה משותפים – מי שמתחבר איתם מזוהה לפי שיוך IP. ריק = כבוי. אין ברירת מחדל קבועה.
+PROXY_AUTH = (os.environ.get("PROXY_AUTH") or "").strip()
+# מרווח מינימלי (שניות) בין עדכוני last_used_at לאותו IP – מונע בקשת HTTP על כל בקשה.
+TOUCH_IP_MIN_INTERVAL_SEC = 300
+# כתובת ופורט הפרוקסי כפי שמוצגים למשתמש בעמוד "חיבורים" (להגדרת המכשיר).
+PROXY_PUBLIC_HOST = (os.environ.get("PROXY_PUBLIC_HOST") or "").strip()
+PROXY_PUBLIC_PORT = int(os.environ.get("PROXY_PUBLIC_PORT", "8080"))
+
+# אתרים רגישים (בנקים, קופות חולים, ממשלה) שעוברים בלי פתיחת ההצפנה (TLS passthrough) – אם הם מותרים ברשימה.
+# גם פרטיות (אין סיבה שהשרת יראה סיסמאות בנק) וגם אפליקציות עם certificate pinning שלא עובדות דרך MITM.
+# דריסה: SENSITIVE_PASSTHROUGH_DOMAINS="a.co.il,b.co.il" (ריק = כבוי).
+_DEFAULT_PASSTHROUGH = (
+    "bankhapoalim.co.il,bankleumi.co.il,leumi.co.il,discountbank.co.il,mizrahi-tefahot.co.il,fibi.co.il,"
+    "bank-yahav.co.il,mercantile.co.il,bankjerusalem.co.il,onezerobank.com,"
+    "clalit.co.il,maccabi4u.co.il,meuhedet.co.il,leumit.co.il,gov.il"
+)
+SENSITIVE_PASSTHROUGH_DOMAINS = tuple(
+    d.strip().lower().lstrip(".")
+    for d in (os.environ.get("SENSITIVE_PASSTHROUGH_DOMAINS", _DEFAULT_PASSTHROUGH)).split(",")
+    if d.strip()
+)
 
 # כתובת דף הקישור (bind) – כברירת מחדל אותה כתובת בסיס של ה-CRM.
 # אם FILTER_BIND_BASE_URL מוגדר בסביבה – הוא יגבר; אם "off"/"0"/"false" – אין דף bind.
@@ -56,9 +119,6 @@ FILTER_DIAGNOSTIC_HOST_ALIAS = "filter.check"
 # תיקיית תעודות mitmproxy (להגשת הורדת תעודה מדף האבחון ב־CRM). ברירת מחדל: ~/.mitmproxy
 FILTER_CERT_DIR = os.environ.get("FILTER_CERT_DIR") or os.path.expanduser("~/.mitmproxy")
 
-# תוקף טוקן Surf בשניות – אחרי הזמן הזה הטוקן לא תקף לאימות משתמש מפרוקסי ל-CRM.
-SURF_TOKEN_TTL_SEC = 300
-
 # קוד HTTP לתגובות חסימה / שלח לבדיקה – מחזירים דף HTML עם קוד זה (418 = I'm a teapot, לא בשימוש סטנדרטי).
 FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS = 418
 
@@ -68,9 +128,12 @@ FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS = 418
 CRM_API_URL = (os.environ.get("CRM_API_URL") or f"{CRM_BASE_URL}/api").rstrip("/")
 CRM_FRONTEND_URL = (os.environ.get("CRM_FRONTEND_URL") or CRM_BASE_URL).rstrip("/")
 
-# ========== אחסון ==========
-# אם מוגדר – נתיב תיקיית האחסון (מאגר, DB). אם None – כל מודול משתמש ב־.storage יחסית לשורש.
-GOALLM_STORAGE_DIR = os.environ.get("GOALLM_STORAGE_DIR")
+# מקורות מותרים ל-CORS. האימות הוא Bearer token (לא cookie), אבל אין סיבה לאפשר לכל אתר לקרוא ל-API.
+CORS_ALLOW_ORIGINS = tuple(
+    o.strip().rstrip("/")
+    for o in (os.environ.get("CORS_ALLOW_ORIGINS") or f"{CRM_FRONTEND_URL},http://localhost:5173,http://127.0.0.1:5173").split(",")
+    if o.strip()
+)
 
 # ========== שרתים (ברירת מחדל להרצה) ==========
 # כתובת להאזנה כשמריצים את ה-API (למשל 0.0.0.0 לגישה מהרשת).
@@ -81,13 +144,19 @@ DEFAULT_API_PORT = 8000
 # ========== אבטחה (JWT, סיסמאות) ==========
 # מספר סיבובי bcrypt להצפנת סיסמאות – גבוה יותר = מאובן יותר אבל איטי יותר.
 BCRYPT_ROUNDS = 12
-# מפתח ברירת מחדל ל-JWT – בייצור חובה להגדיר SECRET_KEY בסביבה.
-DEFAULT_SECRET_KEY = "change-this-in-production-use-secrets-token-urlsafe-32"
-SECRET_KEY = os.environ.get("SECRET_KEY", DEFAULT_SECRET_KEY)
+# מפתח JWT – מהסביבה או אקראי שנשמר ב-.storage/secret_key (אין ברירת מחדל קבועה שאפשר לזייף איתה טוקן).
+SECRET_KEY = _load_or_create_secret("SECRET_KEY", "secret_key")
 # אלגוריתם חתימת JWT.
 ALGORITHM = "HS256"
 # תוקף טוקן הגישה בדקות – אחרי הזמן הזה המשתמש צריך להתחבר מחדש.
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 ימים
+
+# ========== פרטיות ==========
+# כמה ימים לשמור יומני הקלטת תעבורה (כתובות מלאות). 0 = לא למחוק אוטומטית.
+TRAFFIC_LOG_RETENTION_DAYS = int(os.environ.get("TRAFFIC_LOG_RETENTION_DAYS", "30"))
+
+# המשתמש הראשון שנרשם הופך למנהל. בייצור מומלץ 0 ולמנות מנהל עם: python -m crm.manage set-admin <phone>
+FIRST_USER_ADMIN = (os.environ.get("GOALLM_FIRST_USER_ADMIN") or "1").strip().lower() not in ("0", "false", "no", "off")
 
 # ========== אימות (OTP) ==========
 # אורך קוד האימות (ספרות) שנשלח בטלפון/אימייל.
@@ -96,10 +165,42 @@ CODE_LENGTH = 6
 CODE_EXPIRE_MINUTES = 10
 # מרווח מינימלי בדקות בין שליחת קוד לאותו יעד (מגבלת קצב).
 RATE_LIMIT_MINUTES = 2
+# מקסימום ניסיונות שגויים לקוד אחד – אחרי זה הקוד נמחק (מונע ניחוש של 10^6 אפשרויות).
+CODE_MAX_ATTEMPTS = 5
 
 # ========== תמונות – ניתוח ותור ==========
-# True אם מוגדר USE_LLM_IMAGE_ANALYZER=1/true/yes – משתמשים ב-LLM לניתוח תמונות; אחרת מנתח סימולציה.
+# (legacy) USE_LLM_IMAGE_ANALYZER=1 שווה ל-IMAGE_ANALYZER=llama_cpp.
 USE_LLM_IMAGE_ANALYZER = (os.environ.get("USE_LLM_IMAGE_ANALYZER") or "").strip().lower() in ("1", "true", "yes")
+# איזה מנתח תמונות להפעיל:
+#   simulated – לפיתוח בלבד (תוצאה פסאודו-אקראית!)
+#   llama_cpp – מודל GGUF מקומי (בקשה אחת בכל רגע; מתאים לבדיקות, לא לעומס)
+#   openai    – שרת תואם OpenAI: vLLM / SGLang / llama-server / ספק ענן. זו הדרך לייצור (batching, מקביליות).
+IMAGE_ANALYZER = (os.environ.get("IMAGE_ANALYZER") or ("llama_cpp" if USE_LLM_IMAGE_ANALYZER else "simulated")).strip().lower()
+# שרת VLM תואם OpenAI (למשל vLLM: http://127.0.0.1:8001/v1)
+VLM_API_BASE = (os.environ.get("VLM_API_BASE") or "http://127.0.0.1:8001/v1").strip().rstrip("/")
+# ברירת מחדל: Qwen3.5-9B (Apache-2.0). ב-V* (פרטים קטנים בתמונה ברזולוציה גבוהה) 90.1 מול 83.2 של Qwen3-VL-30B
+# ו-69.6 של Gemini-2.5-Flash-Lite – בדיוק המקרה הקשה של דמות קטנה ברקע.
+VLM_MODEL = (os.environ.get("VLM_MODEL") or "Qwen/Qwen3.5-9B").strip()
+# מודלים "חושבים" (Qwen3.5) מוסיפים טקסט חשיבה לפני התשובה – כבוי כברירת מחדל (מהירות ועלות). vLLM/SGLang מכבדים זאת.
+VLM_DISABLE_THINKING = (os.environ.get("VLM_DISABLE_THINKING") or "1").strip().lower() not in ("0", "false", "no", "off")
+VLM_API_KEY = (os.environ.get("VLM_API_KEY") or "").strip()
+VLM_TIMEOUT_SECONDS = float(os.environ.get("VLM_TIMEOUT_SECONDS", "60"))
+# סף א-סימטרי: אם ההסתברות של "Yes" בשאלה כלשהי ≥ הסף – נחשב Yes (חוסם). החמצה חמורה מחסימת-שווא.
+# עובד רק כשהשרת מחזיר logprobs (vLLM כן). 0.5 = התנהגות רגילה; נמוך יותר = שמרני יותר.
+VLM_YES_THRESHOLD = float(os.environ.get("VLM_YES_THRESHOLD", "0.2"))
+# רזולוציה: צלע ארוכה מקסימלית שנשלחת למודל (אנשים קטנים ברקע צריכים רזולוציה – זה המחיר בטוקנים).
+VLM_MAX_SIDE = int(os.environ.get("VLM_MAX_SIDE", "1280"))
+# תמונות קטנות מוגדלות לפחות לגודל הזה בצלע הקצרה – אחרת המודל לא "רואה" אותן.
+VLM_MIN_SIDE = int(os.environ.get("VLM_MIN_SIDE", "256"))
+# כמה פריימים לדגום מתמונה מונפשת (GIF/WebP/APNG). כל פריים = קריאה נפרדת למודל.
+VLM_MAX_ANIMATION_FRAMES = int(os.environ.get("VLM_MAX_ANIMATION_FRAMES", "4"))
+# מקסימום משימות שמחכות בתור (מעבר לזה – לא נכנסות, והבקשה הבאה לאותה תמונה תנסה שוב).
+IMAGE_QUEUE_MAX = int(os.environ.get("IMAGE_QUEUE_MAX", "5000"))
+# תמונה שנשארה pending יותר מזה (למשל אחרי הפעלה מחדש – התור יושב בזיכרון) נשלחת שוב לבדיקה.
+PENDING_STALE_SECONDS = int(os.environ.get("PENDING_STALE_SECONDS", "300"))
+# תמונה בסטטוס error נשלחת שוב אחרי הזמן הזה, עד MAX_ANALYSIS_ATTEMPTS ניסיונות (אחר כך נשארת חסומה).
+ERROR_RETRY_SECONDS = int(os.environ.get("ERROR_RETRY_SECONDS", "600"))
+MAX_ANALYSIS_ATTEMPTS = int(os.environ.get("MAX_ANALYSIS_ATTEMPTS", "3"))
 
 # timeout בשניות להמתנה לתוצאת ניתוח תמונה לפני שמסמנים שגיאה.
 DEFAULT_ANALYSIS_TIMEOUT_SECONDS = 120

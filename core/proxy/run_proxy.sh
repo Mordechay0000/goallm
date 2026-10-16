@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# הפעלת הפרוקסי עם אימות (שם משתמש וסיסמה).
-# להגדרת פרוקסי: הפעילו סקריפט זה. בדפדפן/מערכת הגדירו proxy ל־127.0.0.1:8080.
-# בפעם הראשונה הדפדפן יבקש שם משתמש (filter) וסיסמה (f123456Ab).
+# הפעלת הפרוקסי.
+# אימות: ה-addon עצמו מאמת כל חיבור.
+#   - פרטי התחברות אישיים לכל משתמש (נוצרים ב-CRM, עמוד "חיבורים") – מומלץ; מזהה לפי משתמש ולא לפי IP.
+#   - PROXY_AUTH=user:pass – (אופציונלי, legacy) סיסמה משותפת; מי שמתחבר איתה מזוהה לפי שיוך IP.
+#   - PROXY_REQUIRE_AUTH=0 – בלי סיסמה בכלל (זיהוי לפי IP בלבד; לפיתוח / רשת סגורה בלבד).
+# אין יותר סיסמת ברירת מחדל קבועה.
 #
-# שימוש: ./run_proxy.sh [mitmproxy|mitmweb|mitmdump]
-# דריסת פרטי אימות: PROXY_AUTH=user:pass ./run_proxy.sh
-# ביטול אימות: PROXY_AUTH= ./run_proxy.sh
+# שימוש: ./run_proxy.sh [mitmproxy|mitmweb|mitmdump] [ארגומנטים נוספים ל-mitmproxy]
+# בייצור: הגדירו TRUSTED_PROXY_IPS, CRM_PROXY_SECRET (אם ה-CRM על מכונה אחרת), IMAGE_ANALYZER=openai ו-VLM_API_BASE.
 
 set -e
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -19,10 +21,4 @@ if [ -f "venv/bin/activate" ]; then
   source venv/bin/activate
 fi
 
-PROXY_AUTH="${PROXY_AUTH:-filter:f123456Ab}"
-
-if [ -n "$PROXY_AUTH" ]; then
-  exec "$TOOL" -s core/proxy/mitmproxy_addon.py --set "proxyauth=$PROXY_AUTH" "$@"
-else
-  exec "$TOOL" -s core/proxy/mitmproxy_addon.py "$@"
-fi
+exec "$TOOL" -s core/proxy/mitmproxy_addon.py "$@"

@@ -8,11 +8,12 @@ import logging
 from pathlib import Path
 from typing import List, Dict, Any
 
-from data.upload_config import SUPPORT_MAX_BYTES
+from data.constants import STORAGE_DIR
+from data.upload_config import SUPPORT_MAX_BYTES, SUPPORT_ALLOWED_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
-SUPPORT_UPLOADS_DIR = Path(__file__).resolve().parent.parent / ".storage" / "uploads" / "support"
+SUPPORT_UPLOADS_DIR = STORAGE_DIR / "uploads" / "support"
 
 
 def _normalize_ext(ext: str) -> str:
@@ -34,6 +35,9 @@ def validate_support_file(content: bytes, filename: str) -> str:
     if ".." in base or not base:
         raise ValueError("שם קובץ לא תקין")
     ext = _normalize_ext(os.path.splitext(base)[1])
+    # Allowlist: HTML/SVG/XML/JS would be served from the CRM origin and could run as a page there.
+    if ext not in SUPPORT_ALLOWED_EXTENSIONS:
+        raise ValueError("סוג קובץ לא נתמך. מותרים: " + ", ".join(sorted(SUPPORT_ALLOWED_EXTENSIONS)))
     return ext
 
 
@@ -46,7 +50,7 @@ def save_support_file(content: bytes, filename: str, user_id: int) -> Dict[str, 
     safe_name = os.path.basename((filename or "file").strip())[:200]
     if not safe_name or safe_name.startswith("."):
         safe_name = "file" + ext
-    stored = f"{user_id}_{uuid.uuid4().hex[:14]}{ext}"
+    stored = f"{user_id}_{uuid.uuid4().hex}{ext}"
     path = SUPPORT_UPLOADS_DIR / stored
     path.write_bytes(content)
     return {"url": f"/uploads/support/{stored}", "name": safe_name}

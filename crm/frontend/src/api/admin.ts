@@ -86,6 +86,19 @@ export const adminApi = {
     });
     return response.data;
   },
+  /** Quick allow/block rule from the surf widget (admin login, explicit confirmation in the page). */
+  surfQuickRule: async (
+    url: string,
+    action: 'allow' | 'block',
+    scope: 'domain_only' | 'domain_and_subdomains' | 'exact_url',
+  ): Promise<{ success: boolean; rule_display: string }> => {
+    const response = await apiClient.post<{ success: boolean; rule_display: string }>('/api/admin/surf-quick-rule', {
+      url,
+      action,
+      scope,
+    });
+    return response.data;
+  },
   /** Update existing global rule (by domain+path) to block. Admin only. */
   surfUpdateRuleToBlock: async (ruleDomain: string, rulePath: string): Promise<{ success: boolean; rule: GlobalRule }> => {
     const response = await apiClient.post<{ success: boolean; rule: GlobalRule }>('/api/admin/surf-update-rule-to-block', {
@@ -157,6 +170,7 @@ export interface FilterSwitches {
   pdf_filter_images: boolean;
   file_share_block: boolean;
   google_search_filter: boolean;
+  video_filter: boolean;
 }
 
 export interface GlobalRule {

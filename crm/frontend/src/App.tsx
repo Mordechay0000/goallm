@@ -40,9 +40,9 @@ import SupportNewTicketPage from './pages/SupportNewTicketPage';
 import ToolsPage from './pages/ToolsPage';
 import TrafficRecordingPage from './pages/TrafficRecordingPage';
 import TrafficViewPage from './pages/TrafficViewPage';
-import SurfAdminCheckPage from './pages/SurfAdminCheckPage';
 import SurfBlockPage from './pages/SurfBlockPage';
 import SurfUpdateRulePage from './pages/SurfUpdateRulePage';
+import SurfQuickRulePage from './pages/SurfQuickRulePage';
 import AdminLayout from './components/AdminLayout';
 import { DOCUMENT_TITLE } from './brand';
 
@@ -164,7 +164,6 @@ function App() {
         <CssBaseline />
         <BrowserRouter>
         <Routes>
-          <Route path="/surf-admin-check" element={<SurfAdminCheckPage />} />
           <Route path="/setup" element={<SetupPage />} />
           <Route path="/login" element={<LoginRoute />} />
           <Route path="/register" element={<RegisterRoute />} />
@@ -315,6 +314,16 @@ function App() {
               <ProtectedRoute>
                 <AdminLayout>
                   <SurfBlockPage />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/surf-quick-rule"
+            element={
+              <ProtectedRoute>
+                <AdminLayout>
+                  <SurfQuickRulePage />
                 </AdminLayout>
               </ProtectedRoute>
             }

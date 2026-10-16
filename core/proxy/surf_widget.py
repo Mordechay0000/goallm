@@ -2,54 +2,32 @@
 Surf widget: inject a collapsible sidebar into every allowed HTML page.
 - Small tab on the left edge opens a panel with:
   - "דיווח" = link to request block (CRM request-change with action=block)
-  - For admin (from token): show allowing rule and "חסום את האתר" to create block rule.
-Token is created by the proxy (shared secret with CRM) so CRM can verify the bound user.
+  - For admin (from the core DB is_admin flag): quick allow/block rule via a CRM page.
+No secret/token is placed in the page: anything injected into a third-party page can be read by that
+page's own scripts (ads, analytics). Admin actions are links to a CRM page that uses the admin's normal
+login and asks for an explicit confirmation click.
 """
-import base64
-import hashlib
-import hmac
 import html
 import json
 import logging
-import os
 import re
-import time
 from urllib.parse import quote, urlparse
-from typing import Optional, Any
-import urllib.request
+from typing import Optional
 
 from core.flow.site_policy_pages import CRM_API_URL, CRM_FRONTEND_URL
-from data.constants import CRM_PROXY_SECRET, SURF_TOKEN_TTL_SEC
+from core.policy.policy_cache import get_user_is_admin
 
 logger = logging.getLogger(__name__)
 
-# Cache is_admin per user_id to avoid calling CRM on every HTML response (TTL 60s).
-_surf_admin_cache: dict[int, tuple[bool, float]] = {}
-_SURF_ADMIN_CACHE_TTL = 60.0
-
 
 def get_surf_user_is_admin(user_id: Optional[int]) -> bool:
-    """Return True if user_id is an admin (for surf widget injection). Uses CRM internal API; on failure returns False."""
+    """True if user_id is an admin. Read from the core DB (synced by the CRM) – no HTTP call on the hot path."""
     if user_id is None:
         return False
-    now = time.time()
-    if user_id in _surf_admin_cache:
-        cached, t = _surf_admin_cache[user_id]
-        if now - t < _SURF_ADMIN_CACHE_TTL:
-            return cached
     try:
-        base = (CRM_API_URL or "").rstrip("/")
-        url = f"{base}/internal/surf-user-info?user_id={user_id}&secret={quote(CRM_PROXY_SECRET or '', safe='')}"
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=2) as r:
-            data = json.loads(r.read().decode())
-            is_admin = data.get("is_admin") is True
-            _surf_admin_cache[user_id] = (is_admin, now)
-            logger.debug("surf_widget: get_surf_user_is_admin user_id=%s -> is_admin=%s", user_id, is_admin)
-            return is_admin
+        return get_user_is_admin(user_id)
     except Exception as e:
-        _surf_admin_cache[user_id] = (False, now)
-        logger.warning("surf_widget: get_surf_user_is_admin user_id=%s failed: %s (using is_admin=False)", user_id, e)
+        logger.warning("surf_widget: is_admin lookup failed for user_id=%s: %s", user_id, e)
         return False
 
 
@@ -68,19 +46,6 @@ def _url_to_domain_path(url: str) -> tuple[str, str]:
         return domain, path
     except Exception:
         return "", "/"
-
-def create_surf_token(user_id: int) -> str:
-    """Create a signed token for the bound user (proxy → CRM verification)."""
-    expiry = int(time.time()) + SURF_TOKEN_TTL_SEC
-    payload = f"{user_id}:{expiry}"
-    payload_b64 = base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
-    sig = hmac.new(
-        CRM_PROXY_SECRET.encode(),
-        payload_b64.encode(),
-        digestmod=hashlib.sha256,
-    ).hexdigest()
-    return f"{payload_b64}.{sig}"
-
 
 def _request_change_link(request_url: str, action: str = "block") -> str:
     """CRM link to request-change page with URL and action prefilled."""
@@ -129,11 +94,9 @@ def inject_surf_widget(
         logger.warning("surf_widget: decode failed url=%s err=%s", (current_url or "")[:80], e)
         return html_body
 
-    token = create_surf_token(user_id)
     crm_api = json.dumps(CRM_API_URL)
     crm_frontend = json.dumps(CRM_FRONTEND_URL)
     current_url_esc = json.dumps(current_url)
-    token_esc = json.dumps(token)
     rule_json = json.dumps(rule, ensure_ascii=False) if rule else "null"
     rule_domain_js = json.dumps((rule.get("domain") or rule.get("domain_pattern") or "").strip()) if rule else '""'
     rule_path_js = json.dumps((rule.get("path") or rule.get("path_pattern") or "/").strip() or "/") if rule else '"/"'
@@ -143,8 +106,8 @@ def inject_surf_widget(
     current_domain, current_path = _url_to_domain_path(current_url)
     current_domain_js = json.dumps(current_domain)
     current_path_js = json.dumps(current_path)
-    # URL for "החל" button: open in new tab to apply rule and show summary
-    surf_rule_apply_base = f"{CRM_FRONTEND_URL.rstrip('/')}/surf-rule-apply?token={quote(token, safe='')}"
+    # "החל" opens a CRM page (admin login + confirmation click). No token in the URL or the page.
+    surf_rule_apply_base = f"{CRM_FRONTEND_URL.rstrip('/')}/admin/surf-quick-rule?source=surf"
     surf_rule_apply_base_js = json.dumps(surf_rule_apply_base)
 
     logger.info(
@@ -263,7 +226,6 @@ def inject_surf_widget(
     crmFrontend: {crm_frontend},
     surfRuleApplyBase: {surf_rule_apply_base_js},
     currentUrl: {current_url_esc},
-    token: {token_esc},
     rule: {rule_json},
     ruleDomain: {rule_domain_js},
     rulePath: {rule_path_js},

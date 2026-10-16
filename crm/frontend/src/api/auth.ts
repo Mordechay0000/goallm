@@ -123,6 +123,11 @@ export const authApi = {
     return response.data;
   },
 
+  getMyLockedSettings: async (): Promise<string[]> => {
+    const response = await apiClient.get<{ locked_settings: string[] }>('/api/user/me/locked-settings');
+    return response.data.locked_settings;
+  },
+
   getProfile: async (): Promise<User> => {
     const response = await apiClient.get<User>('/api/user/me');
     return response.data;

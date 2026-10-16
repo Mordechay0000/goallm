@@ -19,6 +19,7 @@ import {
 } from '@mui/material';
 import { Delete as DeleteIcon } from '@mui/icons-material';
 import { bindingsApi, type IpBinding } from '../api/bindings';
+import ProxyCredentialsCard from '../components/ProxyCredentialsCard';
 
 type SortBy = 'ip' | 'created_at' | 'last_used_at';
 type SortOrder = 'asc' | 'desc';
@@ -94,6 +95,11 @@ const ConnectionsPage: React.FC = () => {
         </Alert>
       )}
 
+      <ProxyCredentialsCard />
+
+      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>
+        מכשירים מחוברים לפי כתובת IP
+      </Typography>
       <Paper>
         <TableContainer>
           <Table size="small">

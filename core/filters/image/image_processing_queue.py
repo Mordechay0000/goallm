@@ -10,7 +10,9 @@ from data.constants import (
     DEFAULT_ANALYSIS_TIMEOUT_SECONDS,
     WATCHDOG_INTERVAL_SECONDS,
     DEFAULT_MAX_WORKERS,
+    IMAGE_QUEUE_MAX,
 )
+from core.filters.image.analysis import analyze_image_frames
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +50,7 @@ class ImageProcessingQueue:
         analysis_timeout_seconds: float = DEFAULT_ANALYSIS_TIMEOUT_SECONDS,
         watchdog_interval_seconds: float = WATCHDOG_INTERVAL_SECONDS,
         max_workers: int = DEFAULT_MAX_WORKERS,
+        max_queue: int = IMAGE_QUEUE_MAX,
     ) -> None:
         self.max_workers = max(1, int(max_workers))
         logger.info(
@@ -60,8 +63,13 @@ class ImageProcessingQueue:
         self.on_task_done = on_task_done
         self.analysis_timeout_seconds = analysis_timeout_seconds
         self.watchdog_interval_seconds = watchdog_interval_seconds
-        self.queue = queue.Queue()
+        # Analyzers that cannot run concurrently (local llama.cpp) cap the worker count themselves.
+        cap = getattr(image_analyzer, "max_concurrency", None)
+        if cap:
+            self.max_workers = max(1, min(self.max_workers, int(cap)))
+        self.queue = queue.Queue(maxsize=max(0, int(max_queue)))
         self.tasks = {}
+        self._inflight: set[str] = set()
         self._tasks_lock = threading.Lock()
         self._shutdown = threading.Event()
         self._workers: list[threading.Thread] = []
@@ -78,14 +86,23 @@ class ImageProcessingQueue:
     def wait_until_done(self) -> None:
         self.queue.join()
 
+    def is_inflight(self, image_hash: str) -> bool:
+        with self._tasks_lock:
+            return image_hash in self._inflight
+
     def enqueue(
         self,
         image_content: bytes,
         image_mime_type: str,
         image_details: dict | None = None,
-    ) -> str:
+    ) -> str | None:
+        """Queue an image for analysis. Returns the task id, or None if the same image is already
+        queued/processing (dedupe) or the queue is full."""
         details = image_details or {}
         image_hash = details.get("image_hash", "unknown")
+        with self._tasks_lock:
+            if image_hash in self._inflight:
+                return None
         logger.info(
             "Enqueueing image for processing - Hash: %s, MIME: %s, Size: %s bytes",
             _hash_prefix(image_hash),
@@ -99,9 +116,17 @@ class ImageProcessingQueue:
             image_mime_type=image_mime_type,
             image_details=details,
         )
-        self.tasks[task.task_id] = task
+        with self._tasks_lock:
+            if image_hash in self._inflight:
+                return None
+            try:
+                self.queue.put_nowait(task)
+            except queue.Full:
+                logger.warning("Image queue full (%s) – not enqueuing %s", self.queue.maxsize, _hash_prefix(image_hash))
+                return None
+            self._inflight.add(image_hash)
+            self.tasks[task.task_id] = task
         logger.debug("Created task with ID: %s", task.task_id)
-        self.queue.put(task)
         logger.info("Task %s added to queue. Queue size: %s", task.task_id, self.queue.qsize())
         return task.task_id
 
@@ -112,9 +137,7 @@ class ImageProcessingQueue:
     def _run_analyzer(self, task: ImageTask) -> None:
         """Run analyzer in a thread; set task.result/status/error when done."""
         try:
-            result = self.image_analyzer.analyze_image(
-                task.image_content, task.image_mime_type
-            )
+            result = analyze_image_frames(self.image_analyzer, task.image_content, task.image_mime_type)
             task.result = result
             task.status = TaskStatus.DONE
         except Exception as e:
@@ -192,6 +215,7 @@ class ImageProcessingQueue:
                         cb_err,
                     )
 
+            self._forget(task)
             self.queue.task_done()
             logger.info(
                 "Task %s finished - Status: %s. Queue size: %s",
@@ -199,6 +223,13 @@ class ImageProcessingQueue:
                 task.status.value,
                 self.queue.qsize(),
             )
+
+    def _forget(self, task: ImageTask) -> None:
+        """Drop the finished task (the old code kept every task – and its image bytes – forever)."""
+        with self._tasks_lock:
+            self.tasks.pop(task.task_id, None)
+            self._inflight.discard(task.image_details.get("image_hash", "unknown"))
+        task.image_content = b""
 
     def _watchdog_loop(self):
         """Periodically mark tasks stuck in PROCESSING as ERROR so they are not forgotten."""

@@ -7,11 +7,12 @@ import logging
 from pathlib import Path
 from typing import Tuple
 
+from data.constants import STORAGE_DIR
 from data.upload_config import AVATAR_MAX_BYTES, AVATAR_ALLOWED_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
-UPLOADS_DIR = Path(__file__).resolve().parent.parent / ".storage" / "uploads" / "avatars"
+UPLOADS_DIR = STORAGE_DIR / "uploads" / "avatars"
 ALLOWED_MIMES = {"image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp"}
 
 # Magic bytes (file signatures). No executables.

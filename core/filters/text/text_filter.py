@@ -225,6 +225,40 @@ def _filter_plain_text(
     return "".join(arr), block_page, block_reason, debug_info
 
 
+_META_CHARSET_RE = re.compile(rb"""<meta[^>]+charset=["']?\s*([A-Za-z0-9_\-]+)""", re.IGNORECASE)
+
+
+def _declared_charset(content: bytes, content_type: str) -> Optional[str]:
+    ct = content_type or ""
+    if "charset=" in ct.lower():
+        for part in ct.split(";"):
+            part = part.strip()
+            if part.lower().startswith("charset="):
+                return part.split("=", 1)[1].strip().strip("\"'") or None
+    m = _META_CHARSET_RE.search(content[:4096])
+    if m:
+        return m.group(1).decode("ascii", errors="ignore") or None
+    return None
+
+
+def _decode_body(content: bytes, content_type: str) -> Tuple[str, str]:
+    """Decode with the declared charset (header, then <meta>), falling back to UTF-8. Returns (text, encoding)."""
+    declared = _declared_charset(content, content_type)
+    for enc in ([declared] if declared else []) + ["utf-8"]:
+        try:
+            return content.decode(enc), enc
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return content.decode("utf-8", errors="replace"), "utf-8"
+
+
+def _encode_like_source(text: str, encoding: str, html: bool) -> bytes:
+    try:
+        return text.encode(encoding, errors="xmlcharrefreplace" if html else "replace")
+    except LookupError:
+        return text.encode("utf-8", errors="replace")
+
+
 def _filter_json_value(value: Any) -> Any:
     """Recursively walk JSON; filter only string values."""
     if isinstance(value, str):
@@ -245,6 +279,10 @@ def _filter_json(text: str, url: str, content_type: str) -> Tuple[bytes, Dict[st
         logger.warning("JSON parse failed for text filter %s: %s", url or content_type, e)
         return text.encode("utf-8"), {"url": url, "content_type": content_type, "block_reason": "", "matched": [], "counts": {}, "snippet": ""}
     filtered_data = _filter_json_value(data)
+    if filtered_data == data:
+        # Nothing masked: return the original bytes untouched (re-serializing changes escapes/number
+        # formatting and can break clients that sign or diff the payload).
+        return text.encode("utf-8"), {"url": url, "content_type": content_type or "", "block_reason": "", "matched": [], "counts": {}, "snippet": ""}
     try:
         out = json.dumps(filtered_data, ensure_ascii=False)
         return out.encode("utf-8"), {"url": url, "content_type": content_type or "", "block_reason": "", "matched": [], "counts": {}, "snippet": ""}
@@ -304,17 +342,7 @@ def filter_text_content(
         return content, False, "", empty_debug
 
     try:
-        if "charset=" in (content_type or ""):
-            for enc in ("utf-8", "windows-1255", "iso-8859-1"):
-                try:
-                    text = content.decode(enc)
-                    break
-                except UnicodeDecodeError:
-                    continue
-            else:
-                text = content.decode("utf-8", errors="replace")
-        else:
-            text = content.decode("utf-8", errors="replace")
+        text, used_encoding = _decode_body(content, content_type)
 
         ct_lower = (content_type or "").lower()
         is_json = "application/json" in ct_lower or (
@@ -323,6 +351,10 @@ def filter_text_content(
         if is_json:
             logger.debug("text_filter: treating as JSON (content_type=%s)", content_type)
             out_bytes, debug_info = _filter_json(text, url, content_type)
+            if out_bytes == text.encode("utf-8"):
+                out_bytes = content  # unchanged: original bytes, original charset
+            elif used_encoding.lower().replace("_", "-") not in ("utf-8", "utf8"):
+                out_bytes = _encode_like_source(out_bytes.decode("utf-8"), used_encoding, html=False)
             block_page = False
             block_reason = ""
         else:
@@ -330,11 +362,11 @@ def filter_text_content(
             logger.debug("text_filter: decoded len=%s is_html=%s", len(text), is_html)
 
             if is_html:
-                out_bytes, block_page, block_reason, debug_info = _filter_html(text, url, content_type)
+                out_bytes, block_page, block_reason, debug_info = _filter_html(text, url, content_type, used_encoding)
                 logger.debug("text_filter: _filter_html done block_page=%s reason=%s", block_page, block_reason)
             else:
                 filtered, block_page, block_reason, debug_info = _filter_plain_text(text)
-                out_bytes = filtered.encode("utf-8")
+                out_bytes = content if filtered == text else _encode_like_source(filtered, used_encoding, html=False)
                 logger.debug("text_filter: _filter_plain_text done block_page=%s reason=%s", block_page, block_reason)
 
         full_debug: Dict[str, Any] = {
@@ -370,7 +402,7 @@ def _is_inside_skip_tag(node) -> bool:
     return False
 
 
-def _filter_html(html_text: str, url: str, content_type: str) -> Tuple[bytes, bool, str, Dict[str, Any]]:
+def _filter_html(html_text: str, url: str, content_type: str, encoding: str = "utf-8") -> Tuple[bytes, bool, str, Dict[str, Any]]:
     """
     Parse HTML, filter each text node. Replace only matched words with X's (not entire component).
     Block page when ratio of components with detection >= MIN_PERCENTAGE and count >= MIN_COMPONENTS.
@@ -449,7 +481,7 @@ def _filter_html(html_text: str, url: str, content_type: str) -> Tuple[bytes, bo
         block_page, block_reason, components_with_detection, total_components,
     )
 
-    out = str(soup)
-    if soup.original_encoding:
-        return out.encode(soup.original_encoding), block_page, block_reason, out_debug
-    return out.encode("utf-8"), block_page, block_reason, out_debug
+    out = soup.decode(eventual_encoding=encoding)  # keeps <meta charset> consistent with the bytes we emit
+    # Re-encode in the charset the page declared (windows-1255 Hebrew sites used to come back as UTF-8
+    # under a windows-1255 header = garbled text). Characters the charset lacks become &#NNN; refs.
+    return _encode_like_source(out, encoding, html=True), block_page, block_reason, out_debug

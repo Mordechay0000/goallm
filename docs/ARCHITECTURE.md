@@ -32,14 +32,15 @@
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
 │  core/proxy/mitmproxy_addon.py  →  FilterAddon.request()                                 │
 │  ─────────────────────────────────────────────────────────────────────────────────────  │
-│  • client_ip ← X-Forwarded-For / peername                                                │
+│  • identity ← פרטי התחברות אישיים לפרוקסי (proxy_auth.py) או שיוך IP                       │
+│  • client_ip ← peername (X-Forwarded-For רק מ-TRUSTED_PROXY_IPS – core/net_utils.py)       │
 │  • 1.2.3.4 / filter.check → הפניה ל־CRM /diagnostic                                      │
 │  • core/policy/policy_database.py: get_user_id_for_ip(client_ip)                         │
 │  • IP לא מאוגד → redirect ל־bind או 403 (data/landing_pages.py: UNBOUND_IP_HTML)         │
 │  • core/policy/policy_loader.py: get_policy_resolver(user_id)                             │
 │  • core/policy/url_policy_resolver.py: resolver.resolve(url, "*")                        │
 │  • block/review → core/flow/site_policy_pages.py: get_blocked_page_bytes / get_send_...  │
-│  • Touch IP (background) → CRM /api/internal/touch-ip                                     │
+│  • Touch IP (פעם ב-5 דקות לכל IP) → CRM /api/internal/touch-ip                            │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -244,12 +245,16 @@ flowchart TB
 
 ## 7. סנכרון CRM ↔ Core
 
+הסנכרון רץ כטרנזקציה אחת על ה-DB של core ומבוסס diff (רק שורות שהשתנו). הפרוקסי מחזיק מטמון בזיכרון
+(`core/policy/policy_cache.py`) ומרענן אותו לפי מונה שינויים (`meta.policy_version`) – לכל היותר פעם בשנייה.
+
 | פונקציה | מקור | יעד | מתי |
 |---------|------|-----|-----|
 | `sync_crm_rules_to_core(user_id)` | CRM rules, profiles | policy_database.url_policies | אחרי שינוי חוקים |
 | `sync_ip_bindings_to_core()` | CRM ip_bindings | policy_database.ip_bindings | הפעלה, שינוי bindings |
 | `sync_allowed_file_downloads_to_core()` | CRM allowed files | policy_database | הפעלה |
 | `sync_site_injections_to_core()` | CRM site_injections | policy_database | אחרי שינוי injections |
+| `sync_users_to_core()` | CRM users (is_admin, hash פרטי פרוקסי) | policy_database.proxy_users | הרשמה, שינוי מנהל, יצירת סיסמה, מחיקה |
 
 ---
 

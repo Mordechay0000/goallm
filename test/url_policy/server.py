@@ -290,7 +290,7 @@ def api_resolve(body: dict) -> tuple[int, dict]:
         {"domain": r["domain"], "path": r.get("path") or None, "type": r.get("type", "*")}
         for r in policies
     ]
-    resolver = URLPolicyResolver(rules)
+    resolver = URLPolicyResolver(rules, debug=True)  # debug log is opt-in
     try:
         rule = resolver.resolve(url, req_type)
     except URLPolicyResolverError as e:
