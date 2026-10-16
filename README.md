@@ -1,5 +1,10 @@
 # Goallm
 
+> **English overview** – Goallm is a real-time content-filtering proxy built on [mitmproxy](https://mitmproxy.org/).
+> It inspects HTTP/HTTPS responses (text, HTML, images, PDF) and decides what to allow or block by **per-site policies**, **profiles**, **schedules**, **tags** and **content type** – not just by domain.
+> Everything is managed from an admin panel built with **FastAPI + React**: profiles, rules (with CSV import/export), weekly schedules, and statistics.
+> Tech: Python · mitmproxy · FastAPI · React. The full documentation below is in Hebrew.
+
 פרוקסי סינון מבוסס [mitmproxy](https://mitmproxy.org/) שמעבד בזמן אמת תגובות HTTP/HTTPS (טקסט, HTML, תמונות, PDF) לפי **מדיניות אתר**, **פרופילים** ו**חוקים** שנשלטים מממשק **CRM** (FastAPI + React). המערכת מתאימה למי שרוצה שכבת בקרה עמוקה — לא רק חסימת דומיין, אלא החלטות לפי כתובת, תזמונים, תגיות וסוג תוכן.
 
 ---
