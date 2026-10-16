@@ -2,6 +2,7 @@
 
 > **English overview** – Goallm is a real-time content-filtering proxy built on [mitmproxy](https://mitmproxy.org/).
 > It inspects HTTP/HTTPS responses (text, HTML, images, PDF) and decides what to allow or block by **per-site policies**, **profiles**, **schedules**, **tags** and **content type** – not just by domain.
+> Images can be analyzed by an optional **local vision LLM** (Qwen3-VL via llama.cpp), and text filtering uses stemming for morphological matching.
 > Everything is managed from an admin panel built with **FastAPI + React**: profiles, rules (with CSV import/export), weekly schedules, and statistics.
 > Tech: Python · mitmproxy · FastAPI · React. The full documentation below is in Hebrew.
 
