@@ -6,7 +6,7 @@
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  Alert, Box, Button, Card, CardActions, CardContent, CardMedia, Chip, Grid, Paper, Stack, Tab, Tabs, Typography,
+  Alert, Box, Button, Card, CardActions, CardContent, CardMedia, Chip, Grid, Link, Paper, Stack, Tab, Tabs, Typography,
 } from '@mui/material';
 import { reviewQueueApi, VIDEO_STATUS_LABELS, type ReviewImage, type VideoReview } from '../api/review';
 
@@ -122,14 +122,20 @@ const VideosTab: React.FC = () => {
               ) : null}
             </Box>
             <Box sx={{ flex: 1 }}>
-              <Typography sx={{ wordBreak: 'break-all', direction: 'ltr', textAlign: 'left' }}>{v.source_url}</Typography>
+              {/^https?:\/\//.test(v.source_url || '') ? (
+                <Link href={v.source_url} target="_blank" rel="noopener noreferrer" sx={{ wordBreak: 'break-all', direction: 'ltr', textAlign: 'left', display: 'block' }}>
+                  {v.source_url}
+                </Link>
+              ) : (
+                <Typography sx={{ wordBreak: 'break-all', direction: 'ltr', textAlign: 'left' }}>{v.source_url}</Typography>
+              )}
               <Stack direction="row" spacing={1} sx={{ my: 1, flexWrap: 'wrap' }}>
                 <Chip label={VIDEO_STATUS_LABELS[v.status || ''] || v.status} />
                 {v.duration_sec != null && <Chip size="small" label={`${Math.round(v.duration_sec)} שניות`} />}
                 {v.frames_sampled != null && (
                   <Chip size="small" label={`נבדקו ${v.frames_analyzed ?? 0} מתוך ${v.frames_sampled} פריימים`} />
                 )}
-                {v.blocked_at_sec != null && <Chip size="small" color="warning" label={`פריים בשנייה ${Math.round(v.blocked_at_sec)}`} />}
+                {v.blocked_at_sec != null && <Chip size="small" color="warning" label={`בשנייה ${Math.round(v.blocked_at_sec)}`} />}
               </Stack>
               {v.reason && <Typography variant="body2" color="text.secondary">{v.reason}</Typography>}
               <Stack direction="row" spacing={1} sx={{ mt: 1 }}>

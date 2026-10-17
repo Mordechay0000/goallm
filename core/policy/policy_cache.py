@@ -94,8 +94,12 @@ def get_policy_resolver(user_id: Optional[int]):
 
 
 def is_media_approved(url: str) -> bool:
-    """A video approved by per-video review (or a child URL of an approved HLS manifest)."""
+    """A video approved by per-video review, a child URL of an approved HLS manifest, or a DASH segment of one."""
     key = pdb.canonical_media_key(url)
     if key in _cached("approved_media", None, pdb.get_approved_media_keys):
         return True
-    return pdb.is_approved_media_child(key)
+    return pdb.is_approved_media_child(key) or pdb.is_approved_media_pattern(url)
+
+
+def get_learned_passthrough() -> set:
+    return _cached("learned_passthrough", None, pdb.get_learned_passthrough_hosts)

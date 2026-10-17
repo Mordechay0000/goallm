@@ -171,6 +171,7 @@ export interface FilterSwitches {
   file_share_block: boolean;
   google_search_filter: boolean;
   video_filter: boolean;
+  audio_filter: boolean;
 }
 
 export interface GlobalRule {

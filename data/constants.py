@@ -168,6 +168,21 @@ CODE_EXPIRE_MINUTES = 10
 RATE_LIMIT_MINUTES = 2
 # מקסימום ניסיונות שגויים לקוד אחד – אחרי זה הקוד נמחק (מונע ניחוש של 10^6 אפשרויות).
 CODE_MAX_ATTEMPTS = 5
+# שליחת הקוד. אימייל: SMTP. SMS: twilio | webhook (ספק ישראלי דרך מתאם HTTP קטן) | none.
+# בלי ספק מוגדר – כניסה עם קוד לא זמינה (הקוד כבר לא נכתב ללוג). לפיתוח בלבד: OTP_DEV_LOG_CODES=1.
+SMTP_HOST = (os.environ.get("SMTP_HOST") or "").strip()
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_USER = (os.environ.get("SMTP_USER") or "").strip()
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD") or ""
+SMTP_FROM = (os.environ.get("SMTP_FROM") or SMTP_USER).strip()
+SMTP_SECURITY = (os.environ.get("SMTP_SECURITY") or "starttls").strip().lower()  # starttls | ssl | none
+SMS_PROVIDER = (os.environ.get("SMS_PROVIDER") or "none").strip().lower()
+TWILIO_ACCOUNT_SID = (os.environ.get("TWILIO_ACCOUNT_SID") or "").strip()
+TWILIO_AUTH_TOKEN = (os.environ.get("TWILIO_AUTH_TOKEN") or "").strip()
+TWILIO_FROM = (os.environ.get("TWILIO_FROM") or "").strip()
+SMS_WEBHOOK_URL = (os.environ.get("SMS_WEBHOOK_URL") or "").strip()
+SMS_WEBHOOK_TOKEN = (os.environ.get("SMS_WEBHOOK_TOKEN") or "").strip()
+OTP_DEV_LOG_CODES = (os.environ.get("OTP_DEV_LOG_CODES") or "0").strip().lower() in ("1", "true", "yes", "on")
 
 # ========== תמונות – ניתוח ותור ==========
 # (legacy) USE_LLM_IMAGE_ANALYZER=1 שווה ל-IMAGE_ANALYZER=llama_cpp.
@@ -217,6 +232,44 @@ VIDEO_FORCE_ANALYZE_SEC = float(os.environ.get("VIDEO_FORCE_ANALYZE_SEC", "15"))
 VIDEO_MAX_DURATION_SEC = int(os.environ.get("VIDEO_MAX_DURATION_SEC", "7200"))
 # רזולוציית הפריים שנשלח למודל (צלע ארוכה).
 VIDEO_FRAME_MAX_SIDE = int(os.environ.get("VIDEO_FRAME_MAX_SIDE", "1280"))
+# ========== אפליקציות עם certificate pinning (אנדרואיד / iOS) ==========
+# אפליקציה שלא סומכת על תעודת הפרוקסי נכשלת. 1 = אחרי AUTO_PASSTHROUGH_MIN_FAILURES כישלונות לאותו דומיין,
+# אם האתר מותר במפורש ברשימה של המשתמש – החיבור עובר בלי פתיחת ההצפנה (התוכן בתוכו לא מסונן!).
+# 0 (ברירת מחדל) = האפליקציה פשוט לא עובדת. החלטה שלכם: עדיף שבור או לא מסונן באתרים שאישרתם.
+AUTO_PASSTHROUGH_PINNED_APPS = (os.environ.get("AUTO_PASSTHROUGH_PINNED_APPS") or "0").strip().lower() in ("1", "true", "yes", "on")
+AUTO_PASSTHROUGH_MIN_FAILURES = int(os.environ.get("AUTO_PASSTHROUGH_MIN_FAILURES", "2"))
+
+# ========== סינון מלל – חוות דעת שנייה ממודל השפה ==========
+# דף שרשימת המילים מצאה בו לפחות TEXT_LLM_MIN_MATCHES מילים אבל לא מספיק לחסימה → המודל (VLM_API_BASE) שופט
+# את הדף כולו לפי ההקשר. 0 = כבוי (ברירת מחדל: דורש שרת מודל, ומוסיף עד TEXT_LLM_TIMEOUT_SEC לדפים כאלה).
+TEXT_LLM_REVIEW = (os.environ.get("TEXT_LLM_REVIEW") or "0").strip().lower() in ("1", "true", "yes", "on")
+TEXT_LLM_MIN_MATCHES = int(os.environ.get("TEXT_LLM_MIN_MATCHES", "1"))
+TEXT_LLM_TIMEOUT_SEC = float(os.environ.get("TEXT_LLM_TIMEOUT_SEC", "4"))
+TEXT_LLM_MAX_CHARS = int(os.environ.get("TEXT_LLM_MAX_CHARS", "4000"))
+
+# ========== אודיו (קול אישה) – בבדיקת סרטון ובקבצי שמע ==========
+# AUDIO_ANALYZER=openai – מודל שמע בשרת תואם OpenAI (vLLM עם Qwen3-Omni / Qwen2-Audio). none = כבוי.
+AUDIO_ANALYZER = (os.environ.get("AUDIO_ANALYZER") or "none").strip().lower()
+AUDIO_API_BASE = (os.environ.get("AUDIO_API_BASE") or VLM_API_BASE).rstrip("/")
+AUDIO_API_KEY = (os.environ.get("AUDIO_API_KEY") or VLM_API_KEY or "").strip()
+AUDIO_MODEL = (os.environ.get("AUDIO_MODEL") or "Qwen/Qwen3-Omni-30B-A3B-Instruct").strip()
+# חוסמים שירה של אישה תמיד. דיבור של אישה – רק אם AUDIO_BLOCK_SPEECH=1 (החלטה הלכתית – שלכם).
+AUDIO_BLOCK_SPEECH = (os.environ.get("AUDIO_BLOCK_SPEECH") or "0").strip().lower() in ("1", "true", "yes", "on")
+# אורך מקטע שנשלח למודל (שניות), ומקטע שקט מתחת לעוצמה הזו (dBFS) לא נשלח.
+AUDIO_CHUNK_SEC = int(os.environ.get("AUDIO_CHUNK_SEC", "20"))
+AUDIO_SILENCE_DBFS = float(os.environ.get("AUDIO_SILENCE_DBFS", "-45"))
+AUDIO_YES_THRESHOLD = float(os.environ.get("AUDIO_YES_THRESHOLD", str(VLM_YES_THRESHOLD)))
+AUDIO_REVIEW_LOW = float(os.environ.get("AUDIO_REVIEW_LOW", str(VLM_REVIEW_LOW)))
+# בלי מנתח שמע: סרטון עם פס קול לא נפתח אוטומטית אלא עובר לבודק אנושי (1, ברירת מחדל – fail-closed).
+# 0 = לאשר לפי הפריימים בלבד (הקול לא נבדק).
+VIDEO_REQUIRE_AUDIO_CHECK = (os.environ.get("VIDEO_REQUIRE_AUDIO_CHECK") or "1").strip().lower() not in ("0", "false", "no", "off")
+
+# יוטיוב: הבודק מוריד דרך yt-dlp. משרתי ענן יוטיוב מבקש לפעמים "אישור שאינך בוט" –
+# אז צריך קובץ עוגיות (Netscape cookies.txt של חשבון ייעודי) ו/או פרוקסי ביתי.
+YTDLP_COOKIES_FILE = (os.environ.get("YTDLP_COOKIES_FILE") or "").strip() or None
+YTDLP_PROXY = (os.environ.get("YTDLP_PROXY") or "").strip() or None
+# רזולוציה מקסימלית להורדה לבדיקה (גובה). 720 מספיק לדמות קטנה ברקע; יותר = יותר תעבורה.
+VIDEO_YTDLP_MAX_HEIGHT = int(os.environ.get("VIDEO_YTDLP_MAX_HEIGHT", "720"))
 
 # מקסימום משימות שמחכות בתור (מעבר לזה – לא נכנסות, והבקשה הבאה לאותה תמונה תנסה שוב).
 IMAGE_QUEUE_MAX = int(os.environ.get("IMAGE_QUEUE_MAX", "5000"))

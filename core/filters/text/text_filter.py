@@ -22,6 +22,7 @@ from core.filters.text.text_filter_config import (
     MIN_COMPONENTS_WITH_DETECTION_FOR_PAGE_BLOCK,
     SUPPORTED_LANGS,
 )
+from data.constants import TEXT_LLM_MAX_CHARS, TEXT_LLM_MIN_MATCHES, TEXT_LLM_REVIEW
 
 logger = logging.getLogger(__name__)
 
@@ -104,8 +105,7 @@ def _load_blocked_words(lang: str) -> set:
     return words
 
 
-def _is_listed(word: str, lang: str) -> bool:
-    """Return True if word (or its stem) is in blocked list for this language."""
+def _is_listed_exact(word: str, lang: str) -> bool:
     w = word.lower() if lang == "en" else _normalize_hebrew(word)
     blocked = _load_blocked_words(lang)
     if w in blocked:
@@ -114,9 +114,67 @@ def _is_listed(word: str, lang: str) -> bool:
     return stem_w in blocked
 
 
+# --- evasion: s3x, $ex, seeexxx (a listed word written so a plain lookup misses it) ---
+_LEET = str.maketrans({"0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "8": "b", "9": "g", "@": "a", "$": "s"})
+_REPEATS = re.compile(r"(.)\1{2,}")
+
+
+def _variants(word: str, lang: str) -> List[str]:
+    out = [word]
+    if _REPEATS.search(word):
+        out += [_REPEATS.sub(r"\1", word), _REPEATS.sub(r"\1\1", word)]
+    if lang == "en" and re.search(r"[0-9@$]", word) and re.search(r"[A-Za-z]", word):
+        leet = word.lower().translate(_LEET)
+        out += [leet, leet.replace("i", "l")]
+    return out
+
+
+def _is_listed(word: str, lang: str) -> bool:
+    """Return True if word (or its stem, or an evasive spelling of it) is in blocked list for this language."""
+    return any(_is_listed_exact(v, lang) for v in _variants(word, lang))
+
+
+# --- evasion: invisible characters inside a word, and look-alike letters from other scripts ---
+_INVISIBLE = set("\u00ad\u200b\u200c\u200d\u200e\u200f\u2060\u2061\u2062\u2063\u2064\ufeff\u034f\u180e")
+_HOMOGLYPHS = str.maketrans({
+    # Cyrillic
+    "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "х": "x", "у": "y", "к": "k", "м": "m", "т": "t",
+    "в": "b", "н": "h", "і": "i", "ј": "j", "ѕ": "s", "А": "A", "Е": "E", "О": "O", "Р": "P", "С": "C",
+    "Х": "X", "У": "Y", "К": "K", "М": "M", "Т": "T", "В": "B", "Н": "H", "І": "I", "Ѕ": "S",
+    # Greek
+    "α": "a", "ε": "e", "ο": "o", "ρ": "p", "χ": "x", "ν": "v", "ι": "i", "κ": "k", "τ": "t",
+    "Α": "A", "Ε": "E", "Ο": "O", "Ρ": "P", "Χ": "X", "Ι": "I", "Κ": "K", "Τ": "T", "Ν": "N",
+})
+
+
+def _normalize_for_matching(text: str) -> Tuple[str, List[int]]:
+    """Text with invisible chars removed and look-alikes mapped (1:1), plus norm-index → original-index map."""
+    chars: List[str] = []
+    index: List[int] = []
+    for i, c in enumerate(text):
+        if c in _INVISIBLE:
+            continue
+        chars.append(c)
+        index.append(i)
+    return "".join(chars).translate(_HOMOGLYPHS), index
+
+
+# "s e x", "s.e.x", "ס-ק-ס": single letters with one separator between them
+_SPACED_RE = re.compile(r"(?<![\w\u0590-\u05FF])(?:[A-Za-z\u05D0-\u05EA][ .\-_*·•]){2,}[A-Za-z\u05D0-\u05EA](?![\w\u0590-\u05FF])")
+
+
+def _spaced_matches(norm: str, langs: List[str]) -> List[Tuple[int, int]]:
+    out = []
+    for m in _SPACED_RE.finditer(norm):
+        joined = "".join(c for c in m.group(0) if c.isalpha())
+        if any(_is_listed(joined, lang) for lang in langs):
+            out.append((m.start(), m.end()))
+    return out
+
+
 def _tokenize_words(text: str) -> List[Tuple[str, int, int]]:
-    """Return list of (word, start, end) for Hebrew+English word chars."""
-    pattern = re.compile(r"[\u0590-\u05FFa-zA-Z0-9]+")
+    """Return list of (word, start, end) for Hebrew+English word chars (plus @ $ used as letters: $ex)."""
+    pattern = re.compile(r"[\u0590-\u05FFa-zA-Z0-9@$]+")
     return [(m.group(0), m.start(), m.end()) for m in pattern.finditer(text)]
 
 
@@ -135,18 +193,32 @@ def filter_paragraph_for_pdf(text: str, lang_hint: Optional[str] = None) -> Tupl
     if not text or not text.strip():
         return text, False
     langs = list(SUPPORTED_LANGS) if lang_hint is None else [lang_hint]
+    ranges = _find_matches(text, langs)
+    if not ranges:
+        return text, False
     arr = list(text)
-    has_detection = False
-    for word, start, end in _tokenize_words(text):
-        for lang in langs:
-            if _is_listed(word, lang):
-                has_detection = True
-                for i in range(start, end):
-                    arr[i] = "X"
-                break
-    if has_detection:
-        return "".join(arr), True
-    return text, False
+    for start, end, _ in ranges:
+        for i in range(start, end):
+            arr[i] = "X"
+    return "".join(arr), True
+
+
+def _find_matches(text: str, langs: List[str]) -> List[Tuple[int, int, str]]:
+    """Listed words in text as (start, end, original_text) in ORIGINAL positions – evasive spellings included."""
+    norm, index = _normalize_for_matching(text)
+    found: List[Tuple[int, int]] = []
+    for word, start, end in _tokenize_words(norm):
+        if any(_is_listed(word, lang) for lang in langs):
+            found.append((start, end))
+    for start, end in _spaced_matches(norm, langs):
+        found.append((start, end))
+    out = []
+    for start, end in sorted(set(found)):
+        o_start, o_end = index[start], index[end - 1] + 1
+        if out and o_start < out[-1][1]:
+            continue  # overlaps a match already taken
+        out.append((o_start, o_end, text[o_start:o_end]))
+    return out
 
 
 def _snippet_around_match(text: str, start: int, end: int, max_before: int = 120, max_after: int = 120, max_total: int = 400) -> str:
@@ -177,16 +249,9 @@ def _filter_plain_text(
 
     langs = list(SUPPORTED_LANGS) if lang_hint is None else [lang_hint]
 
-    # Find all matched words
-    matched_ranges: List[Tuple[int, int, str]] = []
-    tokens = _tokenize_words(text)
-    total_words = len(tokens)
-
-    for word, start, end in tokens:
-        for lang in langs:
-            if _is_listed(word, lang):
-                matched_ranges.append((start, end, text[start:end]))
-                break
+    # Find all matched words (in original positions, so masking hits the right characters)
+    total_words = len(_tokenize_words(text))
+    matched_ranges: List[Tuple[int, int, str]] = _find_matches(text, langs)
 
     count_matched = len(matched_ranges)
     counts = {"matched": count_matched, "total": total_words}
@@ -369,6 +434,10 @@ def filter_text_content(
                 out_bytes = content if filtered == text else _encode_like_source(filtered, used_encoding, html=False)
                 logger.debug("text_filter: _filter_plain_text done block_page=%s reason=%s", block_page, block_reason)
 
+        if not is_json and not block_page:
+            block_page, block_reason = _llm_second_opinion(
+                debug_info, text if not is_html else None, block_page, block_reason
+            )
         full_debug: Dict[str, Any] = {
             "url": url,
             "content_type": content_type or "",
@@ -384,6 +453,21 @@ def filter_text_content(
     except Exception as e:
         logger.warning("Text filter failed for %s: %s", url or content_type, e)
         return content, False, "", {"url": url, "content_type": content_type or "", "block_reason": "", "matched": [], "counts": {}, "snippet": ""}
+
+
+def _llm_second_opinion(debug_info: Dict[str, Any], plain_text: Optional[str], block_page: bool, block_reason: str):
+    """Borderline page (some listed words, not enough to block) → the language model judges it in context."""
+    if not TEXT_LLM_REVIEW:
+        return block_page, block_reason
+    matched = (debug_info.get("counts") or {}).get("matched", 0)
+    if matched < TEXT_LLM_MIN_MATCHES:
+        return block_page, block_reason
+    from core.filters.text.llm_review import review_text
+
+    verdict = review_text(plain_text if plain_text is not None else debug_info.get("_excerpt", ""))
+    if verdict:
+        return True, f"llm_review: model judged the page inappropriate ({matched} listed words)"
+    return block_page, block_reason
 
 
 _SKIP_FILTER_TAGS = frozenset(("script", "style", "noscript", "template", "xmp", "iframe"))
@@ -422,6 +506,8 @@ def _filter_html(html_text: str, url: str, content_type: str, encoding: str = "u
     first_snippet = ""
     components_with_detection = 0
     total_components = 0
+    excerpt_parts: List[str] = []
+    excerpt_len = 0
 
     from bs4 import NavigableString
 
@@ -431,6 +517,9 @@ def _filter_html(html_text: str, url: str, content_type: str, encoding: str = "u
                 continue
             total_components += 1
             s = str(node)
+            if excerpt_len < TEXT_LLM_MAX_CHARS:
+                excerpt_parts.append(s.strip())
+                excerpt_len += len(s.strip()) + 1
             filtered, _block_ignored, _reason, debug_info = _filter_plain_text(s)
             count_matched = debug_info.get("counts", {}).get("matched", 0)
             count_total = debug_info.get("counts", {}).get("total", 0)
@@ -475,6 +564,7 @@ def _filter_html(html_text: str, url: str, content_type: str, encoding: str = "u
         "counts": {"matched": total_matched, "total": total_words},
         "snippet": first_snippet,
         "blocks_with": {"components_with_detection": components_with_detection, "total_components": total_components},
+        "_excerpt": " ".join(excerpt_parts),
     }
     logger.debug(
         "text_filter: _filter_html block_page=%s reason=%s components=%d/%d",

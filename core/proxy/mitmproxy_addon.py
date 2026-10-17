@@ -35,36 +35,53 @@ from core.flow.site_policy_pages import (
 )
 from core.filters.video.video_filter import (
     block_response_headers,
+    dash_children,
     hls_child_urls,
+    is_audio_response,
+    is_dash_manifest,
     is_hls_manifest,
     is_media_segment,
     is_streamable_media,
-    is_video_response,
+    is_video_request,
     video_allowed_for_rule,
 )
+from core.filters.video.youtube import is_googlevideo_playback
 from core.logger.logging_config import setup_logging
 from core.net_utils import resolve_client_ip
 from core.policy.policy_cache import (
     get_active_traffic_session_id,
     get_filter_switches,
+    get_learned_passthrough,
     get_policy_resolver,
     get_user_id_for_ip,
     is_media_approved,
 )
 from core.policy.policy_database import (
     add_approved_media_children,
+    add_approved_media_patterns,
     add_traffic_log_entry,
     canonical_media_key,
     record_blocked_media,
+    record_tls_client_failure,
 )
 from core.proxy.image_refresh import STATUS_PATH, strip_reload_param_from_request
 from core.proxy.proxy_auth import ProxyAuthenticator
+from core.proxy.video_overlay import (
+    VIDEO_REVIEW_PATH,
+    VIDEO_STATUS_PATH,
+    ReviewRateLimiter,
+    parse_payload as parse_video_payload,
+    request_review as request_video_review_from_overlay,
+    video_status,
+)
 from core.proxy_identity import HEADER as PROXY_USER_HEADER, sign_user
 from core.filters.image.data_uri_filter import filter_data_uri_images
 from core.filters.image.image_extraction import detect_image_mime
 from core.filters.image.image_status_manager import get_image_with_status, get_url_statuses
 from core.proxy.utils import format_flow_error, format_response_error
 from data.constants import (
+    AUTO_PASSTHROUGH_MIN_FAILURES,
+    AUTO_PASSTHROUGH_PINNED_APPS,
     FILTER_BIND_BASE_URL,
     CRM_PROXY_SECRET,
     CRM_BASE_URL,
@@ -164,6 +181,7 @@ class FilterAddon:
         self._touch_lock = threading.Lock()
         self._touched: dict[str, float] = {}
         self._recorded_media: dict[tuple, float] = {}
+        self._review_limiter = ReviewRateLimiter()
 
     # ---------- identity ----------
 
@@ -214,7 +232,11 @@ class FilterAddon:
         (Privacy, and apps with certificate pinning.) A site that is not allowed is intercepted as usual so the
         block page can be shown."""
         sni = (data.client_hello.sni or "").lower()
-        if not sni or not SENSITIVE_PASSTHROUGH_DOMAINS or not _host_matches(sni, SENSITIVE_PASSTHROUGH_DOMAINS):
+        if not sni:
+            return
+        sensitive = bool(SENSITIVE_PASSTHROUGH_DOMAINS) and _host_matches(sni, SENSITIVE_PASSTHROUGH_DOMAINS)
+        learned = AUTO_PASSTHROUGH_PINNED_APPS and sni in get_learned_passthrough()
+        if not (sensitive or learned):
             return
         try:
             client = data.context.client
@@ -228,9 +250,25 @@ class FilterAddon:
             rule = get_policy_resolver(user_id).resolve(f"https://{sni}/", "*")
             if rule is not None and rule.get("state") == "allow":
                 data.ignore_connection = True
-                logger.info("TLS passthrough for sensitive allowed site %s (user_id=%s)", sni, user_id)
+                logger.info("TLS passthrough for %s allowed site %s (user_id=%s)",
+                            "sensitive" if sensitive else "pinned-app", sni, user_id)
         except Exception as e:
             logger.debug("tls_clienthello passthrough check failed for %s: %s", sni, e)
+
+    def tls_failed_client(self, data: tls.TlsData) -> None:
+        """An app with certificate pinning rejected our certificate. Learned (AUTO_PASSTHROUGH_PINNED_APPS):
+        after a few failures the host is passed through – but only where the user's list explicitly allows it."""
+        if not AUTO_PASSTHROUGH_PINNED_APPS:
+            return
+        sni = (data.context.client.sni or "").lower()
+        err = str(getattr(data.conn, "error", "") or "")
+        if not sni or "trust" not in err:
+            return
+        try:
+            if record_tls_client_failure(sni, AUTO_PASSTHROUGH_MIN_FAILURES):
+                logger.warning("Host %s rejects the proxy certificate (pinning) – passthrough where the site is allowed", sni)
+        except Exception as e:
+            logger.debug("record_tls_client_failure failed for %s: %s", sni, e)
 
     # ---------- request ----------
 
@@ -291,8 +329,12 @@ class FilterAddon:
             return
 
         flow.metadata["user_id"] = user_id
-        if flow.request.path.split("?", 1)[0] == STATUS_PATH and flow.request.method == "POST":
+        req_path = flow.request.path.split("?", 1)[0]
+        if req_path == STATUS_PATH and flow.request.method == "POST":
             self._answer_image_status(flow)
+            return
+        if req_path in (VIDEO_STATUS_PATH, VIDEO_REVIEW_PATH) and flow.request.method == "POST":
+            await self._answer_video(flow, req_path, user_id)
             return
         identity = flow.metadata.get("goallm_identity")
         if client_ip and (identity is None or identity.kind != "user"):
@@ -352,6 +394,24 @@ class FilterAddon:
         flow.metadata["redirected_to_bind"] = True  # skip response processing
         flow.metadata["traffic_status"] = "internal"
 
+    async def _answer_video(self, flow: http.HTTPFlow, path: str, user_id: int) -> None:
+        """Blocked-video overlay: status of the page's videos, or "send for review" (answered by the proxy itself)."""
+        payload = parse_video_payload(flow.request.get_text(strict=False))
+        try:
+            if path == VIDEO_STATUS_PATH:
+                code, data = 200, await asyncio.to_thread(video_status, payload, user_id)
+            else:
+                code, data = await asyncio.to_thread(request_video_review_from_overlay, payload, user_id, self._review_limiter)
+        except Exception as e:
+            logger.warning("video overlay request failed: %s", e)
+            code, data = 500, {"error": "שגיאה"}
+        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        flow.response = http.Response.make(
+            code, body, {"Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", "Content-Length": str(len(body))}
+        )
+        flow.metadata["redirected_to_bind"] = True  # skip response processing
+        flow.metadata["traffic_status"] = "internal"
+
     # ---------- response ----------
 
     def responseheaders(self, flow: http.HTTPFlow) -> None:
@@ -360,14 +420,18 @@ class FilterAddon:
         if flow.metadata.get("redirected_to_bind") or flow.metadata.get("user_id") is None or not flow.response:
             return
         ct = (flow.response.headers.get("content-type") or "")
-        if not is_video_response(ct, flow.request.path if flow.request else ""):
+        url = flow.request.url
+        path = flow.request.path or ""
+        if is_video_request(ct, url, path):
+            switch = "video_filter"
+        elif is_audio_response(ct, path):
+            switch = "audio_filter"  # songs (kol isha): same rules as video – site rule, per-item review
+        else:
             return
         switches = get_filter_switches()
         rule = flow.metadata.get("request_rule")
-        url = flow.request.url
-        path = flow.request.path or ""
         approved = False
-        if not video_allowed_for_rule(rule, switches.get("video_filter", True)):
+        if not video_allowed_for_rule(rule, switches.get(switch, True)):
             try:
                 approved = is_media_approved(url)
             except Exception as e:
@@ -375,11 +439,11 @@ class FilterAddon:
             if not approved:
                 block_response_headers(flow, FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS)
                 flow.metadata["streamed"] = True
-                flow.metadata["traffic_status"] = "video_blocked"
+                flow.metadata["traffic_status"] = "video_blocked" if switch == "video_filter" else "audio_blocked"
                 self._remember_blocked_media(flow, ct, path)
-                logger.info("Video blocked (headers stage) - URL: %s", flow.request.pretty_url)
+                logger.info("%s blocked (headers stage) - URL: %s", "Video" if switch == "video_filter" else "Audio", flow.request.pretty_url)
                 return
-        if approved and is_hls_manifest(ct, path):
+        if approved and (is_hls_manifest(ct, path) or is_dash_manifest(ct, path)):
             # Keep the (small) playlist body so its segments can be registered as approved too.
             flow.metadata["approved_manifest"] = True
             return
@@ -389,8 +453,8 @@ class FilterAddon:
 
     def _remember_blocked_media(self, flow: http.HTTPFlow, ct: str, path: str) -> None:
         """Record what was blocked, so the user can send exactly this video for review (MSE players hide the URL)."""
-        if is_media_segment(ct, path):
-            return
+        if is_media_segment(ct, path) or is_googlevideo_playback(flow.request.url):
+            return  # (YouTube: the watch URL is recorded when its player response is blocked)
         user_id = flow.metadata.get("user_id")
         key = (user_id, canonical_media_key(flow.request.url))
         now = time.monotonic()
@@ -409,10 +473,17 @@ class FilterAddon:
         url = flow.request.pretty_url if flow.request else "Unknown URL"
         if flow.metadata.get("approved_manifest") and flow.response is not None:
             try:
-                children = hls_child_urls(flow.response.get_text(strict=False) or "", flow.request.url)
-                await asyncio.to_thread(add_approved_media_children, canonical_media_key(flow.request.url), children)
+                text = flow.response.get_text(strict=False) or ""
+                parent = canonical_media_key(flow.request.url)
+                ct = flow.response.headers.get("content-type") or ""
+                if is_dash_manifest(ct, flow.request.path or "") and len(text) < 5_000_000:
+                    children, patterns = dash_children(text, flow.request.url)
+                    await asyncio.to_thread(add_approved_media_patterns, parent, patterns)
+                else:
+                    children = hls_child_urls(text, flow.request.url)
+                await asyncio.to_thread(add_approved_media_children, parent, children)
             except Exception as e:
-                logger.warning("Could not register HLS children for %s: %s", url, e)
+                logger.warning("Could not register manifest children for %s: %s", url, e)
             flow.metadata["streamed"] = True  # nothing else to filter in a playlist
         # Only identified users' traffic is processed: a 407 (auth required), the diagnostic redirect or a
         # request to the CRM itself must reach the client untouched (the 407 used to be replaced by a block page).

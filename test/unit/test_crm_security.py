@@ -156,7 +156,10 @@ def test_personal_proxy_credentials_work_in_the_proxy(user):
     assert ProxyAuthenticator()._check(creds["username"], "wrong") is None
 
 
-def test_otp_code_dies_after_too_many_wrong_guesses(user):
+def test_otp_code_dies_after_too_many_wrong_guesses(user, monkeypatch):
+    import data.constants as C
+
+    monkeypatch.setattr(C, "OTP_DEV_LOG_CODES", True)
     c = _client()
     phone = user[1]["phone"]
     assert c.post("/api/auth/request-phone-code", json={"phone": phone}).status_code == 200
@@ -186,3 +189,89 @@ def test_sync_survives_a_conflicting_row(admin):
     sync_crm_rules_to_core(None)
     domains = {p["domain"] for p in pdb.get_all_policies(source_filter="global")}
     assert "other-sync.example" in domains and "dup-sync.example" in domains
+
+
+def test_otp_refused_without_a_provider_and_no_code_is_stored(user, monkeypatch):
+    import data.constants as C
+
+    monkeypatch.setattr(C, "OTP_DEV_LOG_CODES", False)
+    monkeypatch.setattr(C, "SMS_PROVIDER", "none")
+    phone = user[1]["phone"]
+    r = _client().post("/api/auth/request-phone-code", json={"phone": phone})
+    assert r.status_code == 400 and "לא הוגדרה" in r.json()["detail"]
+    assert db_connection.execute("SELECT 1 FROM verification_codes WHERE target = ?", (phone,)).fetchone() is None
+
+
+def test_sms_webhook_and_twilio_payloads(monkeypatch):
+    import json as _json
+
+    import data.constants as C
+    from crm import notify
+
+    sent = []
+
+    class _Resp:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=0):
+        sent.append((req.full_url, dict(req.header_items()), req.data))
+        return _Resp()
+
+    monkeypatch.setattr(notify.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(C, "SMS_PROVIDER", "webhook")
+    monkeypatch.setattr(C, "SMS_WEBHOOK_URL", "https://sms-adapter.example/send")
+    monkeypatch.setattr(C, "SMS_WEBHOOK_TOKEN", "t0k")
+    notify.send_sms("050-1234567", "קוד 123456")
+    url, headers, data = sent[-1]
+    assert url == "https://sms-adapter.example/send" and headers["Authorization"] == "Bearer t0k"
+    assert _json.loads(data) == {"to": "+972501234567", "text": "קוד 123456"}
+
+    monkeypatch.setattr(C, "SMS_PROVIDER", "twilio")
+    monkeypatch.setattr(C, "TWILIO_ACCOUNT_SID", "AC1")
+    monkeypatch.setattr(C, "TWILIO_AUTH_TOKEN", "secret")
+    monkeypatch.setattr(C, "TWILIO_FROM", "+15550000")
+    notify.send_sms("0501234567", "x")
+    url, headers, data = sent[-1]
+    assert url.endswith("/Accounts/AC1/Messages.json") and headers["Authorization"].startswith("Basic ")
+    assert b"To=%2B972501234567" in data
+
+
+def test_email_goes_through_smtp(monkeypatch):
+    import data.constants as C
+    from crm import notify
+
+    log = []
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=0):
+            log.append(("connect", host, port))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def starttls(self, context=None):
+            log.append("starttls")
+
+        def login(self, u, p):
+            log.append(("login", u))
+
+        def send_message(self, msg):
+            log.append(("send", msg["To"], msg.get_content().strip()))
+
+    monkeypatch.setattr(notify.smtplib, "SMTP", FakeSMTP)
+    monkeypatch.setattr(C, "SMTP_HOST", "smtp.example")
+    monkeypatch.setattr(C, "SMTP_FROM", "noreply@example.org")
+    monkeypatch.setattr(C, "SMTP_USER", "noreply@example.org")
+    monkeypatch.setattr(C, "SMTP_SECURITY", "starttls")
+    notify.send_email("a@example.org", "קוד כניסה", "קוד: 1")
+    assert log[0] == ("connect", "smtp.example", C.SMTP_PORT) and "starttls" in log
+    assert ("send", "a@example.org", "קוד: 1") in log

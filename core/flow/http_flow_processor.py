@@ -17,7 +17,10 @@ from core.flow.site_policy_pages import (
     get_send_for_review_file_page_bytes,
 )
 from core.flow.traffic_utils import blocked_traffic_status
-from core.proxy.csp import add_nonce, prepare_csp_nonce
+from core.proxy.csp import add_nonce, prepare_csp_nonce, rewrite_meta_csp
+from core.filters.video import youtube_policy
+from core.filters.video.video_filter import video_allowed_for_rule
+from core.proxy.video_overlay import OVERLAY_SCRIPT
 from core.proxy.image_refresh import REFRESH_SCRIPT
 from core.filters.image.data_uri_filter import filter_data_uri_images
 from core.filters.text.text_filter import filter_text_content, _encode_debug_b64, format_text_filter_debug_readable
@@ -115,6 +118,37 @@ def _filter_embedded_data_uris(flow: http.HTTPFlow, url: str, referer_url, switc
         flow.response.headers.pop("content-encoding", None)
         flow.response.raw_content = new_body
         flow.response.headers["Content-Length"] = str(len(new_body))
+
+
+def _response_charset(flow: http.HTTPFlow) -> str:
+    ct = (flow.response.headers.get("content-type") or "")
+    for part in ct.split(";"):
+        part = part.strip().lower()
+        if part.startswith("charset="):
+            return part.split("=", 1)[1].strip().strip('"') or "utf-8"
+    return "utf-8"
+
+
+def _filter_youtube_json(flow: http.HTTPFlow, url: str, referer_url, user_id) -> None:
+    """YouTube player responses (youtubei API): not-approved videos become unplayable with our message."""
+    try:
+        body = flow.response.content
+    except ValueError:
+        return
+    if not body:
+        return
+    try:
+        new_body = youtube_policy.filter_json(body, flow.request.content or b"", url, referer_url, user_id)
+    except Exception as e:
+        # The streams of a video we failed to decide on are not registered, so they stay blocked (fail-closed).
+        logger.warning("YouTube JSON filter failed for %s: %s", url, e)
+        return
+    if new_body is not None:
+        flow.response.headers.pop("transfer-encoding", None)
+        flow.response.headers.pop("content-encoding", None)
+        flow.response.raw_content = new_body
+        flow.response.headers["Content-Length"] = str(len(new_body))
+        flow.metadata["traffic_status"] = "video_blocked"
 
 
 def _is_file_download_response(flow: http.HTTPFlow) -> bool:
@@ -547,9 +581,17 @@ def process_http_response(flow: http.HTTPFlow) -> None:
                 body_to_send, _n = filter_data_uri_images(body_to_send, page_url=url, referer_url=referer_url)
             except Exception as e:
                 logger.warning("Embedded image filter failed for %s: %s", url, e)
+        if body_to_send and not replaced and youtube_policy.applies(url, rule, switches):
+            try:
+                yt_body = youtube_policy.filter_html(body_to_send, _response_charset(flow), url, user_id)
+                if yt_body is not None:
+                    body_to_send = yt_body
+            except Exception as e:
+                logger.warning("YouTube page filter failed for %s: %s", url, e)
         if body_to_send:
             # Strict CSP pages: give our injected scripts a nonce (None when no CSP or inline already allowed).
             csp_nonce = prepare_csp_nonce(flow)
+            body_to_send, csp_nonce = rewrite_meta_csp(body_to_send, csp_nonce)
             content_type_h = (flow.response.headers.get("content-type") or "").strip()
             enc = "utf-8"
             if "charset=" in content_type_h:
@@ -594,6 +636,14 @@ def process_http_response(flow: http.HTTPFlow) -> None:
                 and (rule is None or rule.get("image_filter_enabled", True))
             ):
                 body_to_send = _inject_before_body_end(body_to_send, enc, add_nonce(REFRESH_SCRIPT, csp_nonce))
+            # "Send for review" button over blocked videos (the script only acts on videos the proxy confirms blocked).
+            if (
+                not replaced
+                and user_id is not None
+                and (switches.get("video_filter", True) or switches.get("audio_filter", True))
+                and not video_allowed_for_rule(rule, True)
+            ):
+                body_to_send = _inject_before_body_end(body_to_send, enc, add_nonce(OVERLAY_SCRIPT, csp_nonce))
             # Site injections (admin-defined head/body code and hide selectors per site)
             try:
                 injection = get_site_injection_for_url(url)
@@ -639,6 +689,8 @@ def process_http_response(flow: http.HTTPFlow) -> None:
                 and rule.get("text_filter_enabled", True)
             )
         has_content = bool(flow.response.raw_content)
+        if has_content and youtube_policy.applies(url, rule, switches):
+            _filter_youtube_json(flow, url, referer_url, user_id)
         if has_content:
             _filter_embedded_data_uris(flow, url, referer_url, switches, rule)
         if text_filter_on and has_content:

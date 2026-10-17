@@ -1,6 +1,6 @@
 """
 Phone and email verification (OTP).
-Backend validation; SMS/email sending pluggable (mock in dev).
+Backend validation; delivery through crm/notify.py (SMTP / Twilio / webhook).
 """
 import logging
 import secrets
@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 
 from data.constants import CODE_LENGTH, CODE_EXPIRE_MINUTES, RATE_LIMIT_MINUTES, CODE_MAX_ATTEMPTS
 
+from . import notify
 from .database import db_connection
 from .services import get_user_by_phone, get_user_by_email
 
@@ -72,14 +73,13 @@ def _consume_code(target: str, code: str, kind: str) -> bool:
 
 
 
-def _send_sms_mock(phone: str, code: str) -> None:
-    # Mock only: a real SMS provider must be plugged in before enabling OTP login in production.
-    logger.info("SMS (mock) to %s: code=%s", phone, code)
-
-
-def _send_email_mock(email: str, code: str) -> None:
-    # Mock only: a real e-mail provider must be plugged in before enabling OTP login in production.
-    logger.info("Email (mock) to %s: code=%s", email, code)
+def _deliver(send, *args) -> None:
+    try:
+        send(*args)
+    except notify.DeliveryNotConfigured as e:
+        raise ValueError("שליחת קוד לא הוגדרה בשרת – היכנסו עם סיסמה.") from e
+    except notify.DeliveryFailed as e:
+        raise ValueError("שליחת הקוד נכשלה. נסו שוב מאוחר יותר.") from e
 
 
 def request_phone_code(phone_raw: str) -> dict:
@@ -90,12 +90,14 @@ def request_phone_code(phone_raw: str) -> dict:
     user = get_user_by_phone(phone)
     if not user:
         raise ValueError("לא נמצא משתמש עם מספר טלפון זה.")
+    if not notify.sms_configured():
+        raise ValueError("שליחת קוד ב-SMS לא הוגדרה בשרת – היכנסו עם סיסמה.")
     err = _check_rate_limit(phone, "phone")
     if err:
         raise ValueError(err)
     code = _generate_code()
     _store_code(phone, code, "phone")
-    _send_sms_mock(phone, code)
+    _deliver(notify.send_sms, phone, f"קוד הכניסה שלך: {code}\nתקף ל-{CODE_EXPIRE_MINUTES} דקות. אל תמסרו אותו לאיש.")
     return {"sent": True, "message": "נשלח קוד לנייד."}
 
 
@@ -120,12 +122,14 @@ def request_email_code(email: str) -> dict:
     user = get_user_by_email(email)
     if not user:
         raise ValueError("לא נמצא משתמש עם כתובת אימייל זו.")
+    if not notify.email_configured():
+        raise ValueError("שליחת קוד באימייל לא הוגדרה בשרת – היכנסו עם סיסמה.")
     err = _check_rate_limit(email, "email")
     if err:
         raise ValueError(err)
     code = _generate_code()
     _store_code(email, code, "email")
-    _send_email_mock(email, code)
+    _deliver(notify.send_email, email, "קוד כניסה", f"קוד הכניסה שלך: {code}\nתקף ל-{CODE_EXPIRE_MINUTES} דקות. אל תמסרו אותו לאיש.")
     return {"sent": True, "message": "נשלח קוד לאימייל."}
 
 

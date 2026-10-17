@@ -2627,6 +2627,23 @@ async def admin_review_video_decide(request: Request, admin: dict = Depends(get_
     return _video_review_out(get_video_review(key))
 
 
+# ---------- Admin: hosts passed through because their apps reject the proxy certificate (pinning) ----------
+
+@app.get("/api/admin/learned-passthrough")
+async def admin_list_learned_passthrough(admin: dict = Depends(get_current_admin)):
+    from core.policy.policy_database import get_learned_passthrough_hosts
+    from data.constants import AUTO_PASSTHROUGH_PINNED_APPS
+    return {"enabled": AUTO_PASSTHROUGH_PINNED_APPS, "hosts": sorted(get_learned_passthrough_hosts())}
+
+
+@app.delete("/api/admin/learned-passthrough/{host}")
+async def admin_forget_learned_passthrough(host: str, admin: dict = Depends(get_current_admin)):
+    from core.policy.policy_database import forget_learned_passthrough
+    forget_learned_passthrough(host)
+    logger.info("Admin %s removed learned passthrough host %s", admin.get("id"), host)
+    return {"ok": True}
+
+
 # ---------- SPA catch-all (for React router paths like /schedules, /rules, etc.) ----------
 @app.get("/{full_path:path}")
 async def spa_catch_all(full_path: str, request: Request):

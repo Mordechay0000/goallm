@@ -7,7 +7,9 @@ regardless of CWD (e.g. running uvicorn from crm/ vs mitmdump from project root)
 import sqlite3
 import logging
 import os
+import re
 import secrets
+from functools import lru_cache
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime
@@ -387,6 +389,27 @@ def init_db_schema():
             expires_at INTEGER NOT NULL
         )
     """)
+    # DASH segment templates ($Number$ / $Time$) of an approved manifest: regex over scheme://host/path.
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS approved_media_patterns (
+            parent_key TEXT NOT NULL,
+            host TEXT NOT NULL,
+            pattern TEXT NOT NULL,
+            expires_at INTEGER NOT NULL,
+            PRIMARY KEY (parent_key, pattern)
+        )
+    """)
+    db_connection.execute("CREATE INDEX IF NOT EXISTS idx_approved_media_patterns_host ON approved_media_patterns(host)")
+    # Hosts whose clients (apps with certificate pinning) reject the proxy's certificate.
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS learned_passthrough (
+            host TEXT PRIMARY KEY,
+            failures INTEGER NOT NULL DEFAULT 0,
+            first_seen INTEGER NOT NULL,
+            last_seen INTEGER NOT NULL,
+            learned INTEGER NOT NULL DEFAULT 0
+        )
+    """)
     # Media the proxy blocked for a user recently – so the user can send exactly those for review
     # (players that use blob:/MSE never expose the real URL to the page).
     db_connection.execute("""
@@ -525,6 +548,7 @@ FILTER_SWITCH_KEYS = (
     "file_share_block",
     "google_search_filter",
     "video_filter",
+    "audio_filter",
 )
 
 
@@ -1363,6 +1387,11 @@ def canonical_media_key(url: str) -> str:
     parameters (signed CDN URLs change on every load; ?id=1 vs ?id=2 must stay different videos)."""
     from urllib.parse import parse_qsl, urlencode, urlsplit
 
+    from core.filters.video.youtube import media_key as youtube_media_key
+
+    special = youtube_media_key((url or "").strip())  # youtube:<videoId> / googlevideo:<stream id>
+    if special:
+        return special
     parts = urlsplit((url or "").strip())
     host = (parts.hostname or "").lower()
     if parts.port and parts.port not in (80, 443):
@@ -1445,6 +1474,7 @@ def finish_video_review(video_key: str, status: str, *, duration_sec=None, frame
         )
         if status not in ("allowed",):
             db_connection.execute("DELETE FROM approved_media_children WHERE parent_key = ?", (video_key,))
+            db_connection.execute("DELETE FROM approved_media_patterns WHERE parent_key = ?", (video_key,))
         if status in VIDEO_FINAL_STATUSES or status == "review":
             _bump_policy_version()  # the proxy's approved-media cache must refresh
         db_connection.commit()
@@ -1484,6 +1514,45 @@ def add_approved_media_children(parent_key: str, child_urls: List[str], ttl_sec:
         db_connection.execute("DELETE FROM approved_media_children WHERE expires_at < ?", (int(datetime.now().timestamp()),))
         db_connection.commit()
     return len(keys)
+
+
+def _root_parent(parent_key: str) -> str:
+    row = db_connection.execute("SELECT parent_key FROM approved_media_children WHERE media_key = ?", (parent_key,)).fetchone()
+    return row[0] if row else parent_key
+
+
+def add_approved_media_patterns(parent_key: str, patterns: List[Tuple[str, str]], ttl_sec: int = 12 * 3600) -> int:
+    expires = int(datetime.now().timestamp()) + ttl_sec
+    root = _root_parent(parent_key)
+    with transaction():
+        for host, pattern in patterns:
+            db_connection.execute(
+                "INSERT INTO approved_media_patterns (parent_key, host, pattern, expires_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(parent_key, pattern) DO UPDATE SET expires_at = excluded.expires_at",
+                (root, host, pattern, expires),
+            )
+        db_connection.execute("DELETE FROM approved_media_patterns WHERE expires_at < ?", (int(datetime.now().timestamp()),))
+        db_connection.commit()
+    return len(patterns)
+
+
+@lru_cache(maxsize=4096)
+def _compiled(pattern: str):
+    return re.compile(pattern)
+
+
+def is_approved_media_pattern(url: str) -> bool:
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url or "")
+    host = (parts.hostname or "").lower()
+    if not host:
+        return False
+    rows = db_connection.execute(
+        "SELECT pattern FROM approved_media_patterns WHERE host = ? AND expires_at >= ?", (host, int(datetime.now().timestamp()))
+    ).fetchall()
+    target = f"{parts.scheme}://{parts.netloc}{parts.path}"
+    return any(_compiled(r[0]).fullmatch(target) for r in rows)
 
 
 def is_approved_media_child(media_key: str) -> bool:
@@ -1527,3 +1596,40 @@ def list_recent_blocked_media(user_id: int, page_url: Optional[str] = None, limi
 
 # Initialize schema on import
 init_db_schema()
+
+
+def record_tls_client_failure(host: str, min_failures: int, window_sec: int = 1800) -> bool:
+    """Count a "client does not trust our certificate" failure; returns True when the host is (now) learned."""
+    now = int(datetime.now().timestamp())
+    host = (host or "").lower().strip(".")
+    if not host:
+        return False
+    with transaction():
+        row = db_connection.execute("SELECT failures, first_seen, learned FROM learned_passthrough WHERE host = ?", (host,)).fetchone()
+        if row and row[2]:
+            return True
+        if row is None or now - row[1] > window_sec:
+            failures, first = 1, now
+        else:
+            failures, first = row[0] + 1, row[1]
+        learned = 1 if failures >= max(1, min_failures) else 0
+        db_connection.execute(
+            "INSERT INTO learned_passthrough (host, failures, first_seen, last_seen, learned) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(host) DO UPDATE SET failures = excluded.failures, first_seen = excluded.first_seen, "
+            "last_seen = excluded.last_seen, learned = excluded.learned",
+            (host, failures, first, now, learned),
+        )
+        if learned:
+            _bump_policy_version()
+        db_connection.commit()
+    return bool(learned)
+
+
+def get_learned_passthrough_hosts() -> set:
+    return {r[0] for r in db_connection.execute("SELECT host FROM learned_passthrough WHERE learned = 1").fetchall()}
+
+
+def forget_learned_passthrough(host: str) -> None:
+    db_connection.execute("DELETE FROM learned_passthrough WHERE host = ?", ((host or "").lower(),))
+    _bump_policy_version()
+    db_connection.commit()

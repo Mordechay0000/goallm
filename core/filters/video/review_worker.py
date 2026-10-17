@@ -25,8 +25,9 @@ import socket
 import subprocess
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from dataclasses import dataclass, field
 from io import BytesIO
-from typing import IO, Iterator, Optional, Tuple
+from typing import IO, Dict, Iterator, Optional, Tuple
 from urllib.parse import urlsplit
 
 from PIL import Image
@@ -34,12 +35,16 @@ from PIL import Image
 from core.filters.image.analysis import is_blocked, is_uncertain
 from core.filters.review_store import save_thumbnail
 from core.filters.video.frame_change import FrameChangeDetector
+from core.filters.video.youtube import youtube_video_id
 from core.policy import policy_database as pdb
 from data.constants import (
     VIDEO_FPS,
     VIDEO_FRAME_MAX_SIDE,
     VIDEO_MAX_DURATION_SEC,
+    VIDEO_YTDLP_MAX_HEIGHT,
     VLM_MAX_SIDE,
+    YTDLP_COOKIES_FILE,
+    YTDLP_PROXY,
 )
 
 logger = logging.getLogger(__name__)
@@ -67,18 +72,86 @@ def check_public_url(url: str) -> None:
             raise VideoReviewError("כתובת פנימית – נדחתה")
 
 
-def _input_args(url: str, referer: Optional[str]) -> list:
-    args = ["-protocol_whitelist", PROTOCOL_WHITELIST]
+def _input_args(url: str, referer: Optional[str], headers: Optional[Dict[str, str]] = None,
+                protocols: Optional[str] = None) -> list:
+    args = ["-protocol_whitelist", protocols or PROTOCOL_WHITELIST]
     if urlsplit(url).scheme in ("http", "https"):
         # HTTP-only options (ffmpeg rejects them for other inputs)
-        args += ["-user_agent", USER_AGENT, "-rw_timeout", "20000000"]
-        if referer:
-            args += ["-headers", f"Referer: {referer}\r\n"]
+        hdrs = {k: v for k, v in (headers or {}).items() if k.lower() not in ("user-agent",) and "\n" not in f"{k}{v}"}
+        ua = next((v for k, v in (headers or {}).items() if k.lower() == "user-agent"), USER_AGENT)
+        args += ["-user_agent", ua, "-rw_timeout", "20000000"]
+        if referer and not any(k.lower() == "referer" for k in hdrs):
+            hdrs["Referer"] = referer
+        if hdrs:
+            args += ["-headers", "".join(f"{k}: {v}\r\n" for k, v in hdrs.items())]
     return args + ["-i", url]
 
 
-def probe_duration(url: str, referer: Optional[str], timeout: int = 60) -> Optional[float]:
-    cmd = ["ffprobe", "-v", "error"] + _input_args(url, referer) + ["-show_entries", "format=duration", "-of", "default=nw=1:nk=1"]
+@dataclass
+class MediaSource:
+    """What ffmpeg reads: the URL the user sent, or the stream yt-dlp resolved for a YouTube page."""
+    url: str
+    referer: Optional[str] = None
+    headers: Dict[str, str] = field(default_factory=dict)
+    duration: Optional[float] = None
+    audio_url: Optional[str] = None
+    kinds: Optional[set] = None  # stream types ("video", "audio"); None = probe with ffprobe
+
+
+def resolve_youtube(page_url: str) -> MediaSource:
+    """YouTube page → direct stream URLs (video ≤ VIDEO_YTDLP_MAX_HEIGHT, plus the audio track) via yt-dlp."""
+    try:
+        from yt_dlp import YoutubeDL
+        from yt_dlp.utils import DownloadError
+    except ImportError as e:
+        raise VideoReviewError("yt-dlp לא מותקן (pip install yt-dlp)") from e
+    h = int(VIDEO_YTDLP_MAX_HEIGHT)
+    opts = {
+        "quiet": True, "no_warnings": True, "skip_download": True, "noplaylist": True, "socket_timeout": 20,
+        "format": f"bv*[height<={h}]+ba/b[height<={h}]/bv*+ba/b",
+    }
+    if YTDLP_COOKIES_FILE:
+        opts["cookiefile"] = YTDLP_COOKIES_FILE
+    if YTDLP_PROXY:
+        opts["proxy"] = YTDLP_PROXY
+    try:
+        with YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(page_url, download=False)
+    except DownloadError as e:
+        msg = str(e)
+        if "not a bot" in msg or "Sign in" in msg:
+            raise VideoReviewError("יוטיוב חסם את שרת הבדיקה (אימות 'לא בוט') – הגדירו YTDLP_COOKIES_FILE או YTDLP_PROXY") from e
+        raise VideoReviewError("yt-dlp: " + msg[-300:]) from e
+    if info.get("is_live") or info.get("live_status") in ("is_live", "is_upcoming"):
+        raise VideoReviewError("שידור חי או שידור עתידי – לא ניתן לבדוק מראש")
+    formats = info.get("requested_formats") or [info]
+    video = next((f for f in formats if f.get("vcodec") not in (None, "none")), formats[0])
+    audio = next((f for f in formats if f.get("vcodec") in (None, "none") and f.get("acodec") not in (None, "none")), None)
+    if not video.get("url"):
+        raise VideoReviewError("yt-dlp לא החזיר כתובת וידאו")
+    return MediaSource(
+        url=video["url"],
+        headers=dict(video.get("http_headers") or info.get("http_headers") or {}),
+        duration=float(info["duration"]) if info.get("duration") else None,
+        audio_url=(audio or {}).get("url") or (video["url"] if video.get("acodec") not in (None, "none") else None),
+        kinds={"video", "audio"} if (audio or video.get("acodec") not in (None, "none")) else {"video"},
+    )
+
+
+def resolve_source(review: dict) -> MediaSource:
+    url = review["source_url"]
+    if youtube_video_id(url):
+        src = resolve_youtube(url)
+        check_public_url(src.url)
+        return src
+    check_public_url(url)
+    return MediaSource(url=url, referer=review.get("page_url"))
+
+
+def probe_duration(url: str, referer: Optional[str], timeout: int = 60, headers: Optional[Dict[str, str]] = None,
+                   protocols: Optional[str] = None) -> Optional[float]:
+    cmd = ["ffprobe", "-v", "error"] + _input_args(url, referer, headers, protocols) + [
+        "-show_entries", "format=duration", "-of", "default=nw=1:nk=1"]
     try:
         out = subprocess.run(cmd, capture_output=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired as e:
@@ -91,6 +164,111 @@ def probe_duration(url: str, referer: Optional[str], timeout: int = 60) -> Optio
     except ValueError:
         return None
     return value if value > 0 else None
+
+
+def probe_streams(url: str, referer: Optional[str], headers: Optional[Dict[str, str]] = None, timeout: int = 60) -> set:
+    """Stream types in the media: {"video", "audio"} (a cover image in an MP3 counts as video only if it moves)."""
+    cmd = ["ffprobe", "-v", "error"] + _input_args(url, referer, headers) + [
+        "-show_entries", "stream=codec_type:stream_disposition=attached_pic", "-of", "csv=p=0"]
+    try:
+        out = subprocess.run(cmd, capture_output=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired as e:
+        raise VideoReviewError("ffprobe timeout") from e
+    kinds = set()
+    for line in out.stdout.decode("utf-8", "replace").splitlines():
+        parts = [x.strip() for x in line.split(",")]
+        if not parts or not parts[0]:
+            continue
+        if parts[0] == "video" and len(parts) > 1 and parts[1] == "1":
+            continue  # album art
+        kinds.add(parts[0])
+    return kinds
+
+
+def _read_upto(stream: IO[bytes], n: int) -> bytes:
+    chunks, got = [], 0
+    while got < n:
+        chunk = stream.read(n - got)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        got += len(chunk)
+    return b"".join(chunks)
+
+
+def iter_audio_chunks(url: str, referer: Optional[str], chunk_sec: int, max_duration: float,
+                      headers: Optional[Dict[str, str]] = None) -> Iterator[Tuple[float, bytes]]:
+    """16 kHz mono 16-bit PCM in chunks of chunk_sec seconds: (start_sec, pcm)."""
+    from core.filters.audio.audio_analyzer import SAMPLE_RATE
+
+    cmd = (
+        ["ffmpeg", "-nostdin", "-loglevel", "error"]
+        + _input_args(url, referer, headers)
+        + ["-t", str(int(max_duration) + 1), "-vn", "-sn", "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "s16le", "-"]
+    )
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    size = int(chunk_sec) * SAMPLE_RATE * 2
+    t = 0.0
+    try:
+        while True:
+            pcm = _read_upto(proc.stdout, size)
+            if not pcm:
+                break
+            yield t, pcm
+            t += len(pcm) / (SAMPLE_RATE * 2)
+        proc.wait(timeout=30)
+        if proc.returncode not in (0, None) and t == 0:
+            err = proc.stderr.read().decode("utf-8", "replace")[-300:] if proc.stderr else ""
+            raise VideoReviewError("ffmpeg (audio) failed: " + err)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=10)
+
+
+def _audio_loop(src: "MediaSource", duration: float, audio_analyzer, parallel: int):
+    """Returns (chunks, checked, blocked=(t, key) | None, uncertain_t | None). Stops at the first blocked chunk."""
+    from core.filters.audio.audio_analyzer import blocking_keys, is_audio_blocked, is_audio_uncertain, pcm_dbfs, pcm_to_wav
+    from data.constants import AUDIO_CHUNK_SEC, AUDIO_SILENCE_DBFS
+
+    chunks = checked = 0
+    blocked = None
+    uncertain = None
+
+    def check(t: float, pcm: bytes):
+        return t, audio_analyzer.analyze_wav(pcm_to_wav(pcm))
+
+    def take(fut):
+        nonlocal blocked, uncertain
+        t, result = fut.result()
+        if is_audio_blocked(result):
+            key = next(k for k in blocking_keys() if result.get(k) == "Yes")
+            if blocked is None or t < blocked[0]:
+                blocked = (t, key)
+        elif is_audio_uncertain(result) and uncertain is None:
+            uncertain = t
+
+    pending: set[Future] = set()
+    with ThreadPoolExecutor(max_workers=parallel) as pool:
+        stream = iter_audio_chunks(src.audio_url or src.url, src.referer, AUDIO_CHUNK_SEC, duration, src.headers)
+        try:
+            for t, pcm in stream:
+                chunks += 1
+                if len(pcm) < 16000 * 2 or pcm_dbfs(pcm) < AUDIO_SILENCE_DBFS:
+                    continue  # silence / a fraction of a second: nothing to hear
+                checked += 1
+                pending.add(pool.submit(check, t, pcm))
+                if len(pending) >= parallel:
+                    done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                    for fut in done:
+                        take(fut)
+                    if blocked:
+                        break
+            for fut in pending:
+                take(fut)
+        finally:
+            stream.close()
+    return chunks, checked, blocked, uncertain
 
 
 def _read_exact(stream: IO[bytes], n: int) -> Optional[bytes]:
@@ -131,13 +309,14 @@ def read_ppm_frame(stream: IO[bytes]) -> Optional[Image.Image]:
     return Image.frombytes("RGB", (width, height), data)
 
 
-def iter_frames(url: str, referer: Optional[str], fps: float, max_side: int, max_duration: float) -> Iterator[Tuple[float, Image.Image]]:
+def iter_frames(url: str, referer: Optional[str], fps: float, max_side: int, max_duration: float,
+                headers: Optional[Dict[str, str]] = None, protocols: Optional[str] = None) -> Iterator[Tuple[float, Image.Image]]:
     scale = (
         f"scale='if(gte(iw,ih),min({max_side},iw),-2)':'if(gte(iw,ih),-2,min({max_side},ih))'"
     )
     cmd = (
         ["ffmpeg", "-nostdin", "-loglevel", "error"]
-        + _input_args(url, referer)
+        + _input_args(url, referer, headers, protocols)
         + ["-t", str(int(max_duration) + 1), "-an", "-sn", "-vf", f"fps={fps},{scale}", "-f", "image2pipe", "-vcodec", "ppm", "-"]
     )
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -167,20 +346,62 @@ def frame_to_jpeg(frame: Image.Image) -> bytes:
     return buf.getvalue()
 
 
-def review_video(review: dict, analyzer, fps: float = VIDEO_FPS, max_parallel: Optional[int] = None) -> dict:
-    """Review one video. Returns the fields for finish_video_review (status + stats)."""
-    url = review["source_url"]
-    referer = review.get("page_url")
-    check_public_url(url)
-    duration = probe_duration(url, referer)
+_AUDIO_REASON = {"female_singing": "שירה של אישה", "female_speech": "דיבור של אישה"}
+
+
+def review_video(review: dict, analyzer, fps: float = VIDEO_FPS, max_parallel: Optional[int] = None,
+                 audio_analyzer=None) -> dict:
+    """Review one video (or audio file): frames, then the sound. Returns the fields for finish_video_review."""
+    from data.constants import VIDEO_REQUIRE_AUDIO_CHECK
+
+    src = resolve_source(review)
+    duration = src.duration or probe_duration(src.url, src.referer, headers=src.headers)
     if duration is None:
         raise VideoReviewError("שידור חי או אורך לא ידוע – לא ניתן לבדוק מראש")
     if duration > VIDEO_MAX_DURATION_SEC:
         raise VideoReviewError(f"הסרטון ארוך מדי לבדיקה אוטומטית ({int(duration)} שניות)")
+    kinds = src.kinds if src.kinds is not None else probe_streams(src.url, src.referer, headers=src.headers)
+    has_video, has_audio = "video" in kinds, ("audio" in kinds or bool(src.audio_url))
+    if not has_video and not has_audio:
+        raise VideoReviewError("לא נמצא בקובץ וידאו או שמע")
 
     cap = getattr(analyzer, "max_concurrency", None)
     parallel = max(1, min(int(cap) if cap else 4, max_parallel or 4))
-    detector = FrameChangeDetector()
+    sampled = analyzed = 0
+    blocked_at = worst_uncertain = None
+    if has_video:
+        try:
+            sampled, analyzed, blocked_at, worst_uncertain = _frame_loop(src, fps, duration, FrameChangeDetector(), analyzer, parallel)
+        except VideoReviewError as e:
+            if youtube_video_id(review["source_url"]) and "403" in str(e):
+                raise VideoReviewError(
+                    "יוטיוב סירב להוריד את הסרטון לשרת הבדיקה (403). בדרך כלל: כתובת IP של שרת ענן. "
+                    "פתרון: YTDLP_PROXY (פרוקסי ביתי), YTDLP_COOKIES_FILE, או תוסף PO-token ל-yt-dlp (bgutil-ytdlp-pot-provider)."
+                ) from e
+            raise
+        if sampled == 0:
+            raise VideoReviewError("לא חולצו פריימים מהסרטון")
+    stats = {"duration_sec": duration, "frames_sampled": sampled, "frames_analyzed": analyzed}
+    if blocked_at or not has_audio:
+        return _verdict(review, stats, blocked_at, worst_uncertain)
+
+    # The sound (kol isha): a frame-clean video with a woman singing in the background must not open.
+    if audio_analyzer is None:
+        if VIDEO_REQUIRE_AUDIO_CHECK or not has_video:
+            return {"status": "review", "reason": "הקול לא נבדק (לא הוגדר מנתח שמע) – ממתין לבודק", **stats}
+        return _verdict(review, stats, blocked_at, worst_uncertain)
+    a_parallel = max(1, min(int(getattr(audio_analyzer, "max_concurrency", 4) or 4), max_parallel or 4))
+    chunks, checked, a_blocked, a_uncertain = _audio_loop(src, duration, audio_analyzer, a_parallel)
+    logger.info("Audio of %s: %s chunks, %s checked (rest silent)", review.get("video_key"), chunks, checked)
+    if a_blocked:
+        t, key = a_blocked
+        return {"status": "blocked", "blocked_at_sec": t, "reason": f"{_AUDIO_REASON.get(key, key)} (בשנייה {int(t)})", **stats}
+    if a_uncertain is not None and worst_uncertain is None:
+        return {"status": "review", "blocked_at_sec": a_uncertain, "reason": "המודל לא בטוח לגבי הקול – ממתין לבודק", **stats}
+    return _verdict(review, stats, blocked_at, worst_uncertain)
+
+
+def _frame_loop(src: "MediaSource", fps: float, duration: float, detector: FrameChangeDetector, analyzer, parallel: int):
     sampled = analyzed = 0
     worst_uncertain: Optional[Tuple[float, Image.Image]] = None
     blocked_at: Optional[Tuple[float, Image.Image]] = None
@@ -190,7 +411,7 @@ def review_video(review: dict, analyzer, fps: float = VIDEO_FPS, max_parallel: O
 
     pending: set[Future] = set()
     with ThreadPoolExecutor(max_workers=parallel) as pool:
-        frames = iter_frames(url, referer, fps, VIDEO_FRAME_MAX_SIDE, duration)
+        frames = iter_frames(src.url, src.referer, fps, VIDEO_FRAME_MAX_SIDE, duration, src.headers)
         try:
             for t, frame in frames:
                 sampled += 1
@@ -216,20 +437,20 @@ def review_video(review: dict, analyzer, fps: float = VIDEO_FPS, max_parallel: O
                     worst_uncertain = (ft, fframe)
         finally:
             frames.close()
+    return sampled, analyzed, blocked_at, worst_uncertain
 
-    stats = {"duration_sec": duration, "frames_sampled": sampled, "frames_analyzed": analyzed}
+
+def _verdict(review: dict, stats: dict, blocked_at, worst_uncertain) -> dict:
     if blocked_at:
         save_thumbnail("videos", review["video_key"], blocked_at[1])
         return {"status": "blocked", "blocked_at_sec": blocked_at[0], "reason": "נמצא פריים אסור", **stats}
-    if sampled == 0:
-        raise VideoReviewError("לא חולצו פריימים מהסרטון")
     if worst_uncertain:
         save_thumbnail("videos", review["video_key"], worst_uncertain[1])
         return {"status": "review", "blocked_at_sec": worst_uncertain[0], "reason": "המודל לא בטוח – ממתין לבודק", **stats}
     return {"status": "allowed", **stats}
 
 
-def process_one(analyzer) -> bool:
+def process_one(analyzer, audio_analyzer=None) -> bool:
     review = pdb.claim_next_video_review()
     if not review:
         return False
@@ -237,7 +458,7 @@ def process_one(analyzer) -> bool:
     logger.info("Reviewing video %s", key)
     started = time.time()
     try:
-        outcome = review_video(review, analyzer)
+        outcome = review_video(review, analyzer, audio_analyzer=audio_analyzer)
         status = outcome.pop("status")
         pdb.finish_video_review(key, status, **outcome)
         logger.info("Video %s → %s (%.0fs, %s/%s frames analyzed)", key, status, time.time() - started,
@@ -256,14 +477,17 @@ def run_forever(poll_sec: float = 2.0) -> None:
     from core.logger.logging_config import setup_logging
 
     setup_logging()
+    from core.filters.audio.audio_analyzer import create_audio_analyzer
+
     analyzer = create_image_analyzer()
-    logger.info("Video review worker started (fps=%s)", VIDEO_FPS)
+    audio_analyzer = create_audio_analyzer()
+    logger.info("Video review worker started (fps=%s, audio check: %s)", VIDEO_FPS, "on" if audio_analyzer else "OFF")
     last_requeue = 0.0
     while True:
         if time.time() - last_requeue > 300:
             pdb.requeue_stuck_video_reviews()
             last_requeue = time.time()
-        if not process_one(analyzer):
+        if not process_one(analyzer, audio_analyzer):
             time.sleep(poll_sec)
 
 

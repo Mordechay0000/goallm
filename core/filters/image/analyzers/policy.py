@@ -8,7 +8,7 @@ import json
 import math
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 from core.filters.image.analysis import CONDITION_KEYS
 
@@ -61,20 +61,20 @@ def parse_and_validate(content: str) -> Dict[str, str]:
     return out
 
 
-def yes_probabilities(token_logprobs: Optional[List[dict]]) -> Optional[Dict[str, float]]:
+def yes_probabilities(token_logprobs: Optional[List[dict]], keys: Sequence[str] = CONDITION_KEYS) -> Optional[Dict[str, float]]:
     """
     P(Yes) per condition from OpenAI-style logprobs:
     [{"token": ..., "top_logprobs": [{"token": ..., "logprob": ...}]}].
-    The Yes/No value tokens appear in the same order as CONDITION_KEYS (schema-constrained output).
+    The Yes/No value tokens appear in the same order as `keys` (schema-constrained output).
     Returns None when the tokens cannot be aligned with the keys.
     """
     if not token_logprobs:
         return None
     value_positions = [t for t in token_logprobs if (t.get("token") or "").strip().strip('"') in ("Yes", "No")]
-    if len(value_positions) != len(CONDITION_KEYS):
+    if len(value_positions) != len(keys):
         return None
     out: Dict[str, float] = {}
-    for key, tok in zip(CONDITION_KEYS, value_positions):
+    for key, tok in zip(keys, value_positions):
         p_yes = 0.0
         p_no = 0.0
         candidates = tok.get("top_logprobs") or [{"token": tok.get("token"), "logprob": tok.get("logprob", 0.0)}]
@@ -97,6 +97,7 @@ def apply_yes_threshold(
     answer: Dict[str, str],
     token_logprobs: Optional[List[dict]],
     threshold: float,
+    keys: Sequence[str] = CONDITION_KEYS,
 ) -> Dict[str, str]:
     """
     Missing an immodest image is far worse than blocking a harmless one, so a condition counts as Yes
@@ -104,7 +105,7 @@ def apply_yes_threshold(
     """
     if threshold >= 0.5:
         return answer
-    probs = yes_probabilities(token_logprobs)
+    probs = yes_probabilities(token_logprobs, keys)
     if probs is None:
         return answer  # could not align tokens with keys; keep the literal answer
     out = dict(answer)
