@@ -548,7 +548,6 @@ FILTER_SWITCH_KEYS = (
     "file_share_block",
     "google_search_filter",
     "video_filter",
-    "audio_filter",
 )
 
 

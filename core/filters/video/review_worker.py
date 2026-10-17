@@ -9,23 +9,30 @@ Run (separate process, next to the proxy; needs ffmpeg/ffprobe and the same IMAG
 Pipeline per video:
 1. URL safety check (http/https to a public address only – the URL comes from a user; ffmpeg is also limited
    to network protocols, so file:// / concat tricks inside an HLS playlist are refused).
-2. ffprobe → duration. Unknown duration (live stream) or longer than VIDEO_MAX_DURATION_SEC → error
-   (a live stream cannot be reviewed in advance).
-3. ffmpeg samples VIDEO_FPS frames per second (default 1).
-4. FrameChangeDetector sends a frame to the model only if something changed since the last ANALYZED frame
-   (local, tile-level: a small figure entering the frame triggers; a static shot does not) – plus a periodic check.
-5. The model checks the selected frames (several in parallel); the first frame with a "Yes" blocks the video.
+2. Metadata: YouTube → yt-dlp (title, description, channel, tags); a plain media URL → the title/description of
+   the page it was on and the file's own tags. Duration from yt-dlp / ffprobe.
+3. Description check (description_check.py): a language model reads the metadata BEFORE any frame is
+   downloaded. "Female singer", "presenter: …", a romance clip → blocked here, at the cost of one text call.
+   It can only block: a clean description does not approve anything.
+4. Unknown duration (live stream) or longer than VIDEO_MAX_DURATION_SEC → error.
+5. ffmpeg samples VIDEO_FPS frames per second (default 1); FrameChangeDetector sends a frame to the model only if
+   something changed since the last ANALYZED frame (local, tile-level) – plus a periodic check.
+6. The model checks the selected frames (several in parallel); the first frame with a "Yes" blocks the video.
    Frames the model was unsure about send the video to the human review queue instead of opening it.
+The sound is not analyzed: a woman singing is caught by what is seen (frames) or by what is written (step 3).
 """
 from __future__ import annotations
 
 import ipaddress
+import json
 import logging
 import socket
 import subprocess
 import time
+import urllib.request
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
+from html.parser import HTMLParser
 from io import BytesIO
 from typing import IO, Dict, Iterator, Optional, Tuple
 from urllib.parse import urlsplit
@@ -94,12 +101,11 @@ class MediaSource:
     referer: Optional[str] = None
     headers: Dict[str, str] = field(default_factory=dict)
     duration: Optional[float] = None
-    audio_url: Optional[str] = None
-    kinds: Optional[set] = None  # stream types ("video", "audio"); None = probe with ffprobe
+    metadata: Dict[str, str] = field(default_factory=dict)  # title / description / channel / tags – for the description check
 
 
 def resolve_youtube(page_url: str) -> MediaSource:
-    """YouTube page → direct stream URLs (video ≤ VIDEO_YTDLP_MAX_HEIGHT, plus the audio track) via yt-dlp."""
+    """YouTube page → direct video stream URL (≤ VIDEO_YTDLP_MAX_HEIGHT) and the video's metadata, via yt-dlp."""
     try:
         from yt_dlp import YoutubeDL
         from yt_dlp.utils import DownloadError
@@ -108,7 +114,7 @@ def resolve_youtube(page_url: str) -> MediaSource:
     h = int(VIDEO_YTDLP_MAX_HEIGHT)
     opts = {
         "quiet": True, "no_warnings": True, "skip_download": True, "noplaylist": True, "socket_timeout": 20,
-        "format": f"bv*[height<={h}]+ba/b[height<={h}]/bv*+ba/b",
+        "format": f"bv*[height<={h}]/b[height<={h}]/bv*/b",
     }
     if YTDLP_COOKIES_FILE:
         opts["cookiefile"] = YTDLP_COOKIES_FILE
@@ -126,16 +132,85 @@ def resolve_youtube(page_url: str) -> MediaSource:
         raise VideoReviewError("שידור חי או שידור עתידי – לא ניתן לבדוק מראש")
     formats = info.get("requested_formats") or [info]
     video = next((f for f in formats if f.get("vcodec") not in (None, "none")), formats[0])
-    audio = next((f for f in formats if f.get("vcodec") in (None, "none") and f.get("acodec") not in (None, "none")), None)
     if not video.get("url"):
         raise VideoReviewError("yt-dlp לא החזיר כתובת וידאו")
     return MediaSource(
         url=video["url"],
         headers=dict(video.get("http_headers") or info.get("http_headers") or {}),
         duration=float(info["duration"]) if info.get("duration") else None,
-        audio_url=(audio or {}).get("url") or (video["url"] if video.get("acodec") not in (None, "none") else None),
-        kinds={"video", "audio"} if (audio or video.get("acodec") not in (None, "none")) else {"video"},
+        metadata=_clean_metadata({
+            "title": info.get("title"),
+            "channel": info.get("channel") or info.get("uploader"),
+            "description": info.get("description"),
+            "tags": ", ".join(info.get("tags") or []),
+            "categories": ", ".join(info.get("categories") or []),
+        }),
     )
+
+
+def _clean_metadata(raw: Dict[str, Optional[str]]) -> Dict[str, str]:
+    return {k: " ".join(str(v).split())[:3000] for k, v in raw.items() if v and str(v).strip()}
+
+
+class _PublicRedirects(urllib.request.HTTPRedirectHandler):
+    """Follow redirects only to public http(s) addresses (a redirect to 127.0.0.1 must not bypass the SSRF check)."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        check_public_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+class _MetaParser(HTMLParser):
+    _WANTED = {"description", "keywords", "og:title", "og:description", "twitter:title", "twitter:description"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.meta: Dict[str, str] = {}
+        self._in_title = False
+        self.title = ""
+
+    def handle_starttag(self, tag, attrs):
+        a = {k.lower(): (v or "") for k, v in attrs}
+        if tag == "title":
+            self._in_title = True
+        elif tag == "meta":
+            key = (a.get("property") or a.get("name") or "").lower()
+            if key in self._WANTED and a.get("content"):
+                self.meta.setdefault(key, a["content"])
+
+    def handle_endtag(self, tag):
+        if tag == "title":
+            self._in_title = False
+
+    def handle_data(self, data):
+        if self._in_title and len(self.title) < 500:
+            self.title += data
+
+
+def fetch_page_metadata(page_url: Optional[str], max_bytes: int = 1_500_000) -> Dict[str, str]:
+    """Title / description of the page the video was found on (the only text a plain media URL has)."""
+    if not page_url or urlsplit(page_url).scheme not in ("http", "https"):
+        return {}
+    try:
+        check_public_url(page_url)
+        opener = urllib.request.build_opener(_PublicRedirects)
+        req = urllib.request.Request(page_url, headers={"User-Agent": USER_AGENT, "Accept": "text/html"})
+        with opener.open(req, timeout=10) as resp:
+            if "html" not in (resp.headers.get("content-type") or "html"):
+                return {}
+            raw = resp.read(max_bytes)
+            charset = resp.headers.get_content_charset() or "utf-8"
+        parser = _MetaParser()
+        parser.feed(raw.decode(charset, errors="replace"))
+    except Exception as e:  # metadata is a bonus: the frames are checked either way
+        logger.info("Page metadata unavailable for %s: %s", page_url[:120], e)
+        return {}
+    m = parser.meta
+    return _clean_metadata({
+        "title": m.get("og:title") or m.get("twitter:title") or parser.title,
+        "description": m.get("og:description") or m.get("description") or m.get("twitter:description"),
+        "tags": m.get("keywords"),
+    })
 
 
 def resolve_source(review: dict) -> MediaSource:
@@ -145,130 +220,40 @@ def resolve_source(review: dict) -> MediaSource:
         check_public_url(src.url)
         return src
     check_public_url(url)
-    return MediaSource(url=url, referer=review.get("page_url"))
+    return MediaSource(url=url, referer=review.get("page_url"), metadata=fetch_page_metadata(review.get("page_url")))
 
 
-def probe_duration(url: str, referer: Optional[str], timeout: int = 60, headers: Optional[Dict[str, str]] = None,
-                   protocols: Optional[str] = None) -> Optional[float]:
+def probe_format(url: str, referer: Optional[str], timeout: int = 60, headers: Optional[Dict[str, str]] = None,
+                 protocols: Optional[str] = None) -> Tuple[Optional[float], Dict[str, str]]:
+    """(duration or None if unknown/live, the file's own text tags: title / artist / comment …)."""
     cmd = ["ffprobe", "-v", "error"] + _input_args(url, referer, headers, protocols) + [
-        "-show_entries", "format=duration", "-of", "default=nw=1:nk=1"]
+        "-show_entries", "format=duration:format_tags", "-of", "json"]
     try:
         out = subprocess.run(cmd, capture_output=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired as e:
         raise VideoReviewError("ffprobe timeout") from e
     if out.returncode != 0:
         raise VideoReviewError("ffprobe failed: " + out.stderr.decode("utf-8", "replace")[-300:])
-    text = out.stdout.decode().strip().splitlines()
     try:
-        value = float(text[0]) if text else 0.0
+        fmt = (json.loads(out.stdout.decode("utf-8", "replace") or "{}").get("format") or {})
     except ValueError:
-        return None
-    return value if value > 0 else None
-
-
-def probe_streams(url: str, referer: Optional[str], headers: Optional[Dict[str, str]] = None, timeout: int = 60) -> set:
-    """Stream types in the media: {"video", "audio"} (a cover image in an MP3 counts as video only if it moves)."""
-    cmd = ["ffprobe", "-v", "error"] + _input_args(url, referer, headers) + [
-        "-show_entries", "stream=codec_type:stream_disposition=attached_pic", "-of", "csv=p=0"]
+        fmt = {}
     try:
-        out = subprocess.run(cmd, capture_output=True, timeout=timeout, check=False)
-    except subprocess.TimeoutExpired as e:
-        raise VideoReviewError("ffprobe timeout") from e
-    kinds = set()
-    for line in out.stdout.decode("utf-8", "replace").splitlines():
-        parts = [x.strip() for x in line.split(",")]
-        if not parts or not parts[0]:
-            continue
-        if parts[0] == "video" and len(parts) > 1 and parts[1] == "1":
-            continue  # album art
-        kinds.add(parts[0])
-    return kinds
+        duration = float(fmt.get("duration") or 0)
+    except (TypeError, ValueError):
+        duration = 0.0
+    tags = {str(k).lower(): str(v) for k, v in (fmt.get("tags") or {}).items()}
+    meta = _clean_metadata({
+        "title": tags.get("title"),
+        "channel": tags.get("artist") or tags.get("album_artist"),
+        "description": tags.get("description") or tags.get("comment") or tags.get("synopsis"),
+    })
+    return (duration if duration > 0 else None), meta
 
 
-def _read_upto(stream: IO[bytes], n: int) -> bytes:
-    chunks, got = [], 0
-    while got < n:
-        chunk = stream.read(n - got)
-        if not chunk:
-            break
-        chunks.append(chunk)
-        got += len(chunk)
-    return b"".join(chunks)
-
-
-def iter_audio_chunks(url: str, referer: Optional[str], chunk_sec: int, max_duration: float,
-                      headers: Optional[Dict[str, str]] = None) -> Iterator[Tuple[float, bytes]]:
-    """16 kHz mono 16-bit PCM in chunks of chunk_sec seconds: (start_sec, pcm)."""
-    from core.filters.audio.audio_analyzer import SAMPLE_RATE
-
-    cmd = (
-        ["ffmpeg", "-nostdin", "-loglevel", "error"]
-        + _input_args(url, referer, headers)
-        + ["-t", str(int(max_duration) + 1), "-vn", "-sn", "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "s16le", "-"]
-    )
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    size = int(chunk_sec) * SAMPLE_RATE * 2
-    t = 0.0
-    try:
-        while True:
-            pcm = _read_upto(proc.stdout, size)
-            if not pcm:
-                break
-            yield t, pcm
-            t += len(pcm) / (SAMPLE_RATE * 2)
-        proc.wait(timeout=30)
-        if proc.returncode not in (0, None) and t == 0:
-            err = proc.stderr.read().decode("utf-8", "replace")[-300:] if proc.stderr else ""
-            raise VideoReviewError("ffmpeg (audio) failed: " + err)
-    finally:
-        if proc.poll() is None:
-            proc.kill()
-            proc.wait(timeout=10)
-
-
-def _audio_loop(src: "MediaSource", duration: float, audio_analyzer, parallel: int):
-    """Returns (chunks, checked, blocked=(t, key) | None, uncertain_t | None). Stops at the first blocked chunk."""
-    from core.filters.audio.audio_analyzer import blocking_keys, is_audio_blocked, is_audio_uncertain, pcm_dbfs, pcm_to_wav
-    from data.constants import AUDIO_CHUNK_SEC, AUDIO_SILENCE_DBFS
-
-    chunks = checked = 0
-    blocked = None
-    uncertain = None
-
-    def check(t: float, pcm: bytes):
-        return t, audio_analyzer.analyze_wav(pcm_to_wav(pcm))
-
-    def take(fut):
-        nonlocal blocked, uncertain
-        t, result = fut.result()
-        if is_audio_blocked(result):
-            key = next(k for k in blocking_keys() if result.get(k) == "Yes")
-            if blocked is None or t < blocked[0]:
-                blocked = (t, key)
-        elif is_audio_uncertain(result) and uncertain is None:
-            uncertain = t
-
-    pending: set[Future] = set()
-    with ThreadPoolExecutor(max_workers=parallel) as pool:
-        stream = iter_audio_chunks(src.audio_url or src.url, src.referer, AUDIO_CHUNK_SEC, duration, src.headers)
-        try:
-            for t, pcm in stream:
-                chunks += 1
-                if len(pcm) < 16000 * 2 or pcm_dbfs(pcm) < AUDIO_SILENCE_DBFS:
-                    continue  # silence / a fraction of a second: nothing to hear
-                checked += 1
-                pending.add(pool.submit(check, t, pcm))
-                if len(pending) >= parallel:
-                    done, pending = wait(pending, return_when=FIRST_COMPLETED)
-                    for fut in done:
-                        take(fut)
-                    if blocked:
-                        break
-            for fut in pending:
-                take(fut)
-        finally:
-            stream.close()
-    return chunks, checked, blocked, uncertain
+def probe_duration(url: str, referer: Optional[str], timeout: int = 60, headers: Optional[Dict[str, str]] = None,
+                   protocols: Optional[str] = None) -> Optional[float]:
+    return probe_format(url, referer, timeout, headers, protocols)[0]
 
 
 def _read_exact(stream: IO[bytes], n: int) -> Optional[bytes]:
@@ -346,58 +331,45 @@ def frame_to_jpeg(frame: Image.Image) -> bytes:
     return buf.getvalue()
 
 
-_AUDIO_REASON = {"female_singing": "שירה של אישה", "female_speech": "דיבור של אישה"}
-
-
 def review_video(review: dict, analyzer, fps: float = VIDEO_FPS, max_parallel: Optional[int] = None,
-                 audio_analyzer=None) -> dict:
-    """Review one video (or audio file): frames, then the sound. Returns the fields for finish_video_review."""
-    from data.constants import VIDEO_REQUIRE_AUDIO_CHECK
-
+                 description_checker=None) -> dict:
+    """Review one video: first its description (title, description, channel, tags), then its frames.
+    Returns the fields for finish_video_review."""
     src = resolve_source(review)
-    duration = src.duration or probe_duration(src.url, src.referer, headers=src.headers)
+    duration = src.duration
+    if duration is None:
+        duration, file_meta = probe_format(src.url, src.referer, headers=src.headers)
+        for k, v in file_meta.items():
+            src.metadata.setdefault(k, v)
+
+    # 1. The description – before a single frame is downloaded. It can only block (a woman singing, a female
+    #    presenter…), never approve: a clean description still goes to the frame check.
+    if description_checker is not None and src.metadata:
+        verdict = description_checker.check(src.metadata)
+        if verdict is not None and verdict.blocked:
+            return {"status": "blocked", "duration_sec": duration, "frames_sampled": 0, "frames_analyzed": 0,
+                    "reason": f"לפי התיאור: {verdict.reason}" if verdict.reason else "לפי התיאור"}
+
     if duration is None:
         raise VideoReviewError("שידור חי או אורך לא ידוע – לא ניתן לבדוק מראש")
     if duration > VIDEO_MAX_DURATION_SEC:
         raise VideoReviewError(f"הסרטון ארוך מדי לבדיקה אוטומטית ({int(duration)} שניות)")
-    kinds = src.kinds if src.kinds is not None else probe_streams(src.url, src.referer, headers=src.headers)
-    has_video, has_audio = "video" in kinds, ("audio" in kinds or bool(src.audio_url))
-    if not has_video and not has_audio:
-        raise VideoReviewError("לא נמצא בקובץ וידאו או שמע")
 
+    # 2. The frames.
     cap = getattr(analyzer, "max_concurrency", None)
     parallel = max(1, min(int(cap) if cap else 4, max_parallel or 4))
-    sampled = analyzed = 0
-    blocked_at = worst_uncertain = None
-    if has_video:
-        try:
-            sampled, analyzed, blocked_at, worst_uncertain = _frame_loop(src, fps, duration, FrameChangeDetector(), analyzer, parallel)
-        except VideoReviewError as e:
-            if youtube_video_id(review["source_url"]) and "403" in str(e):
-                raise VideoReviewError(
-                    "יוטיוב סירב להוריד את הסרטון לשרת הבדיקה (403). בדרך כלל: כתובת IP של שרת ענן. "
-                    "פתרון: YTDLP_PROXY (פרוקסי ביתי), YTDLP_COOKIES_FILE, או תוסף PO-token ל-yt-dlp (bgutil-ytdlp-pot-provider)."
-                ) from e
-            raise
-        if sampled == 0:
-            raise VideoReviewError("לא חולצו פריימים מהסרטון")
+    try:
+        sampled, analyzed, blocked_at, worst_uncertain = _frame_loop(src, fps, duration, FrameChangeDetector(), analyzer, parallel)
+    except VideoReviewError as e:
+        if youtube_video_id(review["source_url"]) and "403" in str(e):
+            raise VideoReviewError(
+                "יוטיוב סירב להוריד את הסרטון לשרת הבדיקה (403). בדרך כלל: כתובת IP של שרת ענן. "
+                "פתרון: YTDLP_PROXY (פרוקסי ביתי), YTDLP_COOKIES_FILE, או תוסף PO-token ל-yt-dlp (bgutil-ytdlp-pot-provider)."
+            ) from e
+        raise
+    if sampled == 0:
+        raise VideoReviewError("לא חולצו פריימים מהסרטון (אין בו וידאו?)")
     stats = {"duration_sec": duration, "frames_sampled": sampled, "frames_analyzed": analyzed}
-    if blocked_at or not has_audio:
-        return _verdict(review, stats, blocked_at, worst_uncertain)
-
-    # The sound (kol isha): a frame-clean video with a woman singing in the background must not open.
-    if audio_analyzer is None:
-        if VIDEO_REQUIRE_AUDIO_CHECK or not has_video:
-            return {"status": "review", "reason": "הקול לא נבדק (לא הוגדר מנתח שמע) – ממתין לבודק", **stats}
-        return _verdict(review, stats, blocked_at, worst_uncertain)
-    a_parallel = max(1, min(int(getattr(audio_analyzer, "max_concurrency", 4) or 4), max_parallel or 4))
-    chunks, checked, a_blocked, a_uncertain = _audio_loop(src, duration, audio_analyzer, a_parallel)
-    logger.info("Audio of %s: %s chunks, %s checked (rest silent)", review.get("video_key"), chunks, checked)
-    if a_blocked:
-        t, key = a_blocked
-        return {"status": "blocked", "blocked_at_sec": t, "reason": f"{_AUDIO_REASON.get(key, key)} (בשנייה {int(t)})", **stats}
-    if a_uncertain is not None and worst_uncertain is None:
-        return {"status": "review", "blocked_at_sec": a_uncertain, "reason": "המודל לא בטוח לגבי הקול – ממתין לבודק", **stats}
     return _verdict(review, stats, blocked_at, worst_uncertain)
 
 
@@ -450,7 +422,7 @@ def _verdict(review: dict, stats: dict, blocked_at, worst_uncertain) -> dict:
     return {"status": "allowed", **stats}
 
 
-def process_one(analyzer, audio_analyzer=None) -> bool:
+def process_one(analyzer, description_checker=None) -> bool:
     review = pdb.claim_next_video_review()
     if not review:
         return False
@@ -458,7 +430,7 @@ def process_one(analyzer, audio_analyzer=None) -> bool:
     logger.info("Reviewing video %s", key)
     started = time.time()
     try:
-        outcome = review_video(review, analyzer, audio_analyzer=audio_analyzer)
+        outcome = review_video(review, analyzer, description_checker=description_checker)
         status = outcome.pop("status")
         pdb.finish_video_review(key, status, **outcome)
         logger.info("Video %s → %s (%.0fs, %s/%s frames analyzed)", key, status, time.time() - started,
@@ -477,17 +449,17 @@ def run_forever(poll_sec: float = 2.0) -> None:
     from core.logger.logging_config import setup_logging
 
     setup_logging()
-    from core.filters.audio.audio_analyzer import create_audio_analyzer
+    from core.filters.video.description_check import create_description_checker
 
     analyzer = create_image_analyzer()
-    audio_analyzer = create_audio_analyzer()
-    logger.info("Video review worker started (fps=%s, audio check: %s)", VIDEO_FPS, "on" if audio_analyzer else "OFF")
+    description_checker = create_description_checker()
+    logger.info("Video review worker started (fps=%s, description check: %s)", VIDEO_FPS, "on" if description_checker else "off")
     last_requeue = 0.0
     while True:
         if time.time() - last_requeue > 300:
             pdb.requeue_stuck_video_reviews()
             last_requeue = time.time()
-        if not process_one(analyzer, audio_analyzer):
+        if not process_one(analyzer, description_checker):
             time.sleep(poll_sec)
 
 

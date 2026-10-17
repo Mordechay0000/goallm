@@ -14,14 +14,14 @@ from core.proxy.csp import rewrite_meta_csp
 # ---------- text filter: evasive spellings ----------
 
 
-@pytest.mark.parametrize("text", ["s3x", "s e x", "s.e.x", "se​x", "sеx", "seeexxx", "$ex", "ס.ק.ס", "ס ק ס"])
+@pytest.mark.parametrize("text", ["p0rn", "p o r n", "p.o.r.n", "po\u200brn", "p\u043ern", "poooorn", "$exy", "ס.ק.ס", "ס ק ס"])
 def test_evasive_spellings_are_caught_and_masked(text):
     out, _block, _reason, debug = _filter_plain_text(f"before {text} after")
     assert debug["counts"]["matched"] == 1
     assert out.startswith("before ") and out.endswith(" after") and set(out[7:-6]) == {"X"}
 
 
-@pytest.mark.parametrize("text", ["Essex county", "the sextant", "U S A", "$100", "a b c d", "שלום ס ב א", "ר' משה"])
+@pytest.mark.parametrize("text", ["Essex county", "the sextant", "U S A", "$100", "a b c d", "שלום ס ב א", "ר' משה", "s e x"])
 def test_innocent_text_is_left_alone(text):
     out, _block, _reason, debug = _filter_plain_text(text)
     assert debug["counts"]["matched"] == 0 and out == text
@@ -40,7 +40,7 @@ def test_borderline_page_goes_to_the_model_and_its_verdict_counts(monkeypatch):
     monkeypatch.setattr(text_filter, "TEXT_LLM_REVIEW", True)
     monkeypatch.setattr(llm_review, "_ask", lambda text: asked.append(text) or True)
     llm_review._cache.clear()
-    _out, block, reason, _dbg = filter_text_content(_page(["sex"]), url="https://news.example/a", content_type="text/html")
+    _out, block, reason, _dbg = filter_text_content(_page(["porn"]), url="https://news.example/a", content_type="text/html")
     assert block and reason.startswith("llm_review") and "תוכן רגיל" in asked[0]
 
 
@@ -56,8 +56,8 @@ def test_clean_pages_never_call_the_model_and_failures_keep_the_word_result(monk
         raise TimeoutError("slow model")
 
     monkeypatch.setattr(llm_review, "_ask", boom)
-    out, block, _r, _d = filter_text_content(_page(["sex", "word2"]), url="https://news.example/c", content_type="text/html")
-    assert not block and b"XXX" in out  # word masked, page not blocked on a model error
+    out, block, _r, _d = filter_text_content(_page(["porn", "word2"]), url="https://news.example/c", content_type="text/html")
+    assert not block and b"XXXX" in out  # word masked, page not blocked on a model error
 
 
 def test_off_by_default():

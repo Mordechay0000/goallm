@@ -15,6 +15,6 @@ def test_unchanged_json_is_returned_byte_for_byte():
 
 
 def test_json_keys_are_never_masked():
-    payload = '{"sex": "male", "note": "נאף"}'.encode()
+    payload = '{"sex": "male", "note": "סקס"}'.encode()
     out, _b, _r, _d = filter_text_content(payload, url="https://x", content_type="application/json")
-    assert b'"sex"' in out and "נאף" not in out.decode()
+    assert b'"sex"' in out and "סקס" not in out.decode()

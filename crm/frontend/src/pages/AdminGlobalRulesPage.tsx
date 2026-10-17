@@ -463,7 +463,7 @@ const AdminGlobalRulesPage: React.FC = () => {
                 <TableCell>סינון תמונות</TableCell>
                 <TableCell>סינון קבצים</TableCell>
                 <TableCell>סינון PDF</TableCell>
-                <TableCell>סינון וידאו/שמע</TableCell>
+                <TableCell>סינון וידאו</TableCell>
                 <TableCell>וידג'ט</TableCell>
                 <TableCell align="left">פעולות</TableCell>
               </TableRow>
@@ -580,7 +580,7 @@ const AdminGlobalRulesPage: React.FC = () => {
                 />
                 <FormControlLabel
                   control={<Checkbox checked={videoFilterEnabled} onChange={(e) => setVideoFilterEnabled(e.target.checked)} />}
-                  label="סינון וידאו ושמע (כפתור שלח לבדיקה)"
+                  label="סינון וידאו (כפתור שלח לבדיקה)"
                   sx={{ display: 'block', mt: 0.5 }}
                 />
                 <FormControlLabel

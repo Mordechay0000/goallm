@@ -45,15 +45,12 @@ def media_blocked_for_user(url: str, user_id: int) -> bool:
     from core.filters.video.video_filter import video_allowed_for_rule
     from core.policy.policy_cache import get_filter_switches, get_policy_resolver, is_media_approved
 
-    from core.filters.video.video_filter import is_audio_response
-
     switches = get_filter_switches()
-    switch = "audio_filter" if is_audio_response("", urlsplit(url).path) else "video_filter"
     try:
         rule = get_policy_resolver(user_id).resolve(url, "*") if switches.get("url_policy", True) else None
     except Exception:
         rule = None
-    if video_allowed_for_rule(rule, switches.get(switch, True)):
+    if video_allowed_for_rule(rule, switches.get("video_filter", True)):
         return False
     try:
         return not is_media_approved(url)
@@ -153,10 +150,10 @@ function srcOf(v){var s=v.currentSrc||v.src||'';if(!s){var e=v.querySelector('so
 function candidates(){
  var yt=isYt(),out=[],id=yt?ytId():null,pl=null;
  if(id){pl=document.querySelector('#movie_player')||document.querySelector('.html5-video-player')||document.querySelector('#shorts-player');if(pl&&pl.getBoundingClientRect().width>40)out.push({el:pl,url:'https://www.youtube.com/watch?v='+id});}
- [].forEach.call(document.querySelectorAll('video,audio'),function(v){
+ [].forEach.call(document.querySelectorAll('video'),function(v){
   if(pl&&pl.contains(v))return;
   if(!v.__gSeen)v.__gSeen=Date.now();
-  var r=v.getBoundingClientRect(),au=v.tagName==='AUDIO';if(r.width<(au?120:80)||r.height<(au?20:45))return;
+  var r=v.getBoundingClientRect();if(r.width<80||r.height<45)return;
   var failed=!!v.error||v.networkState===3;
   var stalled=v.readyState===0&&(!v.paused||v.autoplay)&&Date.now()-v.__gSeen>5000;
   if(!failed&&!stalled)return;

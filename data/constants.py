@@ -247,22 +247,14 @@ TEXT_LLM_MIN_MATCHES = int(os.environ.get("TEXT_LLM_MIN_MATCHES", "1"))
 TEXT_LLM_TIMEOUT_SEC = float(os.environ.get("TEXT_LLM_TIMEOUT_SEC", "4"))
 TEXT_LLM_MAX_CHARS = int(os.environ.get("TEXT_LLM_MAX_CHARS", "4000"))
 
-# ========== אודיו (קול אישה) – בבדיקת סרטון ובקבצי שמע ==========
-# AUDIO_ANALYZER=openai – מודל שמע בשרת תואם OpenAI (vLLM עם Qwen3-Omni / Qwen2-Audio). none = כבוי.
-AUDIO_ANALYZER = (os.environ.get("AUDIO_ANALYZER") or "none").strip().lower()
-AUDIO_API_BASE = (os.environ.get("AUDIO_API_BASE") or VLM_API_BASE).rstrip("/")
-AUDIO_API_KEY = (os.environ.get("AUDIO_API_KEY") or VLM_API_KEY or "").strip()
-AUDIO_MODEL = (os.environ.get("AUDIO_MODEL") or "Qwen/Qwen3-Omni-30B-A3B-Instruct").strip()
-# חוסמים שירה של אישה תמיד. דיבור של אישה – רק אם AUDIO_BLOCK_SPEECH=1 (החלטה הלכתית – שלכם).
-AUDIO_BLOCK_SPEECH = (os.environ.get("AUDIO_BLOCK_SPEECH") or "0").strip().lower() in ("1", "true", "yes", "on")
-# אורך מקטע שנשלח למודל (שניות), ומקטע שקט מתחת לעוצמה הזו (dBFS) לא נשלח.
-AUDIO_CHUNK_SEC = int(os.environ.get("AUDIO_CHUNK_SEC", "20"))
-AUDIO_SILENCE_DBFS = float(os.environ.get("AUDIO_SILENCE_DBFS", "-45"))
-AUDIO_YES_THRESHOLD = float(os.environ.get("AUDIO_YES_THRESHOLD", str(VLM_YES_THRESHOLD)))
-AUDIO_REVIEW_LOW = float(os.environ.get("AUDIO_REVIEW_LOW", str(VLM_REVIEW_LOW)))
-# בלי מנתח שמע: סרטון עם פס קול לא נפתח אוטומטית אלא עובר לבודק אנושי (1, ברירת מחדל – fail-closed).
-# 0 = לאשר לפי הפריימים בלבד (הקול לא נבדק).
-VIDEO_REQUIRE_AUDIO_CHECK = (os.environ.get("VIDEO_REQUIRE_AUDIO_CHECK") or "1").strip().lower() not in ("0", "false", "no", "off")
+# ========== בדיקת תיאור הסרטון (לפני הפריימים) ==========
+# מודל השפה (VLM_API_BASE) קורא כותרת, תיאור, ערוץ ותגיות לפני שמורידים פריים אחד. יכול רק לחסום, לא לאשר.
+# auto (ברירת מחדל) = פעיל כש-IMAGE_ANALYZER=openai (יש שרת מודל). 1 = תמיד, 0 = כבוי.
+_desc = (os.environ.get("VIDEO_DESCRIPTION_CHECK") or "auto").strip().lower()
+VIDEO_DESCRIPTION_CHECK = (IMAGE_ANALYZER == "openai") if _desc == "auto" else _desc in ("1", "true", "yes", "on")
+# חוסם כש-P(כן) ≥ הסף (א-סימטרי, כמו בתמונות).
+DESCRIPTION_YES_THRESHOLD = float(os.environ.get("DESCRIPTION_YES_THRESHOLD", str(VLM_YES_THRESHOLD)))
+DESCRIPTION_MAX_CHARS = int(os.environ.get("DESCRIPTION_MAX_CHARS", "4000"))
 
 # יוטיוב: הבודק מוריד דרך yt-dlp. משרתי ענן יוטיוב מבקש לפעמים "אישור שאינך בוט" –
 # אז צריך קובץ עוגיות (Netscape cookies.txt של חשבון ייעודי) ו/או פרוקסי ביתי.

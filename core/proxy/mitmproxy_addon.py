@@ -37,7 +37,6 @@ from core.filters.video.video_filter import (
     block_response_headers,
     dash_children,
     hls_child_urls,
-    is_audio_response,
     is_dash_manifest,
     is_hls_manifest,
     is_media_segment,
@@ -422,16 +421,12 @@ class FilterAddon:
         ct = (flow.response.headers.get("content-type") or "")
         url = flow.request.url
         path = flow.request.path or ""
-        if is_video_request(ct, url, path):
-            switch = "video_filter"
-        elif is_audio_response(ct, path):
-            switch = "audio_filter"  # songs (kol isha): same rules as video – site rule, per-item review
-        else:
+        if not is_video_request(ct, url, path):
             return
         switches = get_filter_switches()
         rule = flow.metadata.get("request_rule")
         approved = False
-        if not video_allowed_for_rule(rule, switches.get(switch, True)):
+        if not video_allowed_for_rule(rule, switches.get("video_filter", True)):
             try:
                 approved = is_media_approved(url)
             except Exception as e:
@@ -439,9 +434,9 @@ class FilterAddon:
             if not approved:
                 block_response_headers(flow, FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS)
                 flow.metadata["streamed"] = True
-                flow.metadata["traffic_status"] = "video_blocked" if switch == "video_filter" else "audio_blocked"
+                flow.metadata["traffic_status"] = "video_blocked"
                 self._remember_blocked_media(flow, ct, path)
-                logger.info("%s blocked (headers stage) - URL: %s", "Video" if switch == "video_filter" else "Audio", flow.request.pretty_url)
+                logger.info("Video blocked (headers stage) - URL: %s", flow.request.pretty_url)
                 return
         if approved and (is_hls_manifest(ct, path) or is_dash_manifest(ct, path)):
             # Keep the (small) playlist body so its segments can be registered as approved too.

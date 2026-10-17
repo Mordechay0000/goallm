@@ -201,7 +201,7 @@ def test_worker_resolves_youtube_through_yt_dlp_and_explains_403(monkeypatch):
     def fake_resolve(url):
         calls.append(url)
         return review_worker.MediaSource(url="https://rr1---sn-x.googlevideo.com/videoplayback?id=o-1", duration=19.0,
-                                         headers={"User-Agent": "UA-from-yt-dlp"}, kinds={"video", "audio"})
+                                         headers={"User-Agent": "UA-from-yt-dlp"})
 
     monkeypatch.setattr(review_worker, "resolve_youtube", fake_resolve)
     monkeypatch.setattr(review_worker, "check_public_url", lambda u: None)

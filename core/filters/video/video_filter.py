@@ -53,19 +53,6 @@ def is_video_response(content_type: str, request_path: str) -> bool:
     return False
 
 
-_AUDIO_EXTENSIONS = (".mp3", ".m4a", ".aac", ".ogg", ".oga", ".opus", ".wav", ".flac", ".weba", ".amr")
-
-
-def is_audio_response(content_type: str, request_path: str) -> bool:
-    """Songs, voice messages, podcasts (audio/*, or octet-stream with an audio extension). Playlists are video's."""
-    ct = (content_type or "").lower().split(";")[0].strip()
-    if ct in _STREAM_TYPES:
-        return False
-    if ct.startswith(_AUDIO_PREFIX):
-        return True
-    return ct in ("", "application/octet-stream", "binary/octet-stream") and _path_ext(request_path) in _AUDIO_EXTENSIONS
-
-
 def is_video_request(content_type: str, url: str, request_path: str) -> bool:
     """is_video_response, plus YouTube streams by URL: googlevideo serves audio tracks as audio/webm and SABR
     as application/vnd.yt-ump – the URL is the reliable signal there."""

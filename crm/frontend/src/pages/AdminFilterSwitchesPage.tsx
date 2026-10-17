@@ -27,7 +27,6 @@ const FILTER_LABELS: Record<keyof FilterSwitches, string> = {
   file_share_block: 'שיתוף קבצים ציבורי – דף "שלח לבדיקה" לקישורים מאתרי שיתוף',
   google_search_filter: 'סינון תוצאות גוגל – הסתרת תוצאות חסומות/לא ידועות',
   video_filter: 'חסימת וידאו – וידאו ושידורים חסומים, אלא אם באתר הוגדר שהווידאו פתוח',
-  audio_filter: 'חסימת שמע (קול אישה) – שירים, הודעות קוליות ופודקאסטים חסומים, אלא אם באתר הוגדר שהמדיה פתוחה או שהקובץ אושר בבדיקה',
 };
 
 const DEFAULT_SWITCHES: FilterSwitches = {
@@ -42,7 +41,6 @@ const DEFAULT_SWITCHES: FilterSwitches = {
   file_share_block: true,
   google_search_filter: true,
   video_filter: true,
-  audio_filter: true,
 };
 
 /** Grouped sections for a tidy, intuitive layout */
@@ -53,7 +51,7 @@ const SECTIONS: { title: string; keys: (keyof FilterSwitches)[] }[] = [
   },
   {
     title: 'סינון תוכן בדפים',
-    keys: ['text_filter', 'image_filter', 'embedded_image_filter', 'google_search_filter', 'video_filter', 'audio_filter'],
+    keys: ['text_filter', 'image_filter', 'embedded_image_filter', 'google_search_filter', 'video_filter'],
   },
   {
     title: 'קבצים ו-PDF',

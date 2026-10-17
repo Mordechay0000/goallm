@@ -3,7 +3,9 @@
 
 - רמה אחת: מילה ברשימה = תוכן לא צנוע. חסימה לפי יחס על כל הדף/מסמך.
 - החלפת מילה באיקסים (לפי אורך). תמיכה בעברית ובאנגלית (רשימות ב־word_lists/*/blocked.txt).
-- התאמה דקדוקית: stemming לזיהוי צורות מילה (sexually, nudity, gays וכו').
+- התאמה דקדוקית: בעברית – צורות הנטייה של המילה שברשימה + אותיות שימוש (ו ה ב ל כ מ ש); באנגלית – stemming.
+- כלל לרשימות: אין בהן מילה שמופיעה בהקשר מותר (תורה והלכה, חדשות חרדיות, רפואה, טפסים, משמעות יומיומית).
+  בדיקה: python -m tools.check_word_list <קבצי טקסט מותר>.
 """
 import base64
 import json
@@ -34,84 +36,79 @@ try:
 except ImportError:
     logger.debug("snowballstemmer not installed; using exact match only (pip install snowballstemmer for stemming)")
 
-# Hebrew suffixes for morphological matching (order: longer first)
-_HEBREW_SUFFIXES = ("יות", "ים", "ות", "ית", "י", "ה", "ת", "ו")
-# Hebrew prefixes to strip – ה (the), ו (and), ב (in), ל (to), כ (as), מ (from), ש (that)
-_HEBREW_PREFIXES = ("ש", "מ", "ל", "ב", "כ", "ה", "ו")
+# Hebrew: a listed word matches only as itself or as one of its own inflections (suffix forms generated from
+# the LISTED word), with up to three real prefix letters in front (ו ה ב ל כ מ ש). The old matcher stripped
+# letters off every token instead, which made innocent words collide with listed ones: "אהבו" ("liked") →
+# "אהב" ← "מאהב", "ישבנו" ("we sat") → "ישבנ" ← "ישבן". Measured on Torah and Haredi-news text (tools/check_word_list).
+_HE_PREFIX_LETTERS = frozenset("והבלכמש")
+_HE_SUFFIXES = ("ים", "ות", "ית", "יות", "י", "יים")
+_HE_FINAL_SUFFIXES = ("ות", "ים", "ית", "יות")  # for words ending in ה / ת (replace the last letter)
 
-
-# cache: lang -> set of words/stems (normalized)
-_word_list_cache: Dict[str, set] = {}
+# cache: lang -> {"forms": set, "exact": set, "stems": set}
+_word_list_cache: Dict[str, Dict[str, set]] = {}
 
 
 def _normalize_hebrew(word: str) -> str:
-    """Strip niqqud and normalize final letters: ך→כ, ם→מ, ן→נ, ף→פ, ץ→צ."""
+    """Strip niqqud / cantillation, unify geresh / gershayim, and final letters: ך→כ, ם→מ, ן→נ, ף→פ, ץ→צ."""
     s = re.sub(r"[\u0591-\u05C7\u05C0-\u05C3\u05C4-\u05C5]", "", word)
-    # Final form to regular form (so ך matches כ, etc.)
+    s = s.replace("\u05F4", '"').replace("\u05F3", "'").replace("\u201D", '"').replace("\u2019", "'")
     final_to_regular = {"\u05da": "\u05db", "\u05dd": "\u05de", "\u05df": "\u05e0", "\u05e3": "\u05e4", "\u05e5": "\u05e6"}
     for fin, reg in final_to_regular.items():
         s = s.replace(fin, reg)
     return s
 
 
-def _strip_hebrew_prefix(word: str) -> str:
-    """Strip common Hebrew prefixes (ה/ו/ב/ל/כ/מ/ש)."""
-    for pre in _HEBREW_PREFIXES:
-        if len(word) > len(pre) + 1 and word.startswith(pre):
-            return word[len(pre):]
-    return word
+def _he_forms(word: str) -> set:
+    forms = {word} | {word + suf for suf in _HE_SUFFIXES}
+    if word[-1:] in ("ה", "ת"):
+        forms |= {word[:-1] + suf for suf in _HE_FINAL_SUFFIXES}
+    return {_normalize_hebrew(f) for f in forms}  # tokens are normalized too (final ם → מ in "ים")
 
 
-def _stem(word: str, lang: str) -> str:
-    """Return stem of word for matching. EN: snowball; HE: prefix + suffix stripping."""
-    if lang == "en" and _stemmer_en:
-        return _stemmer_en.stemWord(word)
-    if lang == "he" and len(word) > 1:
-        w = _strip_hebrew_prefix(word)
-        for suf in _HEBREW_SUFFIXES:
-            if len(w) > len(suf) + 1 and w.endswith(suf):
-                return w[: -len(suf)]
-        return w
-    return word
-
-
-def _load_blocked_words(lang: str) -> set:
-    """Load blocked word list for lang; cached. Includes stems when stemmer available."""
+def _load_blocked_words(lang: str) -> Dict[str, set]:
+    """Load the list for lang (cached). A line "=word" matches exactly (no inflections / stemming)."""
     if lang in _word_list_cache:
         return _word_list_cache[lang]
+    data: Dict[str, set] = {"forms": set(), "exact": set(), "stems": set()}
     path = WORD_LISTS_DIR / lang / BLOCKED_WORDS_FILENAME
-    words = set()
     if path.exists():
         try:
-            raw = path.read_text(encoding="utf-8")
-            for line in raw.splitlines():
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
+            for line in path.read_text(encoding="utf-8").splitlines():
                 w = line.split("#")[0].strip()
-                if w:
-                    if lang == "en":
-                        n = w.lower()
-                    else:
-                        n = _normalize_hebrew(w)
-                    words.add(n)
-                    # Add stem for morphological matching
-                    stem = _stem(n, lang)
-                    if stem and stem != n:
-                        words.add(stem)
+                if not w:
+                    continue
+                exact = w.startswith("=")
+                w = w.lstrip("=").strip()
+                n = w.lower() if lang == "en" else _normalize_hebrew(w)
+                if exact:
+                    data["exact"].add(n)
+                elif lang == "he":
+                    data["forms"] |= _he_forms(n)
+                else:
+                    data["forms"].add(n)
+                    if _stemmer_en:
+                        data["stems"].add(_stemmer_en.stemWord(n))
         except Exception as e:
             logger.warning("Failed to load word list %s: %s", path, e)
-    _word_list_cache[lang] = words
-    return words
+    _word_list_cache[lang] = data
+    return data
 
 
 def _is_listed_exact(word: str, lang: str) -> bool:
-    w = word.lower() if lang == "en" else _normalize_hebrew(word)
-    blocked = _load_blocked_words(lang)
-    if w in blocked:
-        return True
-    stem_w = _stem(w, lang)
-    return stem_w in blocked
+    data = _load_blocked_words(lang)
+    if lang == "en":
+        w = word.lower()
+        if w in data["exact"] or w in data["forms"]:
+            return True
+        return bool(_stemmer_en) and _stemmer_en.stemWord(w) in data["stems"]
+    w = _normalize_hebrew(word)
+    for k in range(0, min(3, max(0, len(w) - 2)) + 1):
+        if k and w[k - 1] not in _HE_PREFIX_LETTERS:
+            break
+        rest = w[k:]
+        if rest in data["exact"] or rest in data["forms"]:
+            return True
+    return False
 
 
 # --- evasion: s3x, $ex, seeexxx (a listed word written so a plain lookup misses it) ---
@@ -172,10 +169,14 @@ def _spaced_matches(norm: str, langs: List[str]) -> List[Tuple[int, int]]:
     return out
 
 
+_HE_CH = "[\u05D0-\u05EA\u0591-\u05BD\u05BF\u05C1\u05C2\u05C4\u05C5\u05C7]"
+_TOKEN_RE = re.compile(rf"{_HE_CH}+(?:[\"'\u05F3\u05F4]{_HE_CH}+)*|[a-zA-Z0-9@$]+")
+
+
 def _tokenize_words(text: str) -> List[Tuple[str, int, int]]:
-    """Return list of (word, start, end) for Hebrew+English word chars (plus @ $ used as letters: $ex)."""
-    pattern = re.compile(r"[\u0590-\u05FFa-zA-Z0-9@$]+")
-    return [(m.group(0), m.start(), m.end()) for m in pattern.finditer(text)]
+    """(word, start, end) for Hebrew and English words. A Hebrew word keeps an inner geresh / gershayim / quote
+    (להט"ב, טרנסג'נדר); the maqaf of Tanakh text separates words. @ and $ count as letters in English ($ex)."""
+    return [(m.group(0), m.start(), m.end()) for m in _TOKEN_RE.finditer(text)]
 
 
 def _mask_string(s: str, keep_spaces: bool = True) -> str:

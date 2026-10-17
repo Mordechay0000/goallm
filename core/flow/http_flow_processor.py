@@ -640,7 +640,7 @@ def process_http_response(flow: http.HTTPFlow) -> None:
             if (
                 not replaced
                 and user_id is not None
-                and (switches.get("video_filter", True) or switches.get("audio_filter", True))
+                and switches.get("video_filter", True)
                 and not video_allowed_for_rule(rule, True)
             ):
                 body_to_send = _inject_before_body_end(body_to_send, enc, add_nonce(OVERLAY_SCRIPT, csp_nonce))
