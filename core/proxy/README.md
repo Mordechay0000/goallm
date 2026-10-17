@@ -27,6 +27,30 @@ bash core/proxy/run_proxy.sh mitmdump -p 8888   # פורט אחר
 
 ידנית: `mitmdump -s core/proxy/mitmproxy_addon.py`.
 
+כמה תהליכים מאחורי load balancer (יותר מכמה עשרות בתים בו-זמנית): `bash core/proxy/run_cluster.sh start 4` –
+פירוט, דוגמאות nginx/HAProxy ומגבלות: [`docs/deploy/SCALE.he.md`](../../docs/deploy/SCALE.he.md).
+
+## בדיקת סרטון בודד
+
+וידאו חסום כברירת מחדל. גולש שולח סרטון לבדיקה (כפתור בסרגל / דף "סרטונים בדף"), תהליך נפרד בודק אותו,
+וסרטון שאושר נפתח **לכל המשתמשים** (כולל המקטעים של HLS):
+
+```bash
+apt install ffmpeg                       # ffmpeg + ffprobe
+IMAGE_ANALYZER=openai VLM_API_BASE=http://127.0.0.1:8001/v1 python -m core.filters.video.review_worker
+```
+
+- נדגמים `VIDEO_FPS` פריימים לשנייה (ברירת מחדל 1).
+- פריים נשלח למודל רק אם **משהו השתנה** מאז הפריים האחרון שנבדק. ההשוואה מקומית, לפי אריחים: דמות קטנה שנכנסת לפינה מספיקה. צילום סטטי לא נשלח שוב.
+- בנוסף, בדיקה כפויה כל `VIDEO_FORCE_ANALYZE_SEC` שניות.
+- "כן" ראשון → הסרטון נחסם והבדיקה נעצרת. פריים שהמודל לא בטוח בו → תור בדיקה אנושית (מסך "תור בדיקה" למנהל).
+- שידור חי וסרטון ארוך מ-`VIDEO_MAX_DURATION_SEC` לא נבדקים אוטומטית.
+
+## תמונות בתוך הדף (base64) וב-WebSocket
+
+תמונות `data:image/...;base64` נבדקות בכל מקום בגוף התגובה: HTML (כולל `<script>`/`<style>`), JSON, JavaScript,
+והודעות WebSocket מהשרת. הודעת WebSocket בינארית שהיא תמונה נבדקת כמו תמונה רגילה.
+
 ## מנתח התמונות
 
 | `IMAGE_ANALYZER` | מתי |

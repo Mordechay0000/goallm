@@ -9,6 +9,7 @@
                              כשהפרוקסי וה-CRM רצים על מכונות שונות – חובה להגדיר אותו ידנית בשתיהן.
   TRUSTED_PROXY_IPS        – רשימת IP/CIDR (מופרדת בפסיקים) של פרוקסים מהימנים. רק מהם מכבדים X-Forwarded-For.
                              ברירת מחדל: 127.0.0.1,::1. בייצור – להוסיף את כתובת שרת הפרוקסי ואת ה-reverse proxy של ה-CRM.
+                             "none" = לא לסמוך על אף אחד (כך run_cluster.sh מריץ את תהליכי הפרוקסי מאחורי load balancer).
   PROXY_REQUIRE_AUTH       – "1" (ברירת מחדל) = חובה להזדהות מול הפרוקסי. "0" = מותר בלי סיסמה (זיהוי לפי IP בלבד, לפיתוח/רשת סגורה).
   PROXY_AUTH               – (אופציונלי, legacy) שם משתמש:סיסמה משותפים. מי שמתחבר איתם מזוהה לפי שיוך IP.
                              אין יותר ברירת מחדל קבועה. הדרך המומלצת: פרטי התחברות אישיים לכל משתמש (נוצרים ב-CRM).
@@ -194,6 +195,29 @@ VLM_MAX_SIDE = int(os.environ.get("VLM_MAX_SIDE", "1280"))
 VLM_MIN_SIDE = int(os.environ.get("VLM_MIN_SIDE", "256"))
 # כמה פריימים לדגום מתמונה מונפשת (GIF/WebP/APNG). כל פריים = קריאה נפרדת למודל.
 VLM_MAX_ANIMATION_FRAMES = int(os.environ.get("VLM_MAX_ANIMATION_FRAMES", "4"))
+# אזור "לא בטוח": אם P(Yes) הגבוה בין הסף הזה לבין VLM_YES_THRESHOLD – התמונה לא נפתחת אלא עוברת לתור בדיקה אנושית.
+# 0 = כבוי (המודל מכריע לבד). עובד רק כשהשרת מחזיר logprobs.
+VLM_REVIEW_LOW = float(os.environ.get("VLM_REVIEW_LOW", "0.05"))
+
+# ========== וידאו – בדיקת סרטון בודד ==========
+# כמה פריימים לשנייה לדגום (1–2 מספיק לפי הדרישה).
+VIDEO_FPS = float(os.environ.get("VIDEO_FPS", "1"))
+# זיהוי שינוי: הפריים מוקטן לרוחב הזה, מחולק לאריחים בגודל VIDEO_CHANGE_TILE_PX, ומושווה לפריים האחרון שנבדק.
+VIDEO_CHANGE_WIDTH = int(os.environ.get("VIDEO_CHANGE_WIDTH", "320"))
+VIDEO_CHANGE_TILE_PX = int(os.environ.get("VIDEO_CHANGE_TILE_PX", "16"))
+# פיקסל "השתנה" אם ההפרש שלו (0–255, אחרי טשטוש קל שמסנן רעש דחיסה) ≥ הערך הזה.
+VIDEO_CHANGE_PIXEL_DELTA = int(os.environ.get("VIDEO_CHANGE_PIXEL_DELTA", "28"))
+# אריח "השתנה" אם לפחות החלק הזה מהפיקסלים שלו השתנה, או שההפרש הממוצע בו ≥ VIDEO_CHANGE_TILE_MEAN.
+# אריח אחד שהשתנה מספיק כדי לשלוח את הפריים לבדיקה.
+VIDEO_CHANGE_TILE_FRACTION = float(os.environ.get("VIDEO_CHANGE_TILE_FRACTION", "0.03"))
+VIDEO_CHANGE_TILE_MEAN = float(os.environ.get("VIDEO_CHANGE_TILE_MEAN", "10"))
+# רשת ביטחון: בודקים פריים לפחות פעם בכך וכך שניות גם אם לא זוהה שינוי.
+VIDEO_FORCE_ANALYZE_SEC = float(os.environ.get("VIDEO_FORCE_ANALYZE_SEC", "15"))
+# סרטון ארוך מזה לא נבדק אוטומטית (עלות). שידור חי לא ניתן לבדיקה מראש.
+VIDEO_MAX_DURATION_SEC = int(os.environ.get("VIDEO_MAX_DURATION_SEC", "7200"))
+# רזולוציית הפריים שנשלח למודל (צלע ארוכה).
+VIDEO_FRAME_MAX_SIDE = int(os.environ.get("VIDEO_FRAME_MAX_SIDE", "1280"))
+
 # מקסימום משימות שמחכות בתור (מעבר לזה – לא נכנסות, והבקשה הבאה לאותה תמונה תנסה שוב).
 IMAGE_QUEUE_MAX = int(os.environ.get("IMAGE_QUEUE_MAX", "5000"))
 # תמונה שנשארה pending יותר מזה (למשל אחרי הפעלה מחדש – התור יושב בזיכרון) נשלחת שוב לבדיקה.
@@ -215,7 +239,8 @@ MAX_SIDE_FOR_HASH = 1024
 # איכות JPEG בקנוניזציה לפני hash – קבועה כדי hash דטרמיניסטי.
 JPEG_QUALITY = 90
 # מקסימום תמונות מוטמעות (data: URL) לעיבוד בדף אחד – מונע עומס.
-MAX_EMBEDDED_IMAGES_PER_PAGE = 100
+# מעבר לכך – placeholder אפור בלי בדיקה (אף פעם לא המקור). דפי חיפוש תמונות מכילים מאות תמונות ממוזערות.
+MAX_EMBEDDED_IMAGES_PER_PAGE = int(os.environ.get("MAX_EMBEDDED_IMAGES_PER_PAGE", "300"))
 
 # ========== סינון מלל – רמה אחת, חסימה לפי יחס ==========
 # רמה אחת: מילה ברשימה = תוכן לא צנוע. חסימת דף תמיד לפי יחס על כל הדף/מסמך.

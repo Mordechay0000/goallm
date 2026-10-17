@@ -360,6 +360,47 @@ def init_db_schema():
     """)
     db_connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_log_created ON traffic_log(created_at)")
 
+    # Per-video review (like NetFree: a video is checked frame by frame, then opened for everyone).
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS video_reviews (
+            video_key TEXT PRIMARY KEY,
+            source_url TEXT NOT NULL,
+            page_url TEXT,
+            status TEXT NOT NULL,
+            requested_by INTEGER,
+            requested_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            duration_sec REAL,
+            frames_sampled INTEGER,
+            frames_analyzed INTEGER,
+            blocked_at_sec REAL,
+            reason TEXT,
+            decided_by INTEGER
+        )
+    """)
+    db_connection.execute("CREATE INDEX IF NOT EXISTS idx_video_reviews_status ON video_reviews(status, requested_at)")
+    # Child URLs (HLS variant playlists / segments) of an approved manifest.
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS approved_media_children (
+            media_key TEXT PRIMARY KEY,
+            parent_key TEXT NOT NULL,
+            expires_at INTEGER NOT NULL
+        )
+    """)
+    # Media the proxy blocked for a user recently – so the user can send exactly those for review
+    # (players that use blob:/MSE never expose the real URL to the page).
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS recent_blocked_media (
+            user_id INTEGER NOT NULL,
+            media_key TEXT NOT NULL,
+            media_url TEXT NOT NULL,
+            page_url TEXT,
+            content_type TEXT,
+            seen_at INTEGER NOT NULL,
+            PRIMARY KEY (user_id, media_key)
+        )
+    """)
+
     db_connection.commit()
     logger.info("Policies database schema initialized successfully")
 
@@ -1303,6 +1344,185 @@ def purge_traffic_logs_older_than(days: int) -> int:
     cur = db_connection.execute("DELETE FROM traffic_log WHERE created_at < ?", (cutoff,))
     db_connection.commit()
     return cur.rowcount or 0
+
+
+# --- Per-video review ---
+
+_VOLATILE_QUERY_PARAMS = {
+    "token", "expires", "exp", "sig", "signature", "policy", "key-pair-id", "hdnts", "hdnea", "st", "e",
+    "hash", "auth", "x-amz-algorithm", "x-amz-credential", "x-amz-date", "x-amz-expires",
+    "x-amz-signedheaders", "x-amz-signature", "x-amz-security-token", "goallm_r", "_", "ts",
+    "timestamp", "nonce", "cb", "cachebuster",
+}
+
+VIDEO_FINAL_STATUSES = ("allowed", "blocked")
+
+
+def canonical_media_key(url: str) -> str:
+    """Stable key for a media URL: lowercase host, path, and the query WITHOUT signing/cache-busting
+    parameters (signed CDN URLs change on every load; ?id=1 vs ?id=2 must stay different videos)."""
+    from urllib.parse import parse_qsl, urlencode, urlsplit
+
+    parts = urlsplit((url or "").strip())
+    host = (parts.hostname or "").lower()
+    if parts.port and parts.port not in (80, 443):
+        host = f"{host}:{parts.port}"
+    query = sorted((k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k.lower() not in _VOLATILE_QUERY_PARAMS)
+    q = ("?" + urlencode(query)) if query else ""
+    return f"{parts.scheme.lower()}://{host}{parts.path or '/'}{q}"
+
+
+def _video_row(row) -> Dict:
+    keys = ("video_key", "source_url", "page_url", "status", "requested_by", "requested_at", "updated_at",
+            "duration_sec", "frames_sampled", "frames_analyzed", "blocked_at_sec", "reason", "decided_by")
+    return dict(zip(keys, row))
+
+
+_VIDEO_COLS = ("video_key, source_url, page_url, status, requested_by, requested_at, updated_at, duration_sec, "
+               "frames_sampled, frames_analyzed, blocked_at_sec, reason, decided_by")
+
+
+def get_video_review(video_key: str) -> Optional[Dict]:
+    row = db_connection.execute(f"SELECT {_VIDEO_COLS} FROM video_reviews WHERE video_key = ?", (video_key,)).fetchone()
+    return _video_row(row) if row else None
+
+
+def request_video_review(url: str, page_url: Optional[str], user_id: Optional[int]) -> Dict:
+    """Queue a video for review (idempotent). A failed review (error) can be requested again."""
+    key = canonical_media_key(url)
+    now = int(datetime.now().timestamp())
+    existing = get_video_review(key)
+    if existing and existing["status"] not in ("error",):
+        return existing
+    with transaction():
+        db_connection.execute(
+            """INSERT INTO video_reviews (video_key, source_url, page_url, status, requested_by, requested_at, updated_at)
+               VALUES (?, ?, ?, 'pending', ?, ?, ?)
+               ON CONFLICT(video_key) DO UPDATE SET status = 'pending', source_url = excluded.source_url,
+                   page_url = excluded.page_url, requested_by = excluded.requested_by, updated_at = excluded.updated_at,
+                   reason = NULL""",
+            (key, url, page_url, user_id, now, now),
+        )
+        db_connection.commit()
+    return get_video_review(key)
+
+
+def claim_next_video_review() -> Optional[Dict]:
+    """Atomically take the oldest pending review (several workers may run)."""
+    now = int(datetime.now().timestamp())
+    with transaction():
+        row = db_connection.execute(
+            f"""UPDATE video_reviews SET status = 'processing', updated_at = ?
+                WHERE video_key = (SELECT video_key FROM video_reviews WHERE status = 'pending' ORDER BY requested_at LIMIT 1)
+                RETURNING {_VIDEO_COLS}""",
+            (now,),
+        ).fetchone()
+        db_connection.commit()
+    return _video_row(row) if row else None
+
+
+def requeue_stuck_video_reviews(older_than_sec: int = 3600) -> int:
+    """A worker that died leaves 'processing' rows behind; put them back in the queue."""
+    cutoff = int(datetime.now().timestamp()) - older_than_sec
+    cur = db_connection.execute(
+        "UPDATE video_reviews SET status = 'pending' WHERE status = 'processing' AND updated_at < ?", (cutoff,)
+    )
+    db_connection.commit()
+    return cur.rowcount or 0
+
+
+def finish_video_review(video_key: str, status: str, *, duration_sec=None, frames_sampled=None,
+                        frames_analyzed=None, blocked_at_sec=None, reason=None, decided_by=None) -> None:
+    now = int(datetime.now().timestamp())
+    with transaction():
+        db_connection.execute(
+            """UPDATE video_reviews SET status = ?, updated_at = ?,
+                   duration_sec = COALESCE(?, duration_sec), frames_sampled = COALESCE(?, frames_sampled),
+                   frames_analyzed = COALESCE(?, frames_analyzed), blocked_at_sec = ?, reason = ?,
+                   decided_by = COALESCE(?, decided_by)
+               WHERE video_key = ?""",
+            (status, now, duration_sec, frames_sampled, frames_analyzed, blocked_at_sec, reason, decided_by, video_key),
+        )
+        if status not in ("allowed",):
+            db_connection.execute("DELETE FROM approved_media_children WHERE parent_key = ?", (video_key,))
+        if status in VIDEO_FINAL_STATUSES or status == "review":
+            _bump_policy_version()  # the proxy's approved-media cache must refresh
+        db_connection.commit()
+
+
+def list_video_reviews(status: Optional[str] = None, limit: int = 100, offset: int = 0) -> List[Dict]:
+    q = f"SELECT {_VIDEO_COLS} FROM video_reviews"
+    params: list = []
+    if status:
+        q += " WHERE status = ?"
+        params.append(status)
+    q += " ORDER BY updated_at DESC LIMIT ? OFFSET ?"
+    params += [int(limit), int(offset)]
+    return [_video_row(r) for r in db_connection.execute(q, params).fetchall()]
+
+
+def get_approved_media_keys() -> set:
+    rows = db_connection.execute("SELECT video_key FROM video_reviews WHERE status = 'allowed'").fetchall()
+    return {r[0] for r in rows}
+
+
+def add_approved_media_children(parent_key: str, child_urls: List[str], ttl_sec: int = 12 * 3600) -> int:
+    expires = int(datetime.now().timestamp()) + ttl_sec
+    keys = {canonical_media_key(u) for u in child_urls if u}
+    # A variant playlist is itself a child of the reviewed master: attach its segments to the ROOT review,
+    # so blocking the video later (finish_video_review) revokes the whole tree at once.
+    row = db_connection.execute("SELECT parent_key FROM approved_media_children WHERE media_key = ?", (parent_key,)).fetchone()
+    if row:
+        parent_key = row[0]
+    with transaction():
+        for k in keys:
+            db_connection.execute(
+                "INSERT INTO approved_media_children (media_key, parent_key, expires_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(media_key) DO UPDATE SET parent_key = excluded.parent_key, expires_at = excluded.expires_at",
+                (k, parent_key, expires),
+            )
+        db_connection.execute("DELETE FROM approved_media_children WHERE expires_at < ?", (int(datetime.now().timestamp()),))
+        db_connection.commit()
+    return len(keys)
+
+
+def is_approved_media_child(media_key: str) -> bool:
+    row = db_connection.execute(
+        "SELECT 1 FROM approved_media_children WHERE media_key = ? AND expires_at >= ?",
+        (media_key, int(datetime.now().timestamp())),
+    ).fetchone()
+    return row is not None
+
+
+def record_blocked_media(user_id: int, media_url: str, page_url: Optional[str], content_type: Optional[str]) -> None:
+    now = int(datetime.now().timestamp())
+    key = canonical_media_key(media_url)
+    db_connection.execute(
+        """INSERT INTO recent_blocked_media (user_id, media_key, media_url, page_url, content_type, seen_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(user_id, media_key) DO UPDATE SET media_url = excluded.media_url,
+               page_url = COALESCE(excluded.page_url, page_url), content_type = excluded.content_type, seen_at = excluded.seen_at""",
+        (user_id, key, media_url, page_url, content_type, now),
+    )
+    db_connection.execute("DELETE FROM recent_blocked_media WHERE seen_at < ?", (now - 86400,))
+    db_connection.commit()
+
+
+def list_recent_blocked_media(user_id: int, page_url: Optional[str] = None, limit: int = 50) -> List[Dict]:
+    q = "SELECT media_key, media_url, page_url, content_type, seen_at FROM recent_blocked_media WHERE user_id = ?"
+    params: list = [user_id]
+    if page_url:
+        q += " AND page_url = ?"
+        params.append(page_url)
+    q += " ORDER BY seen_at DESC LIMIT ?"
+    params.append(int(limit))
+    rows = db_connection.execute(q, params).fetchall()
+    out = []
+    for r in rows:
+        review = get_video_review(r[0])
+        out.append({"media_key": r[0], "media_url": r[1], "page_url": r[2], "content_type": r[3], "seen_at": r[4],
+                    "review_status": review["status"] if review else None})
+    return out
 
 
 # Initialize schema on import

@@ -16,6 +16,7 @@ from typing import Optional
 
 from core.flow.site_policy_pages import CRM_API_URL, CRM_FRONTEND_URL
 from core.policy.policy_cache import get_user_is_admin
+from core.proxy.csp import add_nonce
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,7 @@ def inject_surf_widget(
     encoding: str = "utf-8",
     is_admin: bool = False,
     inject_video: bool = True,
+    nonce: Optional[str] = None,
 ) -> bytes:
     """
     Inject the surf widget (tab + panel) and config script before </body>.
@@ -103,6 +105,8 @@ def inject_surf_widget(
     request_change_url = _request_change_link(current_url, "block")
     request_change_url_attr = request_change_url.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
     rule_display = _rule_display(rule)
+    video_review_url = f"{CRM_FRONTEND_URL.rstrip('/')}/video-review?page={quote(current_url or '', safe='')}"
+    video_review_url_attr = video_review_url.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
     current_domain, current_path = _url_to_domain_path(current_url)
     current_domain_js = json.dumps(current_domain)
     current_path_js = json.dumps(current_path)
@@ -126,7 +130,7 @@ def inject_surf_widget(
   if (document.body) document.body.appendChild(root);
   else if (document.documentElement) document.documentElement.appendChild(root);
   try {{
-  var config = {{ requestChangeUrlAttr: {json.dumps(request_change_url_attr)}, crmFrontend: {crm_frontend} }};
+  var config = {{ requestChangeUrlAttr: {json.dumps(request_change_url_attr)}, videoReviewUrlAttr: {json.dumps(video_review_url_attr)}, crmFrontend: {crm_frontend} }};
   if (config.crmFrontend) try {{ window.__goallm_crm_frontend = config.crmFrontend; }} catch (e) {{}}
   var open = false;
   root.innerHTML = '<div id="goallm-surf-wrap" style="position:fixed;left:0;top:50%;transform:translateY(-50%);width:' + (open ? '312px' : '32px') + ';z-index:2147483646;font-family:system-ui,-apple-system,sans-serif;font-size:14px;direction:rtl;">' +
@@ -134,6 +138,7 @@ def inject_surf_widget(
     '<div id="goallm-surf-panel" style="display:' + (open ? 'block' : 'none') + ';position:absolute;left:32px;top:0;width:280px;max-width:calc(90vw - 32px);background:#fff;border:1px solid #E4E7EC;border-right:none;border-radius:12px 0 0 12px;box-shadow:-4px 0 20px rgba(0,0,0,0.08);padding:16px;overflow:auto;max-height:80vh;">' +
     '<div style="font-weight:700;color:#0D1A3B;margin-bottom:12px;">סרגל דיווח</div>' +
     '<a href="' + config.requestChangeUrlAttr + '" target="_blank" rel="noopener" style="display:block;width:100%;padding:10px 14px;background:#2F6CFF;color:#fff;text-align:center;border-radius:8px;text-decoration:none;font-weight:500;box-sizing:border-box;">דיווח – בקש לחסום את האתר</a>' +
+    '<a href="' + config.videoReviewUrlAttr + '" target="_blank" rel="noopener" style="display:block;width:100%;margin-top:8px;padding:8px 14px;background:#f1f5f9;color:#0D1A3B;text-align:center;border-radius:8px;text-decoration:none;font-weight:500;box-sizing:border-box;">סרטונים בדף – שלח לבדיקה</a>' +
     '</div></div>';
   var wrap = document.getElementById("goallm-surf-wrap");
   var tab = document.getElementById("goallm-surf-tab");
@@ -165,10 +170,10 @@ def inject_surf_widget(
       var first = video.querySelector("source");
       if (first && first.src) src = first.src;
     }}
-    if (!src || src.indexOf("data:") === 0 || src.indexOf("blob:") === 0) return;
-    var filename = filenameFromUrl(src);
-    var redirect = "/support/new?attach=file&file_url=" + encodeURIComponent(src) + "&filename=" + encodeURIComponent(filename);
-    var href = crmBase.replace(/\\/$/, "") + "/login?redirect=" + encodeURIComponent(redirect);
+    if (src && src.indexOf("data:") === 0) return;
+    var base = crmBase.replace(/\\/$/, "") + "/video-review?page=" + encodeURIComponent(location.href);
+    // blob:/MSE players hide the real URL – the review page lists what the filter blocked on this page.
+    var href = (!src || src.indexOf("blob:") === 0) ? base : base + "&url=" + encodeURIComponent(src);
     var wrapper = document.createElement("div");
     wrapper.style.cssText = "position:relative;display:inline-block;max-width:100%;";
     var parent = video.parentNode;
@@ -232,6 +237,7 @@ def inject_surf_widget(
     currentDomain: {current_domain_js},
     currentPath: {current_path_js},
     requestChangeUrlAttr: {json.dumps(request_change_url_attr)},
+    videoReviewUrlAttr: {json.dumps(video_review_url_attr)},
     ruleDisplay: {json.dumps(rule_display, ensure_ascii=False)}
   }};
   var open = false;
@@ -243,6 +249,7 @@ def inject_surf_widget(
       '<div id="goallm-surf-panel" style="display:' + (open ? 'block' : 'none') + ';position:absolute;left:32px;top:0;width:280px;max-width:calc(90vw - 32px);background:#fff;border:1px solid #E4E7EC;border-right:none;border-radius:12px 0 0 12px;box-shadow:-4px 0 20px rgba(0,0,0,0.08);padding:16px;overflow:auto;max-height:80vh;">' +
         '<div style="font-weight:700;color:#0D1A3B;margin-bottom:12px;">סרגל דיווח</div>' +
         '<a id="goallm-surf-report-link" href="' + config.requestChangeUrlAttr + '" target="_blank" rel="noopener" style="display:block;width:100%;padding:10px 14px;background:#2F6CFF;color:#fff;text-align:center;border-radius:8px;text-decoration:none;font-weight:500;margin-bottom:12px;box-sizing:border-box;">דיווח – בקש לחסום את האתר</a>' +
+        '<a href="' + config.videoReviewUrlAttr + '" target="_blank" rel="noopener" style="display:block;width:100%;padding:8px 14px;background:#f1f5f9;color:#0D1A3B;text-align:center;border-radius:8px;text-decoration:none;font-weight:500;margin-bottom:12px;box-sizing:border-box;">סרטונים בדף – שלח לבדיקה</a>' +
         '<div id="goallm-surf-admin" style="display:block;margin-top:12px;padding-top:12px;border-top:1px solid #E4E7EC;">' +
           '<div style="font-weight:600;color:#0D1A3B;margin-bottom:8px;">הוסף/עדכן כלל (מנהל)</div>' +
           '<div id="goallm-surf-quick-step1" style="margin-bottom:10px;">' +
@@ -354,6 +361,8 @@ def inject_surf_widget(
             body = body.replace("</script>", "<\\/script>")
             widget_html = widget_html[: script_open + 8] + body + widget_html[script_close:]
             logger.warning("surf_widget: escaped </script> in injected script url=%s", (current_url or "")[:80])
+
+    widget_html = add_nonce(widget_html, nonce)  # strict-CSP pages (see core/proxy/csp.py)
 
     # Insert before </body>; if no </body>, append at end (use lambda so widget_html is not interpreted as re template)
     pattern = re.compile(r"</body\s*>", re.IGNORECASE)

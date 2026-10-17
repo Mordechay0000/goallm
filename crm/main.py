@@ -2479,6 +2479,154 @@ async def internal_touch_ip(request: Request):
     return {"status": "ok"}
 
 
+# ---------- Per-video review (בדיקת סרטון בודד) ----------
+
+def _video_review_out(r: Optional[dict]) -> dict:
+    if not r:
+        return {"status": None}
+    return {k: r.get(k) for k in ("video_key", "source_url", "page_url", "status", "requested_at", "updated_at",
+                                   "duration_sec", "frames_sampled", "frames_analyzed", "blocked_at_sec", "reason")}
+
+
+@app.post("/api/video-reviews")
+@limiter.limit("30/hour")
+async def request_video_review_endpoint(request: Request, current_user: dict = Depends(get_current_user)):
+    """Send a video for review. Once approved it is open for every user (like NetFree)."""
+    from urllib.parse import urlsplit
+    from core.policy.policy_database import request_video_review
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    url = (body.get("url") or "").strip()
+    page_url = (body.get("page_url") or "").strip() or None
+    if urlsplit(url).scheme not in ("http", "https") or len(url) > 4000:
+        raise HTTPException(status_code=400, detail="כתובת וידאו לא תקינה (http/https בלבד)")
+    return _video_review_out(request_video_review(url, page_url, current_user["id"]))
+
+
+@app.get("/api/video-reviews/status")
+async def video_review_status_endpoint(url: str = Query(...), current_user: dict = Depends(get_current_user)):
+    from core.policy.policy_database import canonical_media_key, get_video_review
+    return _video_review_out(get_video_review(canonical_media_key(url)))
+
+
+@app.get("/api/video-reviews/recent-blocked")
+async def recent_blocked_media_endpoint(page_url: Optional[str] = Query(None), current_user: dict = Depends(get_current_user)):
+    """Videos the filter blocked for this user in the last 24h (optionally on one page)."""
+    from core.policy.policy_database import list_recent_blocked_media
+    return {"items": list_recent_blocked_media(current_user["id"], page_url)}
+
+
+# ---------- Admin: human review queue (images the model was unsure about, failed analyses, videos) ----------
+
+_HASH_RE = __import__("re").compile(r"^[0-9a-f]{64}$")
+
+
+@app.get("/api/admin/review/summary")
+async def admin_review_summary(admin: dict = Depends(get_current_admin)):
+    from core.filters.image.image_status_db import count_by_status, list_images_by_status
+    from core.policy.policy_database import list_video_reviews
+    from data.constants import MAX_ANALYSIS_ATTEMPTS
+    images = count_by_status()
+    failed = len(list_images_by_status("error", limit=1000, min_attempts=MAX_ANALYSIS_ATTEMPTS))
+    videos = {st: len(list_video_reviews(st, limit=1000)) for st in ("pending", "processing", "review", "error")}
+    return {"images_review": images.get("review", 0), "images_failed": failed, "videos": videos}
+
+
+@app.get("/api/admin/review/images")
+async def admin_review_images(
+    status_filter: str = Query("review", alias="status"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    admin: dict = Depends(get_current_admin),
+):
+    from core.filters.image.image_status_db import list_images_by_status
+    from core.filters.review_store import thumbnail_path
+    from data.constants import MAX_ANALYSIS_ATTEMPTS
+    try:
+        rows = list_images_by_status(
+            status_filter, limit=limit, offset=offset,
+            min_attempts=MAX_ANALYSIS_ATTEMPTS if status_filter == "error" else 0,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    for r in rows:
+        r["has_thumb"] = thumbnail_path("images", r["image_hash"]) is not None
+    return {"items": rows}
+
+
+@app.get("/api/admin/review/images/{image_hash}/thumb")
+async def admin_review_image_thumb(image_hash: str, admin: dict = Depends(get_current_admin)):
+    from core.filters.review_store import thumbnail_path
+    path = thumbnail_path("images", image_hash) if _HASH_RE.match(image_hash) else None
+    if not path:
+        raise HTTPException(status_code=404, detail="אין תמונה שמורה")
+    return FileResponse(str(path), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/admin/review/images/{image_hash}")
+async def admin_review_image_decide(image_hash: str, request: Request, admin: dict = Depends(get_current_admin)):
+    from core.filters.image.image_status_db import set_image_status
+    from core.filters.review_store import delete_thumbnail
+    body = await request.json()
+    decision = (body.get("decision") or "").strip()
+    if decision not in ("allow", "block") or not _HASH_RE.match(image_hash):
+        raise HTTPException(status_code=400, detail="decision חייב להיות allow או block")
+    if not set_image_status(image_hash, "allowed" if decision == "allow" else "blocked"):
+        raise HTTPException(status_code=404, detail="תמונה לא נמצאה")
+    delete_thumbnail("images", image_hash)
+    logger.info("Admin %s decided image %s → %s", admin.get("id"), image_hash[:12], decision)
+    return {"ok": True}
+
+
+@app.get("/api/admin/review/videos")
+async def admin_review_videos(
+    status_filter: Optional[str] = Query(None, alias="status"),
+    limit: int = Query(100, ge=1, le=500),
+    admin: dict = Depends(get_current_admin),
+):
+    from core.filters.review_store import thumbnail_path
+    from core.policy.policy_database import list_video_reviews
+    items = [_video_review_out(r) for r in list_video_reviews(status_filter or None, limit=limit)]
+    for it in items:
+        it["has_thumb"] = thumbnail_path("videos", it["video_key"]) is not None
+    return {"items": items}
+
+
+@app.get("/api/admin/review/videos/thumb")
+async def admin_review_video_thumb(key: str = Query(...), admin: dict = Depends(get_current_admin)):
+    from core.filters.review_store import thumbnail_path
+    path = thumbnail_path("videos", key)
+    if not path:
+        raise HTTPException(status_code=404, detail="אין פריים שמור")
+    return FileResponse(str(path), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/admin/review/videos/decide")
+async def admin_review_video_decide(request: Request, admin: dict = Depends(get_current_admin)):
+    """Admin override: allow / block a video, or send it back to the automatic queue."""
+    from core.filters.review_store import delete_thumbnail
+    from core.policy.policy_database import finish_video_review, get_video_review
+    body = await request.json()
+    key = (body.get("key") or "").strip()
+    decision = (body.get("decision") or "").strip()
+    review = get_video_review(key)
+    if not review:
+        raise HTTPException(status_code=404, detail="סרטון לא נמצא")
+    if decision == "allow":
+        finish_video_review(key, "allowed", reason="אושר ידנית", decided_by=admin["id"])
+        delete_thumbnail("videos", key)
+    elif decision == "block":
+        finish_video_review(key, "blocked", reason="נחסם ידנית", decided_by=admin["id"], blocked_at_sec=review.get("blocked_at_sec"))
+    elif decision == "requeue":
+        finish_video_review(key, "pending", reason=None)
+    else:
+        raise HTTPException(status_code=400, detail="decision חייב להיות allow / block / requeue")
+    logger.info("Admin %s decided video %s → %s", admin.get("id"), key, decision)
+    return _video_review_out(get_video_review(key))
+
+
 # ---------- SPA catch-all (for React router paths like /schedules, /rules, etc.) ----------
 @app.get("/{full_path:path}")
 async def spa_catch_all(full_path: str, request: Request):

@@ -25,26 +25,15 @@ from core.filters.image.image_replacement import (
     get_error_image,
 )
 from core.filters.image.image_hash_normalize import normalize_image_for_hash
+from core.filters.image.analysis import is_uncertain
+from core.filters.review_store import save_thumbnail
 from data.constants import ERROR_RETRY_SECONDS, MAX_ANALYSIS_ATTEMPTS, PENDING_STALE_SECONDS
 
 logger = logging.getLogger(__name__)
 
 def _create_image_analyzer():
-    """Choose analyzer by IMAGE_ANALYZER: openai (production: vLLM/SGLang/llama-server), llama_cpp (local), simulated (dev)."""
-    from data.constants import IMAGE_ANALYZER
-    if IMAGE_ANALYZER == "openai":
-        from core.filters.image.analyzers.openai_compat import OpenAICompatImageAnalyzer
-        logger.info("Using OpenAI-compatible VLM analyzer")
-        return OpenAICompatImageAnalyzer()
-    if IMAGE_ANALYZER == "llama_cpp":
-        try:
-            from core.filters.image.llm_image_analyzer import LLMImageAnalyzer
-            logger.info("Using local llama.cpp VLM analyzer")
-            return LLMImageAnalyzer()
-        except Exception as e:
-            logger.error("llama.cpp analyzer unavailable (%s) – falling back to SIMULATED analyzer (dev only!)", e)
-    logger.warning("Using SIMULATED image analyzer – results are NOT based on image content (development only)")
-    return simulated_image_analyzer.SimulatedImageAnalyzer()
+    from core.filters.image.analyzer_factory import create_image_analyzer
+    return create_image_analyzer()
 
 
 def _on_analysis_done(
@@ -86,6 +75,7 @@ def _on_analysis_done(
     try:
         if result is not None:
             logger.debug("Analysis result: %s", result)
+            uncertain = is_uncertain(result)
             save_analysis_result(
                 h,
                 result,
@@ -93,8 +83,12 @@ def _on_analysis_done(
                 image_details.get("mime_type"),
                 image_details.get("width"),
                 image_details.get("height"),
+                status_override="review" if uncertain else None,
             )
-            logger.info("Saved analysis for hash %s", h8)
+            if uncertain and image_details.get("image_bytes"):
+                # Not opened: waits for a human decision (admin review queue needs to see it).
+                save_thumbnail("images", h, image_details["image_bytes"], image_details.get("mime_type"))
+            logger.info("Saved analysis for hash %s%s", h8, " (uncertain → human review)" if uncertain else "")
         else:
             logger.error("Image analysis failed for hash %s: %s", h8, error)
             mark_error(
@@ -105,6 +99,10 @@ def _on_analysis_done(
                 width=image_details.get("width"),
                 height=image_details.get("height"),
             )
+            info = get_image_status(h)
+            if info and int(info.get("attempts") or 0) >= MAX_ANALYSIS_ATTEMPTS and image_details.get("image_bytes"):
+                # Out of automatic retries: stays blocked, and goes to the human queue.
+                save_thumbnail("images", h, image_details["image_bytes"], image_details.get("mime_type"))
     except Exception as e:
         logger.exception(
             "Failed to persist analysis result for task %s (hash %s): %s",
@@ -209,7 +207,10 @@ def _enqueue(image_data: bytes, image_url: str, mime: str, h: str, w, hi) -> Non
     task_id = _image_queue.enqueue(
         image_content=image_data,
         image_mime_type=mime,
-        image_details={"image_hash": h, "image_url": image_url, "mime_type": mime, "width": w, "height": hi},
+        image_details={
+            "image_hash": h, "image_url": image_url, "mime_type": mime, "width": w, "height": hi,
+            "image_bytes": image_data,  # only for a review thumbnail if the model is unsure
+        },
     )
     if task_id is not None:
         mark_pending(h, image_url, mime, w, hi)
@@ -270,7 +271,8 @@ def get_image_with_status(
         _enqueue(image_data, image_url, image_mime_type, h, w, hi)
         _remember_pending_url(image_url, h)
         return _placeholder("checking", image_mime_type, size, image_data), ct_override, "pending"
-    if status == "pending":
+    if status in ("pending", "review"):
+        # "review" = the model was unsure; not shown until an admin decides.
         _remember_pending_url(image_url, h)
         return _placeholder("checking", image_mime_type, size, image_data), ct_override, "pending"
     logger.warning("Status %r for hash %s (mime %s), returning ERROR image", status, h8, mime)

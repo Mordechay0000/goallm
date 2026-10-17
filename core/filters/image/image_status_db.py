@@ -124,6 +124,7 @@ def save_analysis_result(
     mime_type: str | None = None,
     width: int | None = None,
     height: int | None = None,
+    status_override: str | None = None,
 ) -> None:
     """Persist analysis result and set status to blocked/allowed. Validates result shape."""
     logger.info("Saving analysis result for hash: %s...", _h8(image_hash))
@@ -166,7 +167,7 @@ def save_analysis_result(
         (
             image_hash,
             image_url,
-            "blocked" if blocked else "allowed",
+            status_override or ("blocked" if blocked else "allowed"),
             mime_type,
             width,
             height,
@@ -247,6 +248,49 @@ def mark_error(
         (image_hash, image_url, mime_type, width, height, int(time.time())),
     )
     _db.commit()
+
+
+REVIEWABLE_STATUSES = ("review", "error", "blocked", "allowed", "pending")
+
+
+def list_images_by_status(status: str, limit: int = 50, offset: int = 0, min_attempts: int = 0) -> list[dict]:
+    """For the admin review queue."""
+    if status not in REVIEWABLE_STATUSES:
+        raise ValueError("invalid status")
+    cur = _db.execute(
+        f"""SELECT image_hash, image_url, status, mime_type, width, height, updated_at, COALESCE(attempts, 0),
+                   female_visible_9_plus, female_3_to_9_partial_clothing, female_under_3_minimal_clothing,
+                   boys_teens_men_exposed_or_bathing, any_visible_body_exposure
+            FROM {IMAGE_STATUS_TABLE_NAME}
+            WHERE status = ? AND COALESCE(attempts, 0) >= ?
+            ORDER BY updated_at DESC LIMIT ? OFFSET ?""",
+        (status, int(min_attempts), int(limit), int(offset)),
+    )
+    out = []
+    for r in cur.fetchall():
+        out.append({
+            "image_hash": r[0], "image_url": r[1], "status": r[2], "mime_type": r[3], "width": r[4], "height": r[5],
+            "updated_at": r[6], "attempts": r[7],
+            "flags": {k: bool(v) for k, v in zip(EXPECTED_RESULT_KEYS, r[8:13]) if v},
+        })
+    return out
+
+
+def set_image_status(image_hash: str, status: str) -> bool:
+    """Admin decision (allowed / blocked). Returns False if the hash is unknown."""
+    if status not in ("allowed", "blocked"):
+        raise ValueError("status must be allowed or blocked")
+    cur = _db.execute(
+        f"UPDATE {IMAGE_STATUS_TABLE_NAME} SET status = ?, updated_at = ? WHERE image_hash = ?",
+        (status, int(time.time()), image_hash),
+    )
+    _db.commit()
+    return (cur.rowcount or 0) > 0
+
+
+def count_by_status() -> dict:
+    cur = _db.execute(f"SELECT status, COUNT(*) FROM {IMAGE_STATUS_TABLE_NAME} GROUP BY status")
+    return {r[0]: r[1] for r in cur.fetchall()}
 
 
 def _h8(h: str) -> str:

@@ -40,6 +40,7 @@ import {
   Build as BuildIcon,
   InsertDriveFile as InsertDriveFileIcon,
   Code as CodeIcon,
+  FactCheck as FactCheckIcon,
 } from '@mui/icons-material';
 import { useAuthStore } from '../store/authStore';
 import { getAvatarUrl } from '../api/auth';
@@ -366,6 +367,36 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   primaryTypographyProps={{
                     fontSize: '0.95rem',
                     fontWeight: isActive('/admin/site-injections') ? 600 : 400,
+                  }}
+                />
+              </ListItemButton>
+            </ListItem>
+            <ListItem disablePadding sx={{ mb: 0 }}>
+              <ListItemButton
+                selected={isActive('/admin/review')}
+                onClick={() => {
+                  navigate('/admin/review');
+                  setMobileOpen(false);
+                }}
+                sx={{
+                  minHeight: 48,
+                  py: 1,
+                  px: 2,
+                  '&.Mui-selected': {
+                    borderRight: '3px solid',
+                    borderColor: 'primary.main',
+                    boxShadow: 'inset 0 0 24px rgba(30, 58, 95, 0.08)',
+                  },
+                }}
+              >
+                <ListItemIcon sx={{ minWidth: 44, mr: 1.5 }}>
+                  <FactCheckIcon />
+                </ListItemIcon>
+                <ListItemText
+                  primary="תור בדיקה (אדמין)"
+                  primaryTypographyProps={{
+                    fontSize: '0.95rem',
+                    fontWeight: isActive('/admin/review') ? 600 : 400,
                   }}
                 />
               </ListItemButton>

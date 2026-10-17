@@ -61,24 +61,19 @@ def parse_and_validate(content: str) -> Dict[str, str]:
     return out
 
 
-def apply_yes_threshold(
-    answer: Dict[str, str],
-    token_logprobs: Optional[List[dict]],
-    threshold: float,
-) -> Dict[str, str]:
+def yes_probabilities(token_logprobs: Optional[List[dict]]) -> Optional[Dict[str, float]]:
     """
-    Missing an immodest image is far worse than blocking a harmless one, so a condition counts as Yes
-    when P(Yes) >= threshold even if the model's top answer was "No".
-
-    token_logprobs: OpenAI-style [{"token": ..., "top_logprobs": [{"token": ..., "logprob": ...}]}].
+    P(Yes) per condition from OpenAI-style logprobs:
+    [{"token": ..., "top_logprobs": [{"token": ..., "logprob": ...}]}].
     The Yes/No value tokens appear in the same order as CONDITION_KEYS (schema-constrained output).
+    Returns None when the tokens cannot be aligned with the keys.
     """
-    if not token_logprobs or threshold >= 0.5:
-        return answer
+    if not token_logprobs:
+        return None
     value_positions = [t for t in token_logprobs if (t.get("token") or "").strip().strip('"') in ("Yes", "No")]
     if len(value_positions) != len(CONDITION_KEYS):
-        return answer  # could not align tokens with keys; keep the literal answer
-    out = dict(answer)
+        return None
+    out: Dict[str, float] = {}
     for key, tok in zip(CONDITION_KEYS, value_positions):
         p_yes = 0.0
         p_no = 0.0
@@ -94,6 +89,26 @@ def apply_yes_threshold(
             elif word == "No":
                 p_no += p
         total = p_yes + p_no
-        if total > 0 and p_yes / total >= threshold:
+        out[key] = (p_yes / total) if total > 0 else (1.0 if (tok.get("token") or "").strip().strip('"') == "Yes" else 0.0)
+    return out
+
+
+def apply_yes_threshold(
+    answer: Dict[str, str],
+    token_logprobs: Optional[List[dict]],
+    threshold: float,
+) -> Dict[str, str]:
+    """
+    Missing an immodest image is far worse than blocking a harmless one, so a condition counts as Yes
+    when P(Yes) >= threshold even if the model's top answer was "No".
+    """
+    if threshold >= 0.5:
+        return answer
+    probs = yes_probabilities(token_logprobs)
+    if probs is None:
+        return answer  # could not align tokens with keys; keep the literal answer
+    out = dict(answer)
+    for key, p_yes in probs.items():
+        if p_yes >= threshold:
             out[key] = "Yes"
     return out

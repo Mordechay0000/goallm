@@ -86,3 +86,11 @@ class TestPolicyCache:
         v1 = pdb.get_policy_version()
         pdb.set_filter_switch("google_search_filter", True)
         assert pdb.get_policy_version() == v1 + 1
+
+
+def test_trusting_none_ignores_forwarded_headers_from_a_local_balancer():
+    # run_cluster.sh sets TRUSTED_PROXY_IPS=none: a TCP balancer on 127.0.0.1 adds no header, so any
+    # X-Forwarded-For seen there was written by the client.
+    from core.net_utils import resolve_client_ip
+
+    assert resolve_client_ip("127.0.0.1", "198.51.100.7", trusted="none") == "127.0.0.1"

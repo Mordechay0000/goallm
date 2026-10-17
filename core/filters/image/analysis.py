@@ -20,11 +20,33 @@ CONDITION_KEYS = (
 
 def combine_results(results: Iterable[Dict[str, str]]) -> Dict[str, str]:
     out = {k: "No" for k in CONDITION_KEYS}
+    p_max = None
     for r in results:
         for k in CONDITION_KEYS:
             if r.get(k) == "Yes":
                 out[k] = "Yes"
+        if isinstance(r.get("_p_yes_max"), (int, float)):
+            p_max = max(p_max or 0.0, float(r["_p_yes_max"]))
+    if p_max is not None:
+        out["_p_yes_max"] = p_max
     return out
+
+
+def is_blocked(result: Dict) -> bool:
+    return any(result.get(k) == "Yes" for k in CONDITION_KEYS)
+
+
+def is_uncertain(result: Dict) -> bool:
+    """Not blocked, but the model gave Yes a non-trivial probability → human review."""
+    from data.constants import VLM_REVIEW_LOW, VLM_YES_THRESHOLD
+
+    p = result.get("_p_yes_max")
+    return (
+        VLM_REVIEW_LOW > 0
+        and isinstance(p, (int, float))
+        and not is_blocked(result)
+        and VLM_REVIEW_LOW <= float(p) < VLM_YES_THRESHOLD
+    )
 
 
 def analyze_image_frames(analyzer, image_bytes: bytes, mime_type: str | None) -> Dict[str, str]:

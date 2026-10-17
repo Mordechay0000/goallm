@@ -21,6 +21,7 @@ from core.filters.image.analyzers.policy import (
     ResponseValidationError,
     apply_yes_threshold,
     load_system_prompt,
+    yes_probabilities,
     parse_and_validate,
 )
 from data.constants import (
@@ -102,7 +103,12 @@ class OpenAICompatImageAnalyzer(ImageAnalyzer):
         content = ((choice.get("message") or {}).get("content")) or ""
         answer = parse_and_validate(content)
         logprobs = ((choice.get("logprobs") or {}).get("content")) if isinstance(choice.get("logprobs"), dict) else None
-        return apply_yes_threshold(answer, logprobs, VLM_YES_THRESHOLD)
+        result = apply_yes_threshold(answer, logprobs, VLM_YES_THRESHOLD)
+        probs = yes_probabilities(logprobs)
+        if probs:
+            # Confidence for the human-review queue ("uncertain" band below the block threshold).
+            result["_p_yes_max"] = max(probs.values())
+        return result
 
 
 __all__ = ["OpenAICompatImageAnalyzer", "ResponseValidationError"]

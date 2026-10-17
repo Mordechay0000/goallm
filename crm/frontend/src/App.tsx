@@ -43,6 +43,8 @@ import TrafficViewPage from './pages/TrafficViewPage';
 import SurfBlockPage from './pages/SurfBlockPage';
 import SurfUpdateRulePage from './pages/SurfUpdateRulePage';
 import SurfQuickRulePage from './pages/SurfQuickRulePage';
+import VideoReviewPage from './pages/VideoReviewPage';
+import AdminReviewPage from './pages/AdminReviewPage';
 import AdminLayout from './components/AdminLayout';
 import { DOCUMENT_TITLE } from './brand';
 
@@ -314,6 +316,26 @@ function App() {
               <ProtectedRoute>
                 <AdminLayout>
                   <SurfBlockPage />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/review"
+            element={
+              <ProtectedRoute>
+                <AdminLayout>
+                  <AdminReviewPage />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/video-review"
+            element={
+              <ProtectedRoute>
+                <AdminLayout>
+                  <VideoReviewPage />
                 </AdminLayout>
               </ProtectedRoute>
             }

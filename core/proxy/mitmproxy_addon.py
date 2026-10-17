@@ -35,6 +35,9 @@ from core.flow.site_policy_pages import (
 )
 from core.filters.video.video_filter import (
     block_response_headers,
+    hls_child_urls,
+    is_hls_manifest,
+    is_media_segment,
     is_streamable_media,
     is_video_response,
     video_allowed_for_rule,
@@ -46,12 +49,20 @@ from core.policy.policy_cache import (
     get_filter_switches,
     get_policy_resolver,
     get_user_id_for_ip,
+    is_media_approved,
 )
-from core.policy.policy_database import add_traffic_log_entry
+from core.policy.policy_database import (
+    add_approved_media_children,
+    add_traffic_log_entry,
+    canonical_media_key,
+    record_blocked_media,
+)
 from core.proxy.image_refresh import STATUS_PATH, strip_reload_param_from_request
 from core.proxy.proxy_auth import ProxyAuthenticator
 from core.proxy_identity import HEADER as PROXY_USER_HEADER, sign_user
-from core.filters.image.image_status_manager import get_url_statuses
+from core.filters.image.data_uri_filter import filter_data_uri_images
+from core.filters.image.image_extraction import detect_image_mime
+from core.filters.image.image_status_manager import get_image_with_status, get_url_statuses
 from core.proxy.utils import format_flow_error, format_response_error
 from data.constants import (
     FILTER_BIND_BASE_URL,
@@ -152,6 +163,7 @@ class FilterAddon:
         self.auth = ProxyAuthenticator()
         self._touch_lock = threading.Lock()
         self._touched: dict[str, float] = {}
+        self._recorded_media: dict[tuple, float] = {}
 
     # ---------- identity ----------
 
@@ -174,8 +186,8 @@ class FilterAddon:
             return
         now = time.monotonic()
         with self._touch_lock:
-            last = self._touched.get(client_ip, 0.0)
-            if now - last < TOUCH_IP_MIN_INTERVAL_SEC:
+            last = self._touched.get(client_ip)
+            if last is not None and now - last < TOUCH_IP_MIN_INTERVAL_SEC:
                 return
             self._touched[client_ip] = now
             if len(self._touched) > 100000:
@@ -352,18 +364,56 @@ class FilterAddon:
             return
         switches = get_filter_switches()
         rule = flow.metadata.get("request_rule")
-        if video_allowed_for_rule(rule, switches.get("video_filter", True)):
-            if is_streamable_media(ct):
-                flow.response.stream = True
+        url = flow.request.url
+        path = flow.request.path or ""
+        approved = False
+        if not video_allowed_for_rule(rule, switches.get("video_filter", True)):
+            try:
+                approved = is_media_approved(url)
+            except Exception as e:
+                logger.warning("approved-media lookup failed for %s: %s", url, e)
+            if not approved:
+                block_response_headers(flow, FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS)
                 flow.metadata["streamed"] = True
+                flow.metadata["traffic_status"] = "video_blocked"
+                self._remember_blocked_media(flow, ct, path)
+                logger.info("Video blocked (headers stage) - URL: %s", flow.request.pretty_url)
+                return
+        if approved and is_hls_manifest(ct, path):
+            # Keep the (small) playlist body so its segments can be registered as approved too.
+            flow.metadata["approved_manifest"] = True
             return
-        block_response_headers(flow, FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS)
-        flow.metadata["streamed"] = True
-        flow.metadata["traffic_status"] = "video_blocked"
-        logger.info("Video blocked (headers stage) - URL: %s", flow.request.pretty_url if flow.request else "")
+        if is_streamable_media(ct):
+            flow.response.stream = True
+            flow.metadata["streamed"] = True
+
+    def _remember_blocked_media(self, flow: http.HTTPFlow, ct: str, path: str) -> None:
+        """Record what was blocked, so the user can send exactly this video for review (MSE players hide the URL)."""
+        if is_media_segment(ct, path):
+            return
+        user_id = flow.metadata.get("user_id")
+        key = (user_id, canonical_media_key(flow.request.url))
+        now = time.monotonic()
+        last = self._recorded_media.get(key)
+        if last is not None and now - last < 600:  # (monotonic() may be < 600 right after boot)
+            return
+        self._recorded_media[key] = now
+        if len(self._recorded_media) > 50000:
+            self._recorded_media.clear()
+        try:
+            record_blocked_media(user_id, flow.request.url, flow.request.headers.get("referer"), ct)
+        except Exception as e:
+            logger.debug("record_blocked_media failed: %s", e)
 
     async def response(self, flow: http.HTTPFlow) -> None:
         url = flow.request.pretty_url if flow.request else "Unknown URL"
+        if flow.metadata.get("approved_manifest") and flow.response is not None:
+            try:
+                children = hls_child_urls(flow.response.get_text(strict=False) or "", flow.request.url)
+                await asyncio.to_thread(add_approved_media_children, canonical_media_key(flow.request.url), children)
+            except Exception as e:
+                logger.warning("Could not register HLS children for %s: %s", url, e)
+            flow.metadata["streamed"] = True  # nothing else to filter in a playlist
         # Only identified users' traffic is processed: a 407 (auth required), the diagnostic redirect or a
         # request to the CRM itself must reach the client untouched (the 407 used to be replaced by a block page).
         if (
@@ -407,6 +457,48 @@ class FilterAddon:
             )
         except Exception as log_err:
             logger.debug("Traffic log entry failed: %s", log_err)
+
+    # ---------- WebSocket ----------
+
+    async def websocket_message(self, flow: http.HTTPFlow) -> None:
+        """Images pushed over a WebSocket (chat apps, live feeds) never become an image request, so they are
+        checked here: a binary message that IS an image, and base64 data-URI images inside text messages.
+        Only server → client messages of identified users; an image not yet approved is replaced."""
+        if flow.websocket is None or not flow.websocket.messages:
+            return
+        message = flow.websocket.messages[-1]
+        user_id = flow.metadata.get("user_id")
+        if message.from_client or user_id is None or not message.content:
+            return
+        switches = get_filter_switches()
+        if not switches.get("image_filter", True):
+            return
+        rule = flow.metadata.get("request_rule")
+        if rule is not None and not rule.get("image_filter_enabled", True):
+            return
+        url = flow.request.pretty_url
+        try:
+            if message.is_text:
+                if b"data:image/" not in message.content or not switches.get("embedded_image_filter", True):
+                    return
+                new_body, n = await asyncio.to_thread(filter_data_uri_images, message.content, url, None)
+                if n:
+                    message.content = new_body
+                return
+            mime = detect_image_mime(message.content)
+            if mime is None:
+                return
+            data = message.content
+            result, _ct, status = await asyncio.to_thread(
+                get_image_with_status, data, f"ws:{url[:200]}", None, mime
+            )
+            if status != "allowed":
+                message.content = result
+        except Exception as e:
+            # fail closed for a binary image (never forward it unchecked); a text message is left as is
+            logger.warning("WebSocket image check failed on %s: %s", url[:80], e)
+            if not message.is_text and detect_image_mime(message.content):
+                message.drop()
 
     def error(self, flow: http.HTTPFlow) -> None:
         """Handle errors during request/response (e.g. SSL, connection)."""

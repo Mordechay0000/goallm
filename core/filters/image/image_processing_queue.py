@@ -109,7 +109,7 @@ class ImageProcessingQueue:
             image_mime_type,
             len(image_content),
         )
-        logger.debug("Image details: %s", details)
+        logger.debug("Image details: %s", {k: v for k, v in details.items() if k != "image_bytes"})
 
         task = ImageTask(
             image_content=image_content,

@@ -19,7 +19,7 @@ from pathlib import Path
 
 from core.filters.image.analysis import CONDITION_KEYS, analyze_image_frames
 from core.filters.image.image_extraction import detect_image_mime
-from core.filters.image.image_status_manager import _create_image_analyzer
+from core.filters.image.analyzer_factory import create_image_analyzer as _create_image_analyzer
 
 
 def main(golden_dir: str) -> int:

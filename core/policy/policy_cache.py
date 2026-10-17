@@ -18,7 +18,7 @@ CHECK_INTERVAL_SEC = 1.0
 
 _lock = threading.Lock()
 _version: Optional[int] = None
-_checked_at = 0.0
+_checked_at = float("-inf")  # monotonic() can be small right after boot
 _caches: Dict[str, dict] = {}
 
 
@@ -41,7 +41,7 @@ def invalidate() -> None:
     global _checked_at
     with _lock:
         _caches.clear()
-        _checked_at = 0.0
+        _checked_at = float("-inf")
 
 
 def _cached(name: str, key, compute):
@@ -91,3 +91,11 @@ def get_policy_resolver(user_id: Optional[int]):
     from core.policy.policy_loader import build_policy_resolver
 
     return _cached("resolvers", user_id, lambda: build_policy_resolver(user_id))
+
+
+def is_media_approved(url: str) -> bool:
+    """A video approved by per-video review (or a child URL of an approved HLS manifest)."""
+    key = pdb.canonical_media_key(url)
+    if key in _cached("approved_media", None, pdb.get_approved_media_keys):
+        return True
+    return pdb.is_approved_media_child(key)
