@@ -1,24 +1,11 @@
-# Blocked words – English.
+# Hard words – English. Masked (XXX) in any context; weigh TEXT_HARD_WEIGHT (5) in the score.
+# A word with an innocent meaning, or one used in Torah translations / halacha / news, is not here – it is in
+# scored.txt (hidden score) or out. Exception, by decision: LGBTQ+ terms are hard in every context.
+# Stemming applies (pornographic → pornograph…). "=word" = exact. Several words = a phrase. A trailing number = weight.
+# Check every change against permitted text:  python -m tools.check_word_list <files>
 #
-# Rule: only words whose every meaning IS the immodest content itself. A word with an innocent meaning, or one
-# that appears in Torah translations, halacha, (Haredi) news, medicine or forms, is not listed – it would be
-# masked in a Chumash translation or a news article. Check every change against permitted text:
-#     python -m tools.check_word_list <files>
-# Matching uses English stemming (pornographic → pornograph…). A line "=word" matches exactly (no stemming).
-#
-# REMOVED on purpose (permitted contexts, measured on Torah translations and Haredi news):
-#   sex, sexual        – "Sex: M / F" on forms, biology; "sexual abuse" in news
-#   naked, nakedness   – Genesis 2:25; "uncover the nakedness" (Leviticus 18)
-#   adultery, adulterous, lust, lustful, lover(s), seduce, seduction – the Ten Commandments, Prophets, halacha
-#   intercourse, arousal, arouse – halachic translations; "arousing curiosity"
-#   nude               – a colour (nude heels, nude make-up)
-#   genital(s), penis, vagina, buttocks – medicine
-#   mistress           – "mistress of the house"; fetish – idols in the Prophets ("abominable fetishes")
-#   gay                – also "cheerful"; seductive – "a seductive argument"
-#   orgasm, masturbation, masturbate – halacha in English (Kitzur Shulchan Aruch), medicine
-#   lesbian, homosexual(ity), transgender, transsexual, bisexual, lgbt(q) – halacha in English ("Lesbian
-#     relations are forbidden"), Haredi news. A page PROMOTING the topic is a matter of context: the model's
-#     second opinion (TEXT_LLM_REVIEW), not a single word.
+# Not here (permitted contexts – measured): sex, sexual, naked, nakedness, adultery, lust, lover, seduce, intercourse,
+# nude (a colour), genital(s), mistress, fetish (idols in the Prophets), gay ("cheerful" – it is in scored.txt).
 
 # Explicit sexual content
 porn
@@ -39,5 +26,24 @@ blowjob
 handjob
 dildo
 
-# LGBTQ+ slang (not used in Haredi news or halacha)
+# LGBTQ+ – in every context
 =gays
+lesbian
+homosexual
+homosexuality
+transgender
+transsexual
+bisexual
+pansexual
+lgbt
+lgbtq
+lgbtqia
+nonbinary
+queer
+gay pride
+gay marriage
+gay rights
+gay couple
+same sex
+pride parade
+pride month

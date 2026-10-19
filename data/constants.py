@@ -239,13 +239,26 @@ VIDEO_FRAME_MAX_SIDE = int(os.environ.get("VIDEO_FRAME_MAX_SIDE", "1280"))
 AUTO_PASSTHROUGH_PINNED_APPS = (os.environ.get("AUTO_PASSTHROUGH_PINNED_APPS") or "0").strip().lower() in ("1", "true", "yes", "on")
 AUTO_PASSTHROUGH_MIN_FAILURES = int(os.environ.get("AUTO_PASSTHROUGH_MIN_FAILURES", "2"))
 
-# ========== סינון מלל – חוות דעת שנייה ממודל השפה ==========
-# דף שרשימת המילים מצאה בו לפחות TEXT_LLM_MIN_MATCHES מילים אבל לא מספיק לחסימה → המודל (VLM_API_BASE) שופט
-# את הדף כולו לפי ההקשר. 0 = כבוי (ברירת מחדל: דורש שרת מודל, ומוסיף עד TEXT_LLM_TIMEOUT_SEC לדפים כאלה).
-TEXT_LLM_REVIEW = (os.environ.get("TEXT_LLM_REVIEW") or "0").strip().lower() in ("1", "true", "yes", "on")
-TEXT_LLM_MIN_MATCHES = int(os.environ.get("TEXT_LLM_MIN_MATCHES", "1"))
-TEXT_LLM_TIMEOUT_SEC = float(os.environ.get("TEXT_LLM_TIMEOUT_SEC", "4"))
-TEXT_LLM_MAX_CHARS = int(os.environ.get("TEXT_LLM_MAX_CHARS", "4000"))
+# ========== סינון מלל – ניקוד (בלי מודל שפה) ==========
+# משקל ברירת מחדל של מילה קשה (blocked.txt). מילים חשודות (scored.txt) – המשקל כתוב ליד כל מילה.
+TEXT_HARD_WEIGHT = float(os.environ.get("TEXT_HARD_WEIGHT", "5"))
+# חלון מקומי: הניקוד הגבוה בכל רצף של כך וכך מילים. חסימת דף: חלון ≥ / דף שלם ≥.
+TEXT_WINDOW_WORDS = int(os.environ.get("TEXT_WINDOW_WORDS", "250"))
+TEXT_WINDOW_BLOCK_SCORE = float(os.environ.get("TEXT_WINDOW_BLOCK_SCORE", "12"))
+TEXT_PAGE_BLOCK_SCORE = float(os.environ.get("TEXT_PAGE_BLOCK_SCORE", "30"))
+# בלוק (כתבה / תגובה / פריט) עם ניקוד ≥ זה מוסתר לבדו – אם הוא לא יותר מ-TEXT_HIDE_MAX_SHARE מהדף.
+TEXT_HIDE_SCORE = float(os.environ.get("TEXT_HIDE_SCORE", "10"))
+TEXT_HIDE_MAX_SHARE = float(os.environ.get("TEXT_HIDE_MAX_SHARE", "0.5"))
+# 3 מילים שונות ויותר יחד → הניקוד מוכפל.
+TEXT_DIVERSITY_BONUS = float(os.environ.get("TEXT_DIVERSITY_BONUS", "1.3"))
+# הקשר תורני (context.txt): לפחות כך וכך סמנים, ובצפיפות של לפחות כך וכך ל-1000 מילים → מילים חשודות (לא קשות)
+# שוקלות רק TEXT_CONTEXT_FACTOR.
+TEXT_CONTEXT_FACTOR = float(os.environ.get("TEXT_CONTEXT_FACTOR", "0.3"))
+TEXT_CONTEXT_MIN_MARKERS = int(os.environ.get("TEXT_CONTEXT_MIN_MARKERS", "3"))
+TEXT_CONTEXT_MIN_DENSITY = float(os.environ.get("TEXT_CONTEXT_MIN_DENSITY", "4"))
+# הקשר רפואי (medical.txt) – אותו כלל, הפחתה חלשה יותר (מאמר על סרטן השד, לא "חינוך מיני" בתחפושת רפואית).
+TEXT_MEDICAL_FACTOR = float(os.environ.get("TEXT_MEDICAL_FACTOR", "0.6"))
+TEXT_TITLE_FACTOR = float(os.environ.get("TEXT_TITLE_FACTOR", "1.5"))
 
 # ========== בדיקת תיאור הסרטון (לפני הפריימים) ==========
 # מודל השפה (VLM_API_BASE) קורא כותרת, תיאור, ערוץ ותגיות לפני שמורידים פריים אחד. יכול רק לחסום, לא לאשר.

@@ -1,12 +1,11 @@
-"""Text-filter evasion + model second opinion, meta-tag CSP, DASH approval, learned TLS passthrough, calibration."""
+"""Text-filter evasion, meta-tag CSP, DASH approval, learned TLS passthrough, calibration."""
 import re
 import shutil
 import subprocess
 
 import pytest
 
-from core.filters.text import llm_review, text_filter
-from core.filters.text.text_filter import _filter_plain_text, filter_text_content
+from core.filters.text.text_filter import _filter_plain_text
 from core.filters.video.video_filter import dash_children
 from core.policy import policy_cache, policy_database as pdb
 from core.proxy.csp import rewrite_meta_csp
@@ -23,45 +22,8 @@ def test_evasive_spellings_are_caught_and_masked(text):
 
 @pytest.mark.parametrize("text", ["Essex county", "the sextant", "U S A", "$100", "a b c d", "שלום ס ב א", "ר' משה", "s e x"])
 def test_innocent_text_is_left_alone(text):
-    out, _block, _reason, debug = _filter_plain_text(text)
-    assert debug["counts"]["matched"] == 0 and out == text
-
-
-# ---------- text filter: second opinion ----------
-
-
-def _page(words):
-    body = " ".join(["תוכן רגיל של אתר חדשות"] * 60 + words)
-    return f"<html><body><div>{body}</div></body></html>".encode("utf-8")
-
-
-def test_borderline_page_goes_to_the_model_and_its_verdict_counts(monkeypatch):
-    asked = []
-    monkeypatch.setattr(text_filter, "TEXT_LLM_REVIEW", True)
-    monkeypatch.setattr(llm_review, "_ask", lambda text: asked.append(text) or True)
-    llm_review._cache.clear()
-    _out, block, reason, _dbg = filter_text_content(_page(["porn"]), url="https://news.example/a", content_type="text/html")
-    assert block and reason.startswith("llm_review") and "תוכן רגיל" in asked[0]
-
-
-def test_clean_pages_never_call_the_model_and_failures_keep_the_word_result(monkeypatch):
-    monkeypatch.setattr(text_filter, "TEXT_LLM_REVIEW", True)
-    calls = []
-    monkeypatch.setattr(llm_review, "_ask", lambda text: calls.append(1) or True)
-    llm_review._cache.clear()
-    _out, block, _r, _d = filter_text_content(_page([]), url="https://news.example/b", content_type="text/html")
-    assert not block and calls == []
-
-    def boom(text):
-        raise TimeoutError("slow model")
-
-    monkeypatch.setattr(llm_review, "_ask", boom)
-    out, block, _r, _d = filter_text_content(_page(["porn", "word2"]), url="https://news.example/c", content_type="text/html")
-    assert not block and b"XXXX" in out  # word masked, page not blocked on a model error
-
-
-def test_off_by_default():
-    assert text_filter.TEXT_LLM_REVIEW is False
+    out, block, _reason, _debug = _filter_plain_text(text)
+    assert out == text and not block
 
 
 # ---------- CSP in a meta tag ----------

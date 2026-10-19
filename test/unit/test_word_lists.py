@@ -1,4 +1,4 @@
-"""The word lists must never match permitted contexts (Torah / halacha, Haredi news, medicine, forms)."""
+"""Word lists: permitted contexts are never masked or blocked; LGBTQ+ terms are masked in every context."""
 import pytest
 
 from core.filters.text.text_filter import _filter_plain_text, _tokenize_words
@@ -18,7 +18,6 @@ PERMITTED = [
     "מזון בריא לכל המשפחה",                                # "מזון" ← "זונה" במאתר הישן
     "גילוי עריות, איסור ייחוד וקול באשה ערוה",
     "אונס רחמנא פטריה",
-    "ארגוני הלהט\"ב הפגינו מול הכנסת",                     # חדשות – נושא, לא תוכן
     "Sex: Male / Female",
     "You shall not commit adultery.",
     "The two of them were naked, the man and his wife",
@@ -26,16 +25,36 @@ PERMITTED = [
     "nude heels and nude make-up",
     "a true lover of Torah; the mistress of the house",
     "sexual abuse charges were filed",
-    "Lesbian relations are forbidden (Kitzur Shulchan Aruch)",
     "a gay and festive Purim seudah",
 ]
 
 
 @pytest.mark.parametrize("text", PERMITTED)
-def test_permitted_contexts_are_never_masked(text):
+def test_permitted_contexts_are_never_masked_or_blocked(text):
+    # suspicious words may add a hidden score here – but nothing is masked and nothing is blocked
     out, block, _reason, debug = _filter_plain_text(text)
-    assert debug["counts"]["matched"] == 0, debug["matched"]
-    assert out == text and not block
+    assert out == text and not block, debug.get("score")
+
+
+LGBT_ANY_CONTEXT = [
+    'ארגוני הלהט"ב הפגינו מול הכנסת',
+    "הכנסת דנה בחוק נישואים חד מיניים",
+    "מצעד הגאווה בירושלים",
+    "Lesbian relations are forbidden (Kitzur Shulchan Aruch)",
+    "the court ruled on same-sex marriage",
+    "transgender policy",
+]
+
+
+@pytest.mark.parametrize("text", LGBT_ANY_CONTEXT)
+def test_lgbt_terms_are_masked_in_every_context(text):
+    out, _block, _reason, debug = _filter_plain_text(text)
+    assert "XXX" in out, debug
+
+
+def test_homo_sapiens_is_not_lgbt():
+    out, _b, _r, _d = _filter_plain_text("הומו סאפיינס הופיע לפני כ-300 אלף שנה")
+    assert "X" not in out
 
 
 EXPLICIT = ["סקס", "סקסי", "והסקסית", "פורנו", "בפורנוגרפיה", "ארוטית", "אירוטיקה", "ביקיני", "לפלרטט", "דייטים",
@@ -49,9 +68,9 @@ def test_explicit_words_and_their_forms_are_caught(word):
 
 
 def test_exact_entries_do_not_inflect():
-    # "=gays" is exact: "gay" (cheerful) must stay open even though stemming would map gays → gay
-    assert _filter_plain_text("gay")[3]["counts"]["matched"] == 0
-    assert _filter_plain_text("gays")[3]["counts"]["matched"] == 1
+    # "=gays" is exact and hard; "gay" alone ("cheerful") is only a hidden score – never masked
+    assert _filter_plain_text("gay")[0] == "gay"
+    assert _filter_plain_text("gays")[0] == "XXXX"
 
 
 def test_acronyms_and_geresh_stay_one_token_and_maqaf_splits():
