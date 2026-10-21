@@ -244,6 +244,8 @@ def filter_text_content(
             is_html = "<" in text and ">" in text and ("<html" in text.lower() or "<body" in text.lower() or "<div" in text.lower())
             if is_html:
                 out_bytes, block_page, block_reason, debug_info = _filter_html(text, url, content_type, used_encoding)
+                if out_bytes is None:
+                    out_bytes = content  # unchanged: no re-serialization of the page
             else:
                 filtered, block_page, block_reason, debug_info = _filter_plain_text(text)
                 out_bytes = content if filtered == text else _encode_like_source(filtered, used_encoding, html=False)
@@ -319,11 +321,12 @@ def _url_words(url: str) -> str:
     return re.sub(r"[/_\-.+]+", " ", path).strip()
 
 
-def _filter_html(html_text: str, url: str, content_type: str, encoding: str = "utf-8") -> Tuple[bytes, bool, str, Dict[str, Any]]:
+def _filter_html(html_text: str, url: str, content_type: str, encoding: str = "utf-8") -> Tuple[Optional[bytes], bool, str, Dict[str, Any]]:
     """
     Mask hard words in every visible text node and image alt/title; score the page.
     A block (post / comment / item / card) whose own score passes TEXT_HIDE_SCORE is hidden by itself, if it is not
     the bulk of the page; the page is blocked only if what remains still scores high.
+    Returns None instead of bytes when nothing was masked or hidden.
     """
     try:
         from bs4 import BeautifulSoup
@@ -346,6 +349,7 @@ def _filter_html(html_text: str, url: str, content_type: str, encoding: str = "u
         pos += n
 
     skip_types = (Comment, Declaration, Doctype, ProcessingInstruction)
+    masked = False
     for node in [n for n in soup.descendants if isinstance(n, NavigableString)]:
         if isinstance(node, skip_types) or not node.strip() or _is_inside_skip_tag(node):
             continue
@@ -361,6 +365,7 @@ def _filter_html(html_text: str, url: str, content_type: str, encoding: str = "u
             hard = [m for m in ms if m.term.kind == HARD]
             if hard:
                 node.replace_with(_mask(s, hard))
+                masked = True
         pos += n
 
     for img in soup.find_all("img"):
@@ -373,6 +378,7 @@ def _filter_html(html_text: str, url: str, content_type: str, encoding: str = "u
             hard = [m for m in ms if m.term.kind == HARD]
             if hard:
                 img[attr] = _mask(val, hard)
+                masked = True
             pos += n
 
     words = pos
@@ -407,6 +413,8 @@ def _filter_html(html_text: str, url: str, content_type: str, encoding: str = "u
     debug_info = _debug(ps, remaining, hidden)
     if hidden:
         logger.info("text_filter: %d block(s) hidden on %s", hidden, url[:100])
+    if not masked and not hidden:
+        return None, block_page, block_reason, debug_info  # nothing changed: the caller keeps the original bytes
     out = soup.decode(eventual_encoding=encoding)  # keeps <meta charset> consistent with the bytes we emit
     # Re-encode in the charset the page declared (windows-1255 Hebrew sites used to come back as UTF-8
     # under a windows-1255 header = garbled text). Characters the charset lacks become &#NNN; refs.

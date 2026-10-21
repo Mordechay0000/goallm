@@ -114,3 +114,30 @@ def test_image_alt_text_is_masked_and_scored():
     out, _b, _r, _d = filter_text_content(_html('<p>שלום</p><img src="a.jpg" alt="תמונה מתוך סרט פורנו">'),
                                           url="https://x.example/", content_type="text/html; charset=utf-8")
     assert "פורנו" not in out.decode() and "XXXX" in out.decode()
+
+
+# ---------- vocabulary found missing on real dating / relationship columns ----------
+
+
+@pytest.mark.parametrize("text", [
+    "רווקת השבוע, בת 34 מתל אביב, מספרת שניסתה את טינדר ואתרי היכרויות ועדיין מחפשת בן זוג שתתאהב בו.",
+    "המחקר מצא כי לוחמים רבים סובלים מירידה בחשק המיני ומבעיות זקפה, והמטפלת ממליצה לחזק את המגע המיני ואת היחסים האינטימיים.",
+])
+def test_dating_and_sexual_function_columns_are_blocked(text):
+    _out, block, reason, _d = _filter_plain_text(text)
+    assert block, reason
+
+
+def test_slang_noun_is_masked_but_the_same_letters_as_a_verb_are_not():
+    out, _b, _r, _d = _filter_plain_text("קשה לי להיות רק היזיזה שלך")
+    assert "יזיזה" not in out
+    text = "המשטרה ביקשה שהנהג יזיז את הרכב"
+    out, block, _r, _d = _filter_plain_text(text)
+    assert out == text and not block
+
+
+def test_a_page_with_nothing_to_change_keeps_its_original_bytes():
+    raw = ("<html><head><meta charset='utf-8'></head><body><p class=a>מזג&nbsp;האוויר</p><br>"
+           + "<p>הממשלה אישרה את התקציב.</p>" * 20 + "</body></html>").encode()
+    out, block, _r, _d = filter_text_content(raw, url="https://news.example/", content_type="text/html; charset=utf-8")
+    assert out is raw and not block
