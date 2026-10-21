@@ -4,15 +4,17 @@ Stores policies in SQLite database (pattern similar to image_status_db).
 DB path is fixed relative to project root so CRM and proxy (mitmdump) use the same file
 regardless of CWD (e.g. running uvicorn from crm/ vs mitmdump from project root).
 """
-import contextlib
 import sqlite3
 import logging
 import os
+import re
 import secrets
+from functools import lru_cache
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 
+from core.db_utils import ThreadLocalSQLite
 from data.constants import POLICIES_TABLE_NAME, TAG_RULES_TABLE_NAME, GOALLM_STORAGE_DIR
 
 logger = logging.getLogger(__name__)
@@ -31,18 +33,19 @@ os.makedirs(str(_storage_dir), mode=0o755, exist_ok=True)
 _db_path = _storage_dir / "policies.db"
 
 try:
-    db_connection = sqlite3.connect(str(_db_path), check_same_thread=False, timeout=10)
+    db_connection = ThreadLocalSQLite(str(_db_path))
 except sqlite3.OperationalError:
     _fallback = Path.home() / ".goallm" / "storage"
     if _fallback.resolve() != _storage_dir.resolve():
         os.makedirs(str(_fallback), mode=0o755, exist_ok=True)
         _db_path = _fallback / "policies.db"
-        db_connection = sqlite3.connect(str(_db_path), check_same_thread=False, timeout=10)
+        db_connection = ThreadLocalSQLite(str(_db_path))
         logger.warning("Using fallback policies DB at %s", _db_path)
     else:
         raise
-db_connection.execute("PRAGMA journal_mode=WAL;")
-db_connection.execute("PRAGMA synchronous=NORMAL;")
+
+# Group several writes into one commit (atomic for readers in other processes).
+transaction = db_connection.transaction
 
 
 def init_db_schema():
@@ -162,6 +165,21 @@ def init_db_schema():
         db_connection.commit()
         logger.info("Added user_id to url_policies")
 
+    # The user_id migration above recreates the table without the per-filter columns that were added
+    # later; on a fresh install that dropped them. Make sure they exist after every migration.
+    for col, default in (
+        ("text_filter_enabled", 1),
+        ("image_filter_enabled", 1),
+        ("file_filter_enabled", 1),
+        ("pdf_filter_enabled", 1),
+        ("video_filter_enabled", 1),
+        ("surf_widget_enabled", 1),
+    ):
+        cols = [r[1] for r in db_connection.execute(f"PRAGMA table_info({POLICIES_TABLE_NAME})").fetchall()]
+        if col not in cols:
+            db_connection.execute(f"ALTER TABLE {POLICIES_TABLE_NAME} ADD COLUMN {col} INTEGER NOT NULL DEFAULT {default}")
+            logger.info("Added %s to url_policies", col)
+
     db_connection.execute(f"""
         CREATE INDEX IF NOT EXISTS idx_domain_path 
         ON {POLICIES_TABLE_NAME}(domain, path)
@@ -224,6 +242,7 @@ def init_db_schema():
         "pdf_filter_images",
         "file_share_block",
         "google_search_filter",
+        "video_filter",
     ):
         db_connection.execute(
             "INSERT OR IGNORE INTO filter_switches (key, value) VALUES (?, 1)",
@@ -322,8 +341,101 @@ def init_db_schema():
         db_connection.commit()
         logger.info("Added http_status_code to traffic_log")
 
+    # Change counter: every write that affects filtering bumps it, so the proxy can cache
+    # resolvers/switches in memory and refresh only when something actually changed.
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS meta (
+            key TEXT PRIMARY KEY,
+            value INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+    db_connection.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('policy_version', 0)")
+
+    # Per-user proxy credentials + admin flag (synced from CRM). Identity by credentials, not by IP.
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS proxy_users (
+            user_id INTEGER PRIMARY KEY,
+            is_admin INTEGER NOT NULL DEFAULT 0,
+            proxy_username TEXT UNIQUE,
+            proxy_secret_hash TEXT
+        )
+    """)
+    db_connection.execute("CREATE INDEX IF NOT EXISTS idx_traffic_log_created ON traffic_log(created_at)")
+
+    # Per-video review (like NetFree: a video is checked frame by frame, then opened for everyone).
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS video_reviews (
+            video_key TEXT PRIMARY KEY,
+            source_url TEXT NOT NULL,
+            page_url TEXT,
+            status TEXT NOT NULL,
+            requested_by INTEGER,
+            requested_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            duration_sec REAL,
+            frames_sampled INTEGER,
+            frames_analyzed INTEGER,
+            blocked_at_sec REAL,
+            reason TEXT,
+            decided_by INTEGER
+        )
+    """)
+    db_connection.execute("CREATE INDEX IF NOT EXISTS idx_video_reviews_status ON video_reviews(status, requested_at)")
+    # Child URLs (HLS variant playlists / segments) of an approved manifest.
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS approved_media_children (
+            media_key TEXT PRIMARY KEY,
+            parent_key TEXT NOT NULL,
+            expires_at INTEGER NOT NULL
+        )
+    """)
+    # DASH segment templates ($Number$ / $Time$) of an approved manifest: regex over scheme://host/path.
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS approved_media_patterns (
+            parent_key TEXT NOT NULL,
+            host TEXT NOT NULL,
+            pattern TEXT NOT NULL,
+            expires_at INTEGER NOT NULL,
+            PRIMARY KEY (parent_key, pattern)
+        )
+    """)
+    db_connection.execute("CREATE INDEX IF NOT EXISTS idx_approved_media_patterns_host ON approved_media_patterns(host)")
+    # Hosts whose clients (apps with certificate pinning) reject the proxy's certificate.
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS learned_passthrough (
+            host TEXT PRIMARY KEY,
+            failures INTEGER NOT NULL DEFAULT 0,
+            first_seen INTEGER NOT NULL,
+            last_seen INTEGER NOT NULL,
+            learned INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+    # Media the proxy blocked for a user recently – so the user can send exactly those for review
+    # (players that use blob:/MSE never expose the real URL to the page).
+    db_connection.execute("""
+        CREATE TABLE IF NOT EXISTS recent_blocked_media (
+            user_id INTEGER NOT NULL,
+            media_key TEXT NOT NULL,
+            media_url TEXT NOT NULL,
+            page_url TEXT,
+            content_type TEXT,
+            seen_at INTEGER NOT NULL,
+            PRIMARY KEY (user_id, media_key)
+        )
+    """)
+
     db_connection.commit()
     logger.info("Policies database schema initialized successfully")
+
+
+def _bump_policy_version() -> None:
+    """Mark that filtering data changed (committed together with the caller's write)."""
+    db_connection.execute("UPDATE meta SET value = value + 1 WHERE key = 'policy_version'")
+
+
+def get_policy_version() -> int:
+    row = db_connection.execute("SELECT value FROM meta WHERE key = 'policy_version'").fetchone()
+    return int(row[0]) if row else 0
 
 
 def set_profile_mode(mode: str, user_id: Optional[int] = None) -> None:
@@ -340,6 +452,7 @@ def set_profile_mode(mode: str, user_id: Optional[int] = None) -> None:
             "INSERT OR REPLACE INTO resolver_settings (key, value) VALUES ('profile_mode', ?)",
             (mode,),
         )
+    _bump_policy_version()
     db_connection.commit()
     logger.info("Profile mode set to %s (core DB: %s)%s", mode, _db_path, f" user_id={user_id}" if user_id is not None else "")
 
@@ -365,6 +478,7 @@ def set_default_user_id(user_id: Optional[int]) -> None:
         "INSERT OR REPLACE INTO resolver_settings (key, value) VALUES ('default_user_id', ?)",
         (val,),
     )
+    _bump_policy_version()
     db_connection.commit()
 
 
@@ -412,6 +526,7 @@ def set_ip_bindings(bindings: list) -> None:
                 "INSERT OR REPLACE INTO ip_bindings (ip, user_id) VALUES (?, ?)",
                 (ip, int(user_id)),
             )
+    _bump_policy_version()
     db_connection.commit()
     logger.info("ip_bindings updated: %s entries", len(bindings))
 
@@ -432,6 +547,7 @@ FILTER_SWITCH_KEYS = (
     "pdf_filter_images",
     "file_share_block",
     "google_search_filter",
+    "video_filter",
 )
 
 
@@ -463,6 +579,7 @@ def set_filter_switch(key: str, enabled: bool, updated_by_user_id: Optional[int]
         "INSERT OR REPLACE INTO filter_switches (key, value, updated_by_user_id, updated_at) VALUES (?, ?, ?, ?)",
         (key, 1 if enabled else 0, updated_by_user_id, now),
     )
+    _bump_policy_version()
     db_connection.commit()
     logger.info("Filter switch %s set to %s", key, enabled)
 
@@ -477,6 +594,7 @@ def set_filter_switches(switches: Dict[str, bool], updated_by_user_id: Optional[
                 "INSERT OR REPLACE INTO filter_switches (key, value, updated_by_user_id, updated_at) VALUES (?, ?, ?, ?)",
                 (key, 1 if enabled else 0, updated_by_user_id, now),
             )
+    _bump_policy_version()
     db_connection.commit()
     logger.info("Filter switches updated: %s", switches)
 
@@ -492,6 +610,7 @@ def set_allowed_file_urls(urls: List[str]) -> None:
                 "INSERT INTO allowed_file_downloads (url, created_at) VALUES (?, ?)",
                 (u, now),
             )
+    _bump_policy_version()
     db_connection.commit()
     logger.info("Allowed file URLs synced from CRM: %s entries", len([u for u in (urls or []) if (u or "").strip()]))
 
@@ -567,6 +686,7 @@ def set_site_injections(injections: List[Dict]) -> None:
                VALUES (?, ?, ?, ?, ?, ?, ?, 1)""",
             (domain, path, inc, head, body, hide, path_exact),
         )
+    _bump_policy_version()
     db_connection.commit()
     logger.info("Site injections synced from CRM: %s entries", len([i for i in (injections or []) if i.get("enabled")]))
 
@@ -725,6 +845,7 @@ def add_policy(domain: str, path: Optional[str] = None,
             (domain, path, type, state, description, enabled, created_at, updated_at, tags, source, text_filter_enabled, image_filter_enabled, file_filter_enabled, pdf_filter_enabled, video_filter_enabled, surf_widget_enabled, user_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (domain, path, policy_type, state, description, 1 if enabled else 0, now, now, tags_str, source, tf, imgf, ff, pf, vf, sw, user_id))
+        _bump_policy_version()
         db_connection.commit()
         
         cursor = db_connection.execute(f"""
@@ -793,6 +914,7 @@ def update_policy(policy_id: int, domain: Optional[str] = None,
         """, (new_domain, new_path, new_type, new_state,
               new_description, 1 if new_enabled else 0, now, new_tags_str, new_source,
               1 if new_text_filter else 0, 1 if new_image_filter else 0, 1 if new_file_filter else 0, 1 if new_pdf_filter else 0, 1 if new_video_filter else 0, 1 if new_surf_widget else 0, policy_id))
+        _bump_policy_version()
         db_connection.commit()
         
         # Return updated policy
@@ -811,6 +933,7 @@ def delete_policy(policy_id: int) -> bool:
     cursor = db_connection.execute(f"""
         DELETE FROM {POLICIES_TABLE_NAME} WHERE id = ?
     """, (policy_id,))
+    _bump_policy_version()
     db_connection.commit()
     return cursor.rowcount > 0
 
@@ -818,6 +941,7 @@ def delete_policy(policy_id: int) -> bool:
 def delete_user_policies(user_id: int) -> None:
     """Delete all user policies for a given user_id (used when syncing that user from CRM)."""
     db_connection.execute(f"DELETE FROM {POLICIES_TABLE_NAME} WHERE source = 'user' AND user_id = ?", (user_id,))
+    _bump_policy_version()
     db_connection.commit()
 
 
@@ -925,6 +1049,7 @@ def add_tag_rule(tag: str, state: str = "block", enabled: bool = True) -> Dict:
             INSERT INTO {TAG_RULES_TABLE_NAME} (tag, state, enabled, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?)
         """, (tag, state, 1 if enabled else 0, now, now))
+        _bump_policy_version()
         db_connection.commit()
         cursor = db_connection.execute(
             f"SELECT * FROM {TAG_RULES_TABLE_NAME} WHERE tag = ?", (tag,)
@@ -956,6 +1081,7 @@ def update_tag_rule(rule_id: int, tag: Optional[str] = None, state: Optional[str
         UPDATE {TAG_RULES_TABLE_NAME} SET tag = ?, state = ?, enabled = ?, updated_at = ?
         WHERE id = ?
     """, (new_tag, new_state, 1 if new_enabled else 0, now, rule_id))
+    _bump_policy_version()
     db_connection.commit()
     cursor = db_connection.execute(f"SELECT * FROM {TAG_RULES_TABLE_NAME} WHERE id = ?", (rule_id,))
     row = cursor.fetchone()
@@ -965,6 +1091,7 @@ def update_tag_rule(rule_id: int, tag: Optional[str] = None, state: Optional[str
 def delete_tag_rule(rule_id: int) -> bool:
     """Delete a tag rule by ID."""
     cursor = db_connection.execute(f"DELETE FROM {TAG_RULES_TABLE_NAME} WHERE id = ?", (rule_id,))
+    _bump_policy_version()
     db_connection.commit()
     return cursor.rowcount > 0
 
@@ -1030,6 +1157,7 @@ def start_traffic_session(user_id: int) -> int:
         "INSERT INTO traffic_recording_sessions (user_id, started_at, ended_at) VALUES (?, ?, NULL)",
         (user_id, now),
     )
+    _bump_policy_version()
     db_connection.commit()
     return cursor.lastrowid
 
@@ -1068,6 +1196,7 @@ def stop_traffic_session(user_id: int) -> Optional[Tuple[int, Optional[str]]]:
             "UPDATE traffic_recording_sessions SET ended_at = ? WHERE id = ?",
             (now, session_id),
         )
+        _bump_policy_version()
         db_connection.commit()
         return (session_id, None)
     share_token = secrets.token_urlsafe(32)
@@ -1075,6 +1204,7 @@ def stop_traffic_session(user_id: int) -> Optional[Tuple[int, Optional[str]]]:
         "UPDATE traffic_recording_sessions SET ended_at = ?, share_token = ? WHERE id = ?",
         (now, share_token, session_id),
     )
+    _bump_policy_version()
     db_connection.commit()
     return (session_id, share_token)
 
@@ -1131,17 +1261,14 @@ def get_traffic_sessions(user_id: int) -> List[Dict]:
 
 
 def get_traffic_log(session_id: int, user_id: int) -> List[Dict]:
-    """Get log entries for a session. Session must belong to user_id.
-    Uses a dedicated connection so it is safe when called from a thread (e.g. asyncio.to_thread).
-    """
-    with contextlib.closing(sqlite3.connect(str(_db_path), timeout=10)) as conn:
-        cursor = conn.execute(
-            "SELECT id FROM traffic_recording_sessions WHERE id = ? AND user_id = ?",
-            (session_id, user_id),
-        )
-        if not cursor.fetchone():
-            return []
-        return _get_traffic_log_rows(session_id, conn)
+    """Get log entries for a session. Session must belong to user_id. Safe from any thread."""
+    cursor = db_connection.execute(
+        "SELECT id FROM traffic_recording_sessions WHERE id = ? AND user_id = ?",
+        (session_id, user_id),
+    )
+    if not cursor.fetchone():
+        return []
+    return _get_traffic_log_rows(session_id)
 
 
 def get_traffic_session_by_token(token: str) -> Optional[Dict]:
@@ -1166,13 +1293,11 @@ def get_traffic_session_by_token(token: str) -> Optional[Dict]:
 
 def get_traffic_log_by_session_id(session_id: int) -> List[Dict]:
     """Get log entries for a session (public – no user check). Use with get_traffic_session_by_token."""
-    return _get_traffic_log_rows(session_id, None)
+    return _get_traffic_log_rows(session_id)
 
 
-def _get_traffic_log_rows(session_id: int, conn: Optional[sqlite3.Connection] = None) -> List[Dict]:
-    """conn: if provided (e.g. from get_traffic_log thread), use it; else use global db_connection."""
-    connection = conn if conn is not None else db_connection
-    cursor = connection.execute(
+def _get_traffic_log_rows(session_id: int) -> List[Dict]:
+    cursor = db_connection.execute(
         """SELECT id, session_id, url, protocol, status, time_sec, content_type, created_at, http_status_code
            FROM traffic_log WHERE session_id = ? ORDER BY id ASC""",
         (session_id,),
@@ -1193,5 +1318,317 @@ def _get_traffic_log_rows(session_id: int, conn: Optional[sqlite3.Connection] = 
     ]
 
 
+# --- Per-user proxy credentials and admin flags (synced from CRM) ---
+
+
+def set_proxy_users(users: List[Dict]) -> None:
+    """Replace proxy_users with CRM data: [{user_id, is_admin, proxy_username, proxy_secret_hash}]."""
+    with transaction():
+        db_connection.execute("DELETE FROM proxy_users")
+        for u in users or []:
+            db_connection.execute(
+                "INSERT INTO proxy_users (user_id, is_admin, proxy_username, proxy_secret_hash) VALUES (?, ?, ?, ?)",
+                (
+                    int(u["user_id"]),
+                    1 if u.get("is_admin") else 0,
+                    (u.get("proxy_username") or None),
+                    (u.get("proxy_secret_hash") or None),
+                ),
+            )
+        _bump_policy_version()
+        db_connection.commit()
+
+
+def get_proxy_credential(username: str) -> Optional[Tuple[int, str]]:
+    """Return (user_id, secret_hash) for a proxy username, or None."""
+    if not username:
+        return None
+    row = db_connection.execute(
+        "SELECT user_id, proxy_secret_hash FROM proxy_users WHERE proxy_username = ?",
+        (username,),
+    ).fetchone()
+    if not row or not row[1]:
+        return None
+    return int(row[0]), str(row[1])
+
+
+def get_user_is_admin(user_id: Optional[int]) -> bool:
+    if user_id is None:
+        return False
+    row = db_connection.execute("SELECT is_admin FROM proxy_users WHERE user_id = ?", (int(user_id),)).fetchone()
+    return bool(row and row[0])
+
+
+def purge_traffic_logs_older_than(days: int) -> int:
+    """Privacy: delete traffic log rows (full URLs) older than `days`. Returns rows deleted."""
+    if days <= 0:
+        return 0
+    cutoff = int(datetime.now().timestamp()) - days * 86400
+    cur = db_connection.execute("DELETE FROM traffic_log WHERE created_at < ?", (cutoff,))
+    db_connection.commit()
+    return cur.rowcount or 0
+
+
+# --- Per-video review ---
+
+_VOLATILE_QUERY_PARAMS = {
+    "token", "expires", "exp", "sig", "signature", "policy", "key-pair-id", "hdnts", "hdnea", "st", "e",
+    "hash", "auth", "x-amz-algorithm", "x-amz-credential", "x-amz-date", "x-amz-expires",
+    "x-amz-signedheaders", "x-amz-signature", "x-amz-security-token", "goallm_r", "_", "ts",
+    "timestamp", "nonce", "cb", "cachebuster",
+}
+
+VIDEO_FINAL_STATUSES = ("allowed", "blocked")
+
+
+def canonical_media_key(url: str) -> str:
+    """Stable key for a media URL: lowercase host, path, and the query WITHOUT signing/cache-busting
+    parameters (signed CDN URLs change on every load; ?id=1 vs ?id=2 must stay different videos)."""
+    from urllib.parse import parse_qsl, urlencode, urlsplit
+
+    from core.filters.video.youtube import media_key as youtube_media_key
+
+    special = youtube_media_key((url or "").strip())  # youtube:<videoId> / googlevideo:<stream id>
+    if special:
+        return special
+    parts = urlsplit((url or "").strip())
+    host = (parts.hostname or "").lower()
+    if parts.port and parts.port not in (80, 443):
+        host = f"{host}:{parts.port}"
+    query = sorted((k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k.lower() not in _VOLATILE_QUERY_PARAMS)
+    q = ("?" + urlencode(query)) if query else ""
+    return f"{parts.scheme.lower()}://{host}{parts.path or '/'}{q}"
+
+
+def _video_row(row) -> Dict:
+    keys = ("video_key", "source_url", "page_url", "status", "requested_by", "requested_at", "updated_at",
+            "duration_sec", "frames_sampled", "frames_analyzed", "blocked_at_sec", "reason", "decided_by")
+    return dict(zip(keys, row))
+
+
+_VIDEO_COLS = ("video_key, source_url, page_url, status, requested_by, requested_at, updated_at, duration_sec, "
+               "frames_sampled, frames_analyzed, blocked_at_sec, reason, decided_by")
+
+
+def get_video_review(video_key: str) -> Optional[Dict]:
+    row = db_connection.execute(f"SELECT {_VIDEO_COLS} FROM video_reviews WHERE video_key = ?", (video_key,)).fetchone()
+    return _video_row(row) if row else None
+
+
+def request_video_review(url: str, page_url: Optional[str], user_id: Optional[int]) -> Dict:
+    """Queue a video for review (idempotent). A failed review (error) can be requested again."""
+    key = canonical_media_key(url)
+    now = int(datetime.now().timestamp())
+    existing = get_video_review(key)
+    if existing and existing["status"] not in ("error",):
+        return existing
+    with transaction():
+        db_connection.execute(
+            """INSERT INTO video_reviews (video_key, source_url, page_url, status, requested_by, requested_at, updated_at)
+               VALUES (?, ?, ?, 'pending', ?, ?, ?)
+               ON CONFLICT(video_key) DO UPDATE SET status = 'pending', source_url = excluded.source_url,
+                   page_url = excluded.page_url, requested_by = excluded.requested_by, updated_at = excluded.updated_at,
+                   reason = NULL""",
+            (key, url, page_url, user_id, now, now),
+        )
+        db_connection.commit()
+    return get_video_review(key)
+
+
+def claim_next_video_review() -> Optional[Dict]:
+    """Atomically take the oldest pending review (several workers may run)."""
+    now = int(datetime.now().timestamp())
+    with transaction():
+        row = db_connection.execute(
+            f"""UPDATE video_reviews SET status = 'processing', updated_at = ?
+                WHERE video_key = (SELECT video_key FROM video_reviews WHERE status = 'pending' ORDER BY requested_at LIMIT 1)
+                RETURNING {_VIDEO_COLS}""",
+            (now,),
+        ).fetchone()
+        db_connection.commit()
+    return _video_row(row) if row else None
+
+
+def requeue_stuck_video_reviews(older_than_sec: int = 3600) -> int:
+    """A worker that died leaves 'processing' rows behind; put them back in the queue."""
+    cutoff = int(datetime.now().timestamp()) - older_than_sec
+    cur = db_connection.execute(
+        "UPDATE video_reviews SET status = 'pending' WHERE status = 'processing' AND updated_at < ?", (cutoff,)
+    )
+    db_connection.commit()
+    return cur.rowcount or 0
+
+
+def finish_video_review(video_key: str, status: str, *, duration_sec=None, frames_sampled=None,
+                        frames_analyzed=None, blocked_at_sec=None, reason=None, decided_by=None) -> None:
+    now = int(datetime.now().timestamp())
+    with transaction():
+        db_connection.execute(
+            """UPDATE video_reviews SET status = ?, updated_at = ?,
+                   duration_sec = COALESCE(?, duration_sec), frames_sampled = COALESCE(?, frames_sampled),
+                   frames_analyzed = COALESCE(?, frames_analyzed), blocked_at_sec = ?, reason = ?,
+                   decided_by = COALESCE(?, decided_by)
+               WHERE video_key = ?""",
+            (status, now, duration_sec, frames_sampled, frames_analyzed, blocked_at_sec, reason, decided_by, video_key),
+        )
+        if status not in ("allowed",):
+            db_connection.execute("DELETE FROM approved_media_children WHERE parent_key = ?", (video_key,))
+            db_connection.execute("DELETE FROM approved_media_patterns WHERE parent_key = ?", (video_key,))
+        if status in VIDEO_FINAL_STATUSES or status == "review":
+            _bump_policy_version()  # the proxy's approved-media cache must refresh
+        db_connection.commit()
+
+
+def list_video_reviews(status: Optional[str] = None, limit: int = 100, offset: int = 0) -> List[Dict]:
+    q = f"SELECT {_VIDEO_COLS} FROM video_reviews"
+    params: list = []
+    if status:
+        q += " WHERE status = ?"
+        params.append(status)
+    q += " ORDER BY updated_at DESC LIMIT ? OFFSET ?"
+    params += [int(limit), int(offset)]
+    return [_video_row(r) for r in db_connection.execute(q, params).fetchall()]
+
+
+def get_approved_media_keys() -> set:
+    rows = db_connection.execute("SELECT video_key FROM video_reviews WHERE status = 'allowed'").fetchall()
+    return {r[0] for r in rows}
+
+
+def add_approved_media_children(parent_key: str, child_urls: List[str], ttl_sec: int = 12 * 3600) -> int:
+    expires = int(datetime.now().timestamp()) + ttl_sec
+    keys = {canonical_media_key(u) for u in child_urls if u}
+    # A variant playlist is itself a child of the reviewed master: attach its segments to the ROOT review,
+    # so blocking the video later (finish_video_review) revokes the whole tree at once.
+    row = db_connection.execute("SELECT parent_key FROM approved_media_children WHERE media_key = ?", (parent_key,)).fetchone()
+    if row:
+        parent_key = row[0]
+    with transaction():
+        for k in keys:
+            db_connection.execute(
+                "INSERT INTO approved_media_children (media_key, parent_key, expires_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(media_key) DO UPDATE SET parent_key = excluded.parent_key, expires_at = excluded.expires_at",
+                (k, parent_key, expires),
+            )
+        db_connection.execute("DELETE FROM approved_media_children WHERE expires_at < ?", (int(datetime.now().timestamp()),))
+        db_connection.commit()
+    return len(keys)
+
+
+def _root_parent(parent_key: str) -> str:
+    row = db_connection.execute("SELECT parent_key FROM approved_media_children WHERE media_key = ?", (parent_key,)).fetchone()
+    return row[0] if row else parent_key
+
+
+def add_approved_media_patterns(parent_key: str, patterns: List[Tuple[str, str]], ttl_sec: int = 12 * 3600) -> int:
+    expires = int(datetime.now().timestamp()) + ttl_sec
+    root = _root_parent(parent_key)
+    with transaction():
+        for host, pattern in patterns:
+            db_connection.execute(
+                "INSERT INTO approved_media_patterns (parent_key, host, pattern, expires_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(parent_key, pattern) DO UPDATE SET expires_at = excluded.expires_at",
+                (root, host, pattern, expires),
+            )
+        db_connection.execute("DELETE FROM approved_media_patterns WHERE expires_at < ?", (int(datetime.now().timestamp()),))
+        db_connection.commit()
+    return len(patterns)
+
+
+@lru_cache(maxsize=4096)
+def _compiled(pattern: str):
+    return re.compile(pattern)
+
+
+def is_approved_media_pattern(url: str) -> bool:
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url or "")
+    host = (parts.hostname or "").lower()
+    if not host:
+        return False
+    rows = db_connection.execute(
+        "SELECT pattern FROM approved_media_patterns WHERE host = ? AND expires_at >= ?", (host, int(datetime.now().timestamp()))
+    ).fetchall()
+    target = f"{parts.scheme}://{parts.netloc}{parts.path}"
+    return any(_compiled(r[0]).fullmatch(target) for r in rows)
+
+
+def is_approved_media_child(media_key: str) -> bool:
+    row = db_connection.execute(
+        "SELECT 1 FROM approved_media_children WHERE media_key = ? AND expires_at >= ?",
+        (media_key, int(datetime.now().timestamp())),
+    ).fetchone()
+    return row is not None
+
+
+def record_blocked_media(user_id: int, media_url: str, page_url: Optional[str], content_type: Optional[str]) -> None:
+    now = int(datetime.now().timestamp())
+    key = canonical_media_key(media_url)
+    db_connection.execute(
+        """INSERT INTO recent_blocked_media (user_id, media_key, media_url, page_url, content_type, seen_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(user_id, media_key) DO UPDATE SET media_url = excluded.media_url,
+               page_url = COALESCE(excluded.page_url, page_url), content_type = excluded.content_type, seen_at = excluded.seen_at""",
+        (user_id, key, media_url, page_url, content_type, now),
+    )
+    db_connection.execute("DELETE FROM recent_blocked_media WHERE seen_at < ?", (now - 86400,))
+    db_connection.commit()
+
+
+def list_recent_blocked_media(user_id: int, page_url: Optional[str] = None, limit: int = 50) -> List[Dict]:
+    q = "SELECT media_key, media_url, page_url, content_type, seen_at FROM recent_blocked_media WHERE user_id = ?"
+    params: list = [user_id]
+    if page_url:
+        q += " AND page_url = ?"
+        params.append(page_url)
+    q += " ORDER BY seen_at DESC LIMIT ?"
+    params.append(int(limit))
+    rows = db_connection.execute(q, params).fetchall()
+    out = []
+    for r in rows:
+        review = get_video_review(r[0])
+        out.append({"media_key": r[0], "media_url": r[1], "page_url": r[2], "content_type": r[3], "seen_at": r[4],
+                    "review_status": review["status"] if review else None})
+    return out
+
+
 # Initialize schema on import
 init_db_schema()
+
+
+def record_tls_client_failure(host: str, min_failures: int, window_sec: int = 1800) -> bool:
+    """Count a "client does not trust our certificate" failure; returns True when the host is (now) learned."""
+    now = int(datetime.now().timestamp())
+    host = (host or "").lower().strip(".")
+    if not host:
+        return False
+    with transaction():
+        row = db_connection.execute("SELECT failures, first_seen, learned FROM learned_passthrough WHERE host = ?", (host,)).fetchone()
+        if row and row[2]:
+            return True
+        if row is None or now - row[1] > window_sec:
+            failures, first = 1, now
+        else:
+            failures, first = row[0] + 1, row[1]
+        learned = 1 if failures >= max(1, min_failures) else 0
+        db_connection.execute(
+            "INSERT INTO learned_passthrough (host, failures, first_seen, last_seen, learned) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(host) DO UPDATE SET failures = excluded.failures, first_seen = excluded.first_seen, "
+            "last_seen = excluded.last_seen, learned = excluded.learned",
+            (host, failures, first, now, learned),
+        )
+        if learned:
+            _bump_policy_version()
+        db_connection.commit()
+    return bool(learned)
+
+
+def get_learned_passthrough_hosts() -> set:
+    return {r[0] for r in db_connection.execute("SELECT host FROM learned_passthrough WHERE learned = 1").fetchall()}
+
+
+def forget_learned_passthrough(host: str) -> None:
+    db_connection.execute("DELETE FROM learned_passthrough WHERE host = ?", ((host or "").lower(),))
+    _bump_policy_version()
+    db_connection.commit()

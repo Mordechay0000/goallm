@@ -1,0 +1,32 @@
+# Medical context markers – English. A page dense with them: suspicious words count TEXT_MEDICAL_FACTOR (0.6 – weaker
+# than Torah context). Only unmistakably medical words (not "study" or "health" – "sex-ed" articles use those too).
+cancer
+tumor
+tumour
+metastasis
+chemotherapy
+radiotherapy
+biopsy
+mammogram
+mammography
+oncologist
+oncology
+diagnosis
+symptoms
+symptom
+patient
+patients
+hospital
+surgery
+pregnancy
+pregnant
+childbirth
+obstetrician
+gynecologist
+fetus
+placenta
+breastfeeding
+fertility
+medication
+dosage
+side effects

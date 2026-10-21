@@ -13,6 +13,9 @@ beautifulsoup4>=4.12.0
 CairoSVG>=2.8.0
 cairocffi>=1.7.0
 
+# Video review worker (YouTube download; also needs the ffmpeg/ffprobe binaries)
+yt-dlp>=2026.8.19
+
 # CRM - FastAPI backend
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0

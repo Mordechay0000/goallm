@@ -23,14 +23,17 @@ def _current_time_str() -> str:
 
 
 def _time_in_range(now_hhmm: str, from_time: Optional[str], to_time: Optional[str]) -> bool:
-    """True if now_hhmm is in [from_time, to_time]. None means no bound. Uses string comparison (HH:MM); overnight ranges not supported."""
+    """True if now_hhmm is in [from_time, to_time]. None means no bound. HH:MM string comparison.
+    Overnight ranges (e.g. 22:00–06:00, from > to) wrap around midnight."""
     if from_time is None and to_time is None:
         return True
     if from_time is None:
         from_time = "00:00"
     if to_time is None:
         to_time = "23:59"
-    return from_time <= now_hhmm <= to_time
+    if from_time <= to_time:
+        return from_time <= now_hhmm <= to_time
+    return now_hhmm >= from_time or now_hhmm <= to_time
 
 
 def get_active_profile_id(user_id: int) -> Optional[int]:

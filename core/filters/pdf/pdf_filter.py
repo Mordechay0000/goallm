@@ -1,19 +1,17 @@
 """
 Filter PDF: run text filter and image status on extracted content; reassemble PDF with optional distortion warning.
 
-- Text: per-block (paragraph) masking with X's when a block contains a bad word; block entire document
-  when ratio of blocks with detection >= threshold (or full-text words ratio – see TODO below).
+- Text: per-block (paragraph) masking with X's when a block contains a hard word; block the entire document
+  when the ratio of blocks with detection passes the threshold, or when the hidden score of the whole text does
+  (the same scoring as web pages: suspicious words, windows, diversity, Torah / medical context).
 - Images: replace each image with status (blocked/checking/allowed) like on web pages.
-
-TODO: Add PDF full-text ratio filtering (like _filter_plain_text) – currently uses component ratio only;
-  filter_text_content on full extracted text uses ratio, but per-block filter_paragraph_for_pdf has no ratio.
 """
 import io
 import logging
 from typing import Optional, Tuple, List, Any
 
 from core.filters.pdf.pdf_extraction import extract_pdf_text_and_images
-from core.filters.text.text_filter import filter_text_content, filter_paragraph_for_pdf
+from core.filters.text.text_filter import _filter_plain_text, filter_paragraph_for_pdf, filter_text_content
 from core.filters.text.text_filter_config import (
     MIN_PERCENTAGE_COMPONENTS_FOR_PAGE_BLOCK,
     MIN_COMPONENTS_WITH_DETECTION_FOR_PAGE_BLOCK,
@@ -70,6 +68,7 @@ def _apply_pdf_text_filter(
     total_blocks = 0
     blocks_with_detection = 0
     pages_with_redactions: List[int] = []
+    all_text: List[str] = []
 
     for page_idx in range(len(doc)):
         page = doc[page_idx]
@@ -80,6 +79,7 @@ def _apply_pdf_text_filter(
             if not block_text.strip() or rect is None:
                 continue
             total_blocks += 1
+            all_text.append(block_text)
             masked, has_detection = filter_paragraph_for_pdf(block_text)
             if has_detection:
                 blocks_with_detection += 1
@@ -115,6 +115,10 @@ def _apply_pdf_text_filter(
             block_reason = "pdf_paragraphs_with_detection: %d/%d (%.0f%%)" % (
                 blocks_with_detection, total_blocks, pct * 100,
             )
+    if not block_page and all_text:
+        _masked, score_block, score_reason, _debug = _filter_plain_text("\n".join(all_text))
+        if score_block:
+            block_page, block_reason = True, "pdf_" + score_reason
     return block_page, block_reason
 
 

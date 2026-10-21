@@ -2,54 +2,33 @@
 Surf widget: inject a collapsible sidebar into every allowed HTML page.
 - Small tab on the left edge opens a panel with:
   - "דיווח" = link to request block (CRM request-change with action=block)
-  - For admin (from token): show allowing rule and "חסום את האתר" to create block rule.
-Token is created by the proxy (shared secret with CRM) so CRM can verify the bound user.
+  - For admin (from the core DB is_admin flag): quick allow/block rule via a CRM page.
+No secret/token is placed in the page: anything injected into a third-party page can be read by that
+page's own scripts (ads, analytics). Admin actions are links to a CRM page that uses the admin's normal
+login and asks for an explicit confirmation click.
 """
-import base64
-import hashlib
-import hmac
 import html
 import json
 import logging
-import os
 import re
-import time
 from urllib.parse import quote, urlparse
-from typing import Optional, Any
-import urllib.request
+from typing import Optional
 
 from core.flow.site_policy_pages import CRM_API_URL, CRM_FRONTEND_URL
-from data.constants import CRM_PROXY_SECRET, SURF_TOKEN_TTL_SEC
+from core.policy.policy_cache import get_user_is_admin
+from core.proxy.csp import add_nonce
 
 logger = logging.getLogger(__name__)
 
-# Cache is_admin per user_id to avoid calling CRM on every HTML response (TTL 60s).
-_surf_admin_cache: dict[int, tuple[bool, float]] = {}
-_SURF_ADMIN_CACHE_TTL = 60.0
-
 
 def get_surf_user_is_admin(user_id: Optional[int]) -> bool:
-    """Return True if user_id is an admin (for surf widget injection). Uses CRM internal API; on failure returns False."""
+    """True if user_id is an admin. Read from the core DB (synced by the CRM) – no HTTP call on the hot path."""
     if user_id is None:
         return False
-    now = time.time()
-    if user_id in _surf_admin_cache:
-        cached, t = _surf_admin_cache[user_id]
-        if now - t < _SURF_ADMIN_CACHE_TTL:
-            return cached
     try:
-        base = (CRM_API_URL or "").rstrip("/")
-        url = f"{base}/internal/surf-user-info?user_id={user_id}&secret={quote(CRM_PROXY_SECRET or '', safe='')}"
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=2) as r:
-            data = json.loads(r.read().decode())
-            is_admin = data.get("is_admin") is True
-            _surf_admin_cache[user_id] = (is_admin, now)
-            logger.debug("surf_widget: get_surf_user_is_admin user_id=%s -> is_admin=%s", user_id, is_admin)
-            return is_admin
+        return get_user_is_admin(user_id)
     except Exception as e:
-        _surf_admin_cache[user_id] = (False, now)
-        logger.warning("surf_widget: get_surf_user_is_admin user_id=%s failed: %s (using is_admin=False)", user_id, e)
+        logger.warning("surf_widget: is_admin lookup failed for user_id=%s: %s", user_id, e)
         return False
 
 
@@ -68,19 +47,6 @@ def _url_to_domain_path(url: str) -> tuple[str, str]:
         return domain, path
     except Exception:
         return "", "/"
-
-def create_surf_token(user_id: int) -> str:
-    """Create a signed token for the bound user (proxy → CRM verification)."""
-    expiry = int(time.time()) + SURF_TOKEN_TTL_SEC
-    payload = f"{user_id}:{expiry}"
-    payload_b64 = base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
-    sig = hmac.new(
-        CRM_PROXY_SECRET.encode(),
-        payload_b64.encode(),
-        digestmod=hashlib.sha256,
-    ).hexdigest()
-    return f"{payload_b64}.{sig}"
-
 
 def _request_change_link(request_url: str, action: str = "block") -> str:
     """CRM link to request-change page with URL and action prefilled."""
@@ -111,6 +77,7 @@ def inject_surf_widget(
     encoding: str = "utf-8",
     is_admin: bool = False,
     inject_video: bool = True,
+    nonce: Optional[str] = None,
 ) -> bytes:
     """
     Inject the surf widget (tab + panel) and config script before </body>.
@@ -129,22 +96,22 @@ def inject_surf_widget(
         logger.warning("surf_widget: decode failed url=%s err=%s", (current_url or "")[:80], e)
         return html_body
 
-    token = create_surf_token(user_id)
     crm_api = json.dumps(CRM_API_URL)
     crm_frontend = json.dumps(CRM_FRONTEND_URL)
     current_url_esc = json.dumps(current_url)
-    token_esc = json.dumps(token)
     rule_json = json.dumps(rule, ensure_ascii=False) if rule else "null"
     rule_domain_js = json.dumps((rule.get("domain") or rule.get("domain_pattern") or "").strip()) if rule else '""'
     rule_path_js = json.dumps((rule.get("path") or rule.get("path_pattern") or "/").strip() or "/") if rule else '"/"'
     request_change_url = _request_change_link(current_url, "block")
     request_change_url_attr = request_change_url.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
     rule_display = _rule_display(rule)
+    video_review_url = f"{CRM_FRONTEND_URL.rstrip('/')}/video-review?page={quote(current_url or '', safe='')}"
+    video_review_url_attr = video_review_url.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
     current_domain, current_path = _url_to_domain_path(current_url)
     current_domain_js = json.dumps(current_domain)
     current_path_js = json.dumps(current_path)
-    # URL for "החל" button: open in new tab to apply rule and show summary
-    surf_rule_apply_base = f"{CRM_FRONTEND_URL.rstrip('/')}/surf-rule-apply?token={quote(token, safe='')}"
+    # "החל" opens a CRM page (admin login + confirmation click). No token in the URL or the page.
+    surf_rule_apply_base = f"{CRM_FRONTEND_URL.rstrip('/')}/admin/surf-quick-rule?source=surf"
     surf_rule_apply_base_js = json.dumps(surf_rule_apply_base)
 
     logger.info(
@@ -163,7 +130,7 @@ def inject_surf_widget(
   if (document.body) document.body.appendChild(root);
   else if (document.documentElement) document.documentElement.appendChild(root);
   try {{
-  var config = {{ requestChangeUrlAttr: {json.dumps(request_change_url_attr)}, crmFrontend: {crm_frontend} }};
+  var config = {{ requestChangeUrlAttr: {json.dumps(request_change_url_attr)}, videoReviewUrlAttr: {json.dumps(video_review_url_attr)}, crmFrontend: {crm_frontend} }};
   if (config.crmFrontend) try {{ window.__goallm_crm_frontend = config.crmFrontend; }} catch (e) {{}}
   var open = false;
   root.innerHTML = '<div id="goallm-surf-wrap" style="position:fixed;left:0;top:50%;transform:translateY(-50%);width:' + (open ? '312px' : '32px') + ';z-index:2147483646;font-family:system-ui,-apple-system,sans-serif;font-size:14px;direction:rtl;">' +
@@ -171,6 +138,7 @@ def inject_surf_widget(
     '<div id="goallm-surf-panel" style="display:' + (open ? 'block' : 'none') + ';position:absolute;left:32px;top:0;width:280px;max-width:calc(90vw - 32px);background:#fff;border:1px solid #E4E7EC;border-right:none;border-radius:12px 0 0 12px;box-shadow:-4px 0 20px rgba(0,0,0,0.08);padding:16px;overflow:auto;max-height:80vh;">' +
     '<div style="font-weight:700;color:#0D1A3B;margin-bottom:12px;">סרגל דיווח</div>' +
     '<a href="' + config.requestChangeUrlAttr + '" target="_blank" rel="noopener" style="display:block;width:100%;padding:10px 14px;background:#2F6CFF;color:#fff;text-align:center;border-radius:8px;text-decoration:none;font-weight:500;box-sizing:border-box;">דיווח – בקש לחסום את האתר</a>' +
+    '<a href="' + config.videoReviewUrlAttr + '" target="_blank" rel="noopener" style="display:block;width:100%;margin-top:8px;padding:8px 14px;background:#f1f5f9;color:#0D1A3B;text-align:center;border-radius:8px;text-decoration:none;font-weight:500;box-sizing:border-box;">סרטונים בדף – שלח לבדיקה</a>' +
     '</div></div>';
   var wrap = document.getElementById("goallm-surf-wrap");
   var tab = document.getElementById("goallm-surf-tab");
@@ -202,10 +170,10 @@ def inject_surf_widget(
       var first = video.querySelector("source");
       if (first && first.src) src = first.src;
     }}
-    if (!src || src.indexOf("data:") === 0 || src.indexOf("blob:") === 0) return;
-    var filename = filenameFromUrl(src);
-    var redirect = "/support/new?attach=file&file_url=" + encodeURIComponent(src) + "&filename=" + encodeURIComponent(filename);
-    var href = crmBase.replace(/\\/$/, "") + "/login?redirect=" + encodeURIComponent(redirect);
+    if (src && src.indexOf("data:") === 0) return;
+    var base = crmBase.replace(/\\/$/, "") + "/video-review?page=" + encodeURIComponent(location.href);
+    // blob:/MSE players hide the real URL – the review page lists what the filter blocked on this page.
+    var href = (!src || src.indexOf("blob:") === 0) ? base : base + "&url=" + encodeURIComponent(src);
     var wrapper = document.createElement("div");
     wrapper.style.cssText = "position:relative;display:inline-block;max-width:100%;";
     var parent = video.parentNode;
@@ -263,13 +231,13 @@ def inject_surf_widget(
     crmFrontend: {crm_frontend},
     surfRuleApplyBase: {surf_rule_apply_base_js},
     currentUrl: {current_url_esc},
-    token: {token_esc},
     rule: {rule_json},
     ruleDomain: {rule_domain_js},
     rulePath: {rule_path_js},
     currentDomain: {current_domain_js},
     currentPath: {current_path_js},
     requestChangeUrlAttr: {json.dumps(request_change_url_attr)},
+    videoReviewUrlAttr: {json.dumps(video_review_url_attr)},
     ruleDisplay: {json.dumps(rule_display, ensure_ascii=False)}
   }};
   var open = false;
@@ -281,6 +249,7 @@ def inject_surf_widget(
       '<div id="goallm-surf-panel" style="display:' + (open ? 'block' : 'none') + ';position:absolute;left:32px;top:0;width:280px;max-width:calc(90vw - 32px);background:#fff;border:1px solid #E4E7EC;border-right:none;border-radius:12px 0 0 12px;box-shadow:-4px 0 20px rgba(0,0,0,0.08);padding:16px;overflow:auto;max-height:80vh;">' +
         '<div style="font-weight:700;color:#0D1A3B;margin-bottom:12px;">סרגל דיווח</div>' +
         '<a id="goallm-surf-report-link" href="' + config.requestChangeUrlAttr + '" target="_blank" rel="noopener" style="display:block;width:100%;padding:10px 14px;background:#2F6CFF;color:#fff;text-align:center;border-radius:8px;text-decoration:none;font-weight:500;margin-bottom:12px;box-sizing:border-box;">דיווח – בקש לחסום את האתר</a>' +
+        '<a href="' + config.videoReviewUrlAttr + '" target="_blank" rel="noopener" style="display:block;width:100%;padding:8px 14px;background:#f1f5f9;color:#0D1A3B;text-align:center;border-radius:8px;text-decoration:none;font-weight:500;margin-bottom:12px;box-sizing:border-box;">סרטונים בדף – שלח לבדיקה</a>' +
         '<div id="goallm-surf-admin" style="display:block;margin-top:12px;padding-top:12px;border-top:1px solid #E4E7EC;">' +
           '<div style="font-weight:600;color:#0D1A3B;margin-bottom:8px;">הוסף/עדכן כלל (מנהל)</div>' +
           '<div id="goallm-surf-quick-step1" style="margin-bottom:10px;">' +
@@ -392,6 +361,8 @@ def inject_surf_widget(
             body = body.replace("</script>", "<\\/script>")
             widget_html = widget_html[: script_open + 8] + body + widget_html[script_close:]
             logger.warning("surf_widget: escaped </script> in injected script url=%s", (current_url or "")[:80])
+
+    widget_html = add_nonce(widget_html, nonce)  # strict-CSP pages (see core/proxy/csp.py)
 
     # Insert before </body>; if no </body>, append at end (use lambda so widget_html is not interpreted as re template)
     pattern = re.compile(r"</body\s*>", re.IGNORECASE)

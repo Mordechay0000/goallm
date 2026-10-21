@@ -28,10 +28,21 @@
 
 ## הגדרות סביבה
 
-יצירת קובץ `.env`:
-```bash
-SECRET_KEY=your-very-secure-random-secret-key-here-minimum-32-characters
-```
+אין ערכי ברירת מחדל קבועים לסודות: אם `SECRET_KEY` / `CRM_PROXY_SECRET` לא מוגדרים, הם נוצרים אקראית ונשמרים
+ב-`.storage/` (הרשאות 600). כל המשתנים: [`.env.example`](../.env.example).
+
+## עקרונות שנאכפים בשרת (לא רק בממשק)
+
+- **הרשאות נבדקות בשרת:** כללי תגיות (גלובליים) – מנהל בלבד; "הגדרות נעולות" (profile_name / profile_mode / rules)
+  נאכפות ב-API – גם יצירת פרופיל/תזמון חסומה כש-profile_mode נעול.
+- **IP לא נלקח מכותרת שהלקוח שולח:** `X-Forwarded-For` נחשב רק מכתובות שב-`TRUSTED_PROXY_IPS`, וגם אז נקרא מימין לשמאל.
+- **זהות לפי פרטי התחברות לפרוקסי** (אישיים לכל משתמש, נשמרים כ-SHA-256) ולא רק לפי IP.
+- **שום סוד לא מוזרק לדפים של אתרים זרים:** פעולות מנהל מסרגל הגלישה עוברות לדף CRM עם התחברות רגילה + לחיצת אישור.
+- **קבצים שמועלים** – רשימה מותרת של סיומות, ומוגשים עם `X-Content-Type-Options: nosniff`, `CSP: sandbox`,
+  ו-`Content-Disposition: attachment` לכל מה שאינו תמונה.
+- **CORS** מוגבל לכתובת ה-CRM; **X-Frame-Options: DENY** לכל ה-CRM.
+- **OTP:** `secrets` (לא `random`), ומקסימום 5 ניסיונות שגויים לקוד.
+- **Fail-closed:** שגיאה בבדיקת מדיניות / ניתוח תמונה = חסימה, לא פתיחה.
 
 ## שיטות עבודה מומלצות
 
@@ -43,8 +54,9 @@ SECRET_KEY=your-very-secure-random-secret-key-here-minimum-32-characters
 
 ## עדכונים עתידיים
 
-- [ ] CSRF protection
-- [ ] Session management
-- [ ] Two-factor authentication (2FA)
+- [ ] Session management (ביטול טוקן לפני תום 7 ימים; כרגע JWT ב-localStorage)
+- [ ] Two-factor authentication (2FA) למנהלים
 - [ ] Password reset flow
-- [ ] Account lockout after failed attempts
+- [ ] Account lockout after failed attempts (כרגע רק rate limit לפי IP)
+- [ ] CSP מלא לממשק ה-CRM (כרגע רק frame-ancestors)
+- [ ] ספק SMS / אימייל אמיתי ל-OTP (כרגע mock שכותב את הקוד ללוג)

@@ -32,6 +32,7 @@ import { useAuthStore } from '../store/authStore';
 import { RulesTable } from '../components/RulesTable';
 import { rulesApi } from '../api/rules';
 import { adminApi } from '../api/admin';
+import { authApi } from '../api/auth';
 import type { Rule } from '../api/rules';
 import { Lock as LockIcon } from '@mui/icons-material';
 import { Tooltip } from '@mui/material';
@@ -71,6 +72,9 @@ const ProfilesPage: React.FC = () => {
   useEffect(() => {
     if (managedUserId != null && user?.is_admin) {
       adminApi.getLockedSettings(managedUserId).then(setLockedSettings).catch(() => setLockedSettings([]));
+    } else if (!user?.is_admin) {
+      // Regular user: show what the admin locked (the server enforces it either way).
+      authApi.getMyLockedSettings().then(setLockedSettings).catch(() => setLockedSettings([]));
     } else {
       setLockedSettings([]);
     }

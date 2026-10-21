@@ -19,8 +19,14 @@ def normalize_image_for_hash(image_data: bytes, mime_type: Optional[str] = None)
     אם נכשל (תמונה פגומה וכו') – מחזיר None (יש ליפול ל־hash על ה־bytes המקוריים).
     קל משאבים: decode אחד, resize רק אם גדול, encode אחד.
     """
+    if mime_type == "image/svg+xml":
+        return None  # vector: hash the exact bytes
     try:
         img = Image.open(BytesIO(image_data))
+        if getattr(img, "is_animated", False):
+            # Normalizing would keep only the first frame: two animations sharing a harmless first frame
+            # would share one verdict. Hash the exact bytes instead.
+            return None
         img.load()
     except Exception as e:
         logger.debug("Image open failed for hash normalization: %s", e)

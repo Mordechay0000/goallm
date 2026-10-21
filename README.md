@@ -221,7 +221,6 @@ flowchart TD
 | GET | `/diagnostic` | דף אבחון סינון (HTML) |
 | GET | `/diagnostic/check` | בדיקת מצב |
 | GET | `/diagnostic/cert` | הורדת/מידע על תעודת CA |
-| GET | `/surf-rule-apply` | יישום חוק מ-Surf (HTML) |
 | GET | `/{full_path}` | נתיבי SPA (React) |
 
 ### אימות
@@ -287,12 +286,11 @@ flowchart TD
 
 ### Surf widget (מנהלים דרך פרוקסי)
 
+הווידג'ט כבר לא מכיל טוקן: פעולות מנהל נפתחות בדף CRM (`/admin/surf-quick-rule`) עם ההתחברות הרגילה ולחיצת אישור.
+
 | שיטה | נתיב |
 | --- | --- |
-| GET | `/api/surf-widget/context` |
-| POST | `/api/surf-widget/block` |
-| POST | `/api/surf-widget/update-rule-to-block` |
-| POST | `/api/surf-widget/quick-rule` |
+| POST | `/api/admin/surf-quick-rule` |
 | POST | `/api/admin/surf-update-rule-to-block` |
 
 ### בקשות שינוי חוק
@@ -358,12 +356,14 @@ flowchart TD
 | POST | `/api/me/bindings` |
 | DELETE | `/api/me/bindings/{binding_id}` |
 | GET | `/api/me/client-ip` |
+| GET | `/api/me/proxy-credentials` |
+| POST | `/api/me/proxy-credentials/rotate` |
+| GET | `/api/user/me/locked-settings` |
 
 ### פנימי (פרוקסי + סוד משותף)
 
 | שיטה | נתיב |
 | --- | --- |
-| GET | `/api/internal/surf-user-info` |
 | POST | `/api/internal/touch-ip` |
 
 ---
@@ -399,7 +399,7 @@ cd crm/frontend && bash run_dev.sh
 | API | <http://127.0.0.1:8000> (תיעוד: `/docs`) |
 | CRM (Vite) | <http://localhost:5173> |
 
-**מצבי פרוקסי:** `bash core/proxy/run_proxy.sh mitmweb` או `mitmdump`. **אימות פרוקסי (ברירת מחדל):** משתמש `filter`, סיסמה `f123456Ab` — ניתן לדרוס עם `PROXY_AUTH=user:pass`. פירוט: [`core/proxy/README.md`](core/proxy/README.md).
+**מצבי פרוקסי:** `bash core/proxy/run_proxy.sh mitmweb` או `mitmdump`. **אימות פרוקסי:** פרטי התחברות אישיים לכל משתמש (נוצרים ב-CRM, עמוד "חיבורים"); אין סיסמת ברירת מחדל. לפיתוח: `PROXY_REQUIRE_AUTH=0`. פירוט: [`core/proxy/README.md`](core/proxy/README.md).
 
 **התקנה ידנית** (ללא `setup.sh`): ראו [SETUP.md](SETUP.md).
 
@@ -411,7 +411,9 @@ cd crm/frontend && bash run_dev.sh
 
 - **HTTPS:** בפעם הראשונה התקן את תעודת ה-CA של mitmproxy דרך <https://mitm.it> כשהפרוקסי פעיל.
 - **מסדי נתונים:** נוצרים אוטומטית תחת `.storage/` (למשל `crm.db`, `policies.db`, `image_status.db`). אפשר לדרוס נתיב עם `GOALLM_STORAGE_DIR`.
-- **ייצור:** חובה לקבוע `SECRET_KEY`, `CRM_PROXY_SECRET`, ו־`PROXY_AUTH` מתאימים; ראו [`data/constants.py`](data/constants.py).
+- **סודות:** `SECRET_KEY` ו-`CRM_PROXY_SECRET` נוצרים אקראית ונשמרים ב-`.storage/` אם לא הוגדרו (אין ערכי ברירת מחדל קבועים). כשהפרוקסי וה-CRM על מכונות שונות – חובה להגדיר `CRM_PROXY_SECRET` זהה בשתיהן.
+- **ייצור:** `TRUSTED_PROXY_IPS`, `IMAGE_ANALYZER=openai` + `VLM_API_BASE`, `GOALLM_FIRST_USER_ADMIN=0`. כל המשתנים: [`.env.example`](.env.example).
+- **מה עוד חסר כדי להפעיל:** [`docs/planning/REMAINING.he.md`](docs/planning/REMAINING.he.md).
 
 ---
 
@@ -449,7 +451,8 @@ goallm/
 
 ```bash
 source venv/bin/activate   # או .venv
-pytest test/ -q
+pip install pytest httpx
+pytest test/ -q            # בדיקות יחידה: אבטחה, פרוקסי, תמונות, וידאו, טקסט
 ```
 
 ```bash

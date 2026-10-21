@@ -9,6 +9,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from typing import List, Optional
+import hmac
 import json
 import logging
 import os
@@ -50,11 +51,12 @@ from .services import (
     count_all_tickets_with_unread_for_admin_group,
     mark_support_ticket_read, delete_support_ticket, delete_support_tickets_bulk,
     list_support_ticket_user_ids,
-    get_global_rules, get_global_rule, create_global_rule, update_global_rule, delete_global_rule, resolve_global_rule_for_url, find_and_update_global_rule_to_block, ensure_global_block_rule_for_url, create_or_update_global_rule_surf, check_before_create_global_rule,
+    get_global_rules, get_global_rule, create_global_rule, update_global_rule, delete_global_rule, resolve_global_rule_for_url, find_and_update_global_rule_to_block, create_or_update_global_rule_surf, check_before_create_global_rule,
     get_site_injections, get_site_injection, create_site_injection, update_site_injection, delete_site_injection,
     sync_site_injections_to_core,
     list_bindings_for_user, add_ip_binding, remove_ip_binding, sync_ip_bindings_to_core, touch_ip_binding,
     get_user_id_for_ip,
+    get_proxy_credentials, rotate_proxy_credentials, sync_users_to_core,
 )
 from .auth import create_user_access_token, get_current_user, get_current_admin
 from .security import decode_access_token
@@ -69,8 +71,12 @@ from .verification import (
 from .uploads import validate_avatar_file, save_avatar
 from .support_uploads import save_support_file
 from .security import validate_password_strength
+from core.net_utils import resolve_client_ip, is_trusted_proxy
+from core.proxy_identity import HEADER as PROXY_USER_HEADER, verify_user as verify_proxy_user
 from data.constants import (
+    CORS_ALLOW_ORIGINS,
     CRM_PROXY_SECRET,
+    STORAGE_DIR,
     DEFAULT_API_HOST,
     DEFAULT_API_PORT,
     FILTER_CERT_DIR,
@@ -93,14 +99,25 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# CORS middleware
+# CORS: auth is a Bearer header (not a cookie), but there is no reason to let any website call the API.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # TODO: Configure properly in production
-    allow_credentials=True,
+    allow_origins=list(CORS_ALLOW_ORIGINS),
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    # The CRM must never be framed by another site (clickjacking / postMessage tricks).
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    return response
 
 # WebSocket connections manager
 class ConnectionManager:
@@ -140,6 +157,10 @@ async def startup_sync_bindings():
         sync_allowed_file_downloads_to_core()
     except Exception as e:
         logger.warning("Startup sync_allowed_file_downloads_to_core failed: %s", e)
+    try:
+        sync_users_to_core()
+    except Exception as e:
+        logger.warning("Startup sync_users_to_core failed: %s", e)
 
 
 async def _periodic_schedule_sync():
@@ -147,16 +168,22 @@ async def _periodic_schedule_sync():
     while True:
         try:
             await asyncio.sleep(60)
-            for uid in get_user_ids_with_profiles():
-                try:
-                    sync_crm_rules_to_core(uid, set_default=False)
-                except Exception as e:
-                    logger.warning("Periodic sync for user %s failed: %s", uid, e)
-            # Refresh global rules and set default user to first user
+            # Global rules + tags once, then only the per-user layer (diff-based, cheap when unchanged).
             try:
                 sync_crm_rules_to_core(None)
             except Exception as e:
                 logger.debug("Periodic sync_crm_rules_to_core(None) failed: %s", e)
+            for uid in get_user_ids_with_profiles():
+                try:
+                    sync_crm_rules_to_core(uid, set_default=False, include_global=False)
+                except Exception as e:
+                    logger.warning("Periodic sync for user %s failed: %s", uid, e)
+            try:
+                from core.policy.policy_database import purge_traffic_logs_older_than
+                from data.constants import TRAFFIC_LOG_RETENTION_DAYS
+                purge_traffic_logs_older_than(TRAFFIC_LOG_RETENTION_DAYS)
+            except Exception as e:
+                logger.debug("Traffic log retention purge failed: %s", e)
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -177,10 +204,35 @@ if static_folder.exists():
     if assets_folder.exists():
         app.mount("/assets", StaticFiles(directory=str(assets_folder)), name="assets")
 
-# User uploads (avatars)
-uploads_dir = Path(__file__).resolve().parent.parent / ".storage" / "uploads"
+# User uploads (avatars, support attachments). Served by a route (not StaticFiles) so every file gets
+# headers that stop it from running as a page on the CRM origin: an uploaded .html/.svg must never be
+# able to read the admin's token from localStorage.
+uploads_dir = STORAGE_DIR / "uploads"
 uploads_dir.mkdir(parents=True, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=str(uploads_dir)), name="uploads")
+_INLINE_UPLOAD_TYPES = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+    ".webp": "image/webp", ".bmp": "image/bmp",
+}
+
+
+@app.get("/uploads/{subdir}/{filename}")
+async def serve_upload(subdir: str, filename: str):
+    if subdir not in ("avatars", "support") or "/" in filename or "\\" in filename or filename.startswith("."):
+        raise HTTPException(status_code=404, detail="Not Found")
+    path = (uploads_dir / subdir / filename).resolve()
+    if uploads_dir.resolve() not in path.parents or not path.is_file():
+        raise HTTPException(status_code=404, detail="Not Found")
+    ext = path.suffix.lower()
+    media_type = _INLINE_UPLOAD_TYPES.get(ext)
+    headers = {
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "sandbox; default-src 'none'; img-src 'self'",
+        "Cache-Control": "private, max-age=3600",
+    }
+    if media_type is None:
+        media_type = "application/octet-stream"
+        headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return FileResponse(str(path), media_type=media_type, headers=headers)
 
 
 def _serve_spa():
@@ -223,9 +275,7 @@ async def diagnostic_page(request: Request):
         else ""
     )
     server_time = int(time.time())
-    client_ip = _client_ip(request)
-    bound_user_id = get_user_id_for_ip(client_ip) if client_ip else None
-    connection_filtered = "true" if bound_user_id is not None else "false"
+    connection_filtered = "true" if _filtered_user_id(request) is not None else "false"
     filter_check_url = "/diagnostic/check"
     cert_base_url = "/diagnostic/cert"
     html = DIAGNOSTIC_HTML_TEMPLATE.replace("{server_time}", str(server_time))
@@ -242,10 +292,8 @@ async def diagnostic_page(request: Request):
 
 @app.get("/diagnostic/check")
 async def diagnostic_check(request: Request):
-    """בדיקה האם החיבור מסונן (IP משויך למשתמש). מחזיר JSON עם filtered: true/false."""
-    client_ip = _client_ip(request)
-    bound_user_id = get_user_id_for_ip(client_ip) if client_ip else None
-    return {"filtered": bound_user_id is not None}
+    """בדיקה האם החיבור מסונן (פרטי התחברות אישיים לפרוקסי או IP משויך). מחזיר JSON עם filtered: true/false."""
+    return {"filtered": _filtered_user_id(request) is not None}
 
 
 def _cert_file_for_os(os_param: str, user_agent: str) -> tuple[str, str]:
@@ -479,7 +527,8 @@ async def upload_avatar(
     current_user: dict = Depends(get_current_user)
 ):
     """Upload avatar image. Validates type (images only, no executables)."""
-    content = await file.read()
+    from data.upload_config import AVATAR_MAX_BYTES
+    content = await file.read(AVATAR_MAX_BYTES + 1)
     try:
         ext, _ = validate_avatar_file(content, file.filename or "", file.content_type)
     except ValueError as e:
@@ -490,6 +539,12 @@ async def upload_avatar(
         return UserResponse(**{k: v for k, v in updated.items() if k != "password_hash"})
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/user/me/locked-settings")
+async def get_my_locked_settings(current_user: dict = Depends(get_current_user)):
+    """Settings the admin locked for the current user (so the UI can show them as locked)."""
+    return {"locked_settings": get_locked_settings(current_user["id"])}
 
 
 # ---------- Helper: effective user when admin manages a client ----------
@@ -509,6 +564,24 @@ def _can_access_profile(profile: dict, current_user: dict, managed_user_id: Opti
     if current_user.get("is_admin") and managed_user_id is not None and profile["user_id"] == managed_user_id:
         return True
     return False
+
+
+LOCKABLE_SETTINGS = ("profile_name", "profile_mode", "rules")
+
+
+def _ensure_not_locked(current_user: dict, *keys: str) -> None:
+    """
+    Server-side enforcement of admin locks. The UI only greys out buttons; without this check any
+    user could call the API directly and loosen their own filter.
+    profile_mode also covers creating/deleting profiles and schedules: a second, laxer profile
+    activated by a schedule would bypass a locked mode.
+    """
+    if current_user.get("is_admin") is True:
+        return
+    locked = set(get_locked_settings(current_user["id"]))
+    hit = [k for k in keys if k in locked]
+    if hit:
+        raise HTTPException(status_code=403, detail="הגדרה זו ננעלה על ידי ההנהלה")
 
 
 # ========== Profile Endpoints ==========
@@ -532,6 +605,7 @@ async def create_profile_endpoint(
 ):
     """Create a new profile (for current user or managed user when admin)."""
     uid = _effective_user_id(current_user, managed_user_id)
+    _ensure_not_locked(current_user, "profile_mode")
     try:
         profile = create_profile(uid, profile_data.name, profile_data.mode)
         await manager.broadcast({"type": "profile_created", "profile_id": profile["id"]})
@@ -564,6 +638,10 @@ async def update_profile_endpoint(
     profile = get_profile(profile_id)
     if not profile or not _can_access_profile(profile, current_user, managed_user_id):
         raise HTTPException(status_code=404, detail="פרופיל לא נמצא")
+    if profile_data.name is not None and profile_data.name != profile.get("name"):
+        _ensure_not_locked(current_user, "profile_name")
+    if profile_data.mode is not None and profile_data.mode != profile.get("mode"):
+        _ensure_not_locked(current_user, "profile_mode")
     
     try:
         updated = update_profile(
@@ -589,6 +667,7 @@ async def delete_profile_endpoint(
     profile = get_profile(profile_id)
     if not profile or not _can_access_profile(profile, current_user, managed_user_id):
         raise HTTPException(status_code=404, detail="פרופיל לא נמצא")
+    _ensure_not_locked(current_user, "profile_mode")
     
     deleted = delete_profile(profile_id)
     if deleted:
@@ -625,6 +704,7 @@ async def create_rule_endpoint(
     profile = get_profile(profile_id)
     if not profile or not _can_access_profile(profile, current_user, managed_user_id):
         raise HTTPException(status_code=404, detail="פרופיל לא נמצא")
+    _ensure_not_locked(current_user, "rules")
     
     try:
         rule = create_rule(
@@ -676,6 +756,7 @@ async def update_rule_endpoint(
     profile = get_profile(rule["profile_id"])
     if not profile or not _can_access_profile(profile, current_user, managed_user_id):
         raise HTTPException(status_code=404, detail="כלל לא נמצא")
+    _ensure_not_locked(current_user, "rules")
     
     try:
         updated = update_rule(
@@ -707,6 +788,7 @@ async def delete_rule_endpoint(
     profile = get_profile(rule["profile_id"])
     if not profile or not _can_access_profile(profile, current_user, managed_user_id):
         raise HTTPException(status_code=404, detail="כלל לא נמצא")
+    _ensure_not_locked(current_user, "rules")
     
     deleted = delete_rule(rule_id)
     if deleted:
@@ -776,6 +858,7 @@ async def import_rules_csv(
     profile = get_profile(profile_id)
     if not profile or not _can_access_profile(profile, current_user, managed_user_id):
         raise HTTPException(status_code=404, detail="פרופיל לא נמצא")
+    _ensure_not_locked(current_user, "rules")
     content = (await file.read()).decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(content))
     rows = list(reader)
@@ -817,9 +900,9 @@ async def list_tag_rules(current_user: dict = Depends(get_current_user)):
 @app.post("/api/tag-rules", response_model=TagRuleResponse, status_code=status.HTTP_201_CREATED)
 async def create_tag_rule_endpoint(
     data: TagRuleCreate,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_admin),
 ):
-    """Create a tag rule (e.g. tag=ממכר -> block)."""
+    """Create a tag rule (e.g. tag=ממכר -> block). Admin only: tag rules are global – they affect every user."""
     try:
         rule = add_tag_rule(data.tag, data.state, data.enabled, created_by_user_id=current_user.get("id"))
         sync_crm_rules_to_core(current_user["id"])
@@ -832,7 +915,7 @@ async def create_tag_rule_endpoint(
 async def update_tag_rule_endpoint(
     rule_id: int,
     data: TagRuleUpdate,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_admin),
 ):
     """Update a tag rule."""
     try:
@@ -852,7 +935,7 @@ async def update_tag_rule_endpoint(
 @app.delete("/api/tag-rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_tag_rule_endpoint(
     rule_id: int,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_admin),
 ):
     """Delete a tag rule."""
     deleted = delete_tag_rule(rule_id)
@@ -890,6 +973,7 @@ async def create_schedule_endpoint(
     profile = get_profile(profile_id)
     if not profile or not _can_access_profile(profile, current_user, managed_user_id):
         raise HTTPException(status_code=404, detail="פרופיל לא נמצא")
+    _ensure_not_locked(current_user, "profile_mode")
     
     try:
         schedule = create_schedule(
@@ -920,6 +1004,7 @@ async def update_schedule_endpoint(
     profile = get_profile(schedule["profile_id"])
     if not profile or not _can_access_profile(profile, current_user, managed_user_id):
         raise HTTPException(status_code=404, detail="תזמון לא נמצא")
+    _ensure_not_locked(current_user, "profile_mode")
     
     try:
         updated = update_schedule(
@@ -949,6 +1034,7 @@ async def delete_schedule_endpoint(
     profile = get_profile(schedule["profile_id"])
     if not profile or not _can_access_profile(profile, current_user, managed_user_id):
         raise HTTPException(status_code=404, detail="תזמון לא נמצא")
+    _ensure_not_locked(current_user, "profile_mode")
     
     deleted = delete_schedule(schedule_id)
     if deleted:
@@ -1030,11 +1116,8 @@ async def get_resolver_rules(current_user: dict = Depends(get_current_user)):
 
 
 @app.get("/api/resolver/rules/all")
-async def get_all_resolver_rules():
-    """
-    Get all enabled rules for system-wide resolver (for proxy addon).
-    No auth required - used by internal systems.
-    """
+async def get_all_resolver_rules(admin: dict = Depends(get_current_admin)):
+    """Get all enabled rules of the system-default profile. Admin only."""
     rules = get_all_enabled_rules_for_resolver()
     return {"rules": rules}
 
@@ -1158,314 +1241,59 @@ async def resolver_test_url(
 # ========== Rule Requests (user requests for admin to approve) ==========
 # Incoming requests are only from logged-in users (no anonymous from-blocked-page).
 
-# Same value must be set when running the proxy (mitmdump). Used for internal endpoints e.g. touch-ip.
+
+# Surf widget admin actions.
+# The old design injected a signed token for the bound user into every page the user browsed; any script on
+# that third-party page (ads, analytics) could read it and, for an admin, open sites in the global whitelist.
+# Now the widget contains only links: admin actions happen on a CRM page with the admin's normal login and an
+# explicit confirmation click (so merely opening a crafted link cannot change rules).
+
+_SURF_SCOPES = ("domain_only", "domain_and_subdomains", "exact_url")
 
 
-def _verify_surf_token(token: str) -> Optional[dict]:
-    """Verify surf widget token (from proxy); return { user_id } or None."""
-    import base64
-    import hashlib
-    import hmac
-    if not token or "." not in token:
-        return None
-    parts = token.split(".", 1)
-    payload_b64_raw = parts[0]
-    sig_got = parts[1]
-    try:
-        payload_b64 = payload_b64_raw
-        padding = 4 - len(payload_b64) % 4
-        if padding != 4:
-            payload_b64 += "=" * padding
-        payload = base64.urlsafe_b64decode(payload_b64).decode()
-    except Exception:
-        return None
-    sig_exp = hmac.new(
-        CRM_PROXY_SECRET.encode(),
-        payload_b64_raw.encode(),
-        digestmod=hashlib.sha256,
-    ).hexdigest()
-    if not hmac.compare_digest(sig_exp, sig_got):
-        return None
-    # payload is "user_id:expiry"
-    vals = payload.split(":", 1)
-    if len(vals) != 2:
-        return None
-    try:
-        user_id = int(vals[0])
-        expiry = int(vals[1])
-    except ValueError:
-        return None
-    if int(__import__("time").time()) > expiry:
-        return None
-    return {"user_id": user_id}
+def _surf_rule_display(rule: dict) -> str:
+    domain = str(rule.get("domain_pattern") or "").strip()
+    path = str(rule.get("path_pattern") or "/").strip() or "/"
+    action_heb = "חסימה" if rule.get("action") == "block" else "פתיחה"
+    if domain.startswith("*."):
+        scope_heb = "דומיין + תת-דומיינים"
+    elif path != "/":
+        scope_heb = "כתובת ישירה"
+    else:
+        scope_heb = "רק הדומיין"
+    return f"{action_heb}: {domain}{path if path != '/' else ''} ({scope_heb})"
 
 
-@app.get("/api/surf-widget/context")
-async def surf_widget_context(
-    token: str = Query(..., description="Surf token from injected page"),
-):
-    """Return { is_admin } for the bound user. Used by the injected surf widget (no cookie)."""
-    ctx = _verify_surf_token(token)
-    if not ctx:
-        raise HTTPException(status_code=401, detail="Token invalid or expired")
-    user = get_user_by_id(ctx["user_id"])
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-    # Only admins: require explicit True (no truthy confusion)
-    is_admin = user.get("is_admin") is True
-    return {"is_admin": is_admin}
-
-
-@app.post("/api/surf-widget/block")
-async def surf_widget_block(request: Request):
-    """Create a global block rule for the given URL. Admin only (verified via token)."""
+@app.post("/api/admin/surf-quick-rule")
+async def admin_surf_quick_rule(request: Request, admin: dict = Depends(get_current_admin)):
+    """Create or update a global rule from the surf widget: action allow/block, scope domain_only/domain_and_subdomains/exact_url."""
     try:
         body = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
-    token = body.get("token")
-    url = (body.get("url") or "").strip()
-    if not token:
-        raise HTTPException(status_code=401, detail="Missing token")
-    if not url:
-        raise HTTPException(status_code=400, detail="Missing url")
-    ctx = _verify_surf_token(token)
-    if not ctx:
-        raise HTTPException(status_code=401, detail="Token invalid or expired")
-    user = get_user_by_id(ctx["user_id"])
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-    if user.get("is_admin") is not True:
-        raise HTTPException(status_code=403, detail="הרשאת מנהל נדרשת לחסימת אתרים")
-    try:
-        rule = ensure_global_block_rule_for_url(
-            url=url,
-            updated_by_user_id=user.get("id"),
-        )
-        sync_crm_rules_to_core(None)
-        return {"success": True, "reload": True}
-    except ValueError as e:
-        return {"success": False, "error": str(e)}
-
-
-@app.post("/api/surf-widget/update-rule-to-block")
-async def surf_widget_update_rule_to_block(request: Request):
-    """Find global rule by domain+path and update to block. Admin only (verified via token)."""
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON")
-    token = body.get("token")
-    rule_domain = (body.get("rule_domain") or "").strip().lower()
-    if rule_domain.startswith("www."):
-        rule_domain = rule_domain[4:]
-    rule_path = (body.get("rule_path") or "/").strip() or "/"
-    if not token:
-        raise HTTPException(status_code=401, detail="Missing token")
-    if not rule_domain:
-        raise HTTPException(status_code=400, detail="Missing rule_domain")
-    ctx = _verify_surf_token(token)
-    if not ctx:
-        raise HTTPException(status_code=401, detail="Token invalid or expired")
-    user = get_user_by_id(ctx["user_id"])
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-    if user.get("is_admin") is not True:
-        raise HTTPException(status_code=403, detail="הרשאת מנהל נדרשת לעדכון כלל")
-    try:
-        rule = find_and_update_global_rule_to_block(
-            rule_domain, rule_path, updated_by_user_id=user.get("id")
-        )
-        sync_crm_rules_to_core(None)
-        return {"success": True, "reload": True}
-    except ValueError as e:
-        return {"success": False, "error": str(e)}
-
-
-@app.post("/api/surf-widget/quick-rule")
-async def surf_widget_quick_rule(request: Request):
-    """Create or update a global rule: allow/block with scope (domain_only, domain_and_subdomains, exact_url). Admin only (verified via token)."""
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON")
-    token = body.get("token")
     url = (body.get("url") or "").strip()
     action = (body.get("action") or "").strip().lower()
     scope = (body.get("scope") or "").strip().lower()
-    if not token:
-        raise HTTPException(status_code=401, detail="Missing token")
     if not url:
-        raise HTTPException(status_code=400, detail="Missing url")
+        raise HTTPException(status_code=400, detail="חסר url")
     if action not in ("allow", "block"):
-        raise HTTPException(status_code=400, detail="action must be allow or block")
-    if scope not in ("domain_only", "domain_and_subdomains", "exact_url"):
-        raise HTTPException(status_code=400, detail="scope must be domain_only, domain_and_subdomains, or exact_url")
-    ctx = _verify_surf_token(token)
-    if not ctx:
-        raise HTTPException(status_code=401, detail="Token invalid or expired")
-    user = get_user_by_id(ctx["user_id"])
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-    if user.get("is_admin") is not True:
-        raise HTTPException(status_code=403, detail="הרשאת מנהל נדרשת")
+        raise HTTPException(status_code=400, detail="action חייב להיות allow או block")
+    if scope not in _SURF_SCOPES:
+        raise HTTPException(status_code=400, detail="scope לא תקין")
     try:
-        rule = create_or_update_global_rule_surf(
-            url=url,
-            action=action,
-            scope=scope,
-            updated_by_user_id=user.get("id"),
-        )
-        sync_crm_rules_to_core(None)
-        # טקסט לתצוגה ב-toast בווידג'ט
-        domain = str(rule.get("domain_pattern") or "").strip()
-        path = str(rule.get("path_pattern") or "/").strip() or "/"
-        try:
-            action_heb = "חסימה" if rule.get("action") == "block" else "פתיחה"
-            if domain.startswith("*."):
-                scope_heb = "דומיין + תת-דומיינים"
-            elif path != "/":
-                scope_heb = "כתובת ישירה"
-            else:
-                scope_heb = "רק הדומיין"
-            rule_display = f"{action_heb}: {domain}{path if path != '/' else ''} ({scope_heb})"
-        except Exception:
-            rule_display = "נוסף בהצלחה"
-        return {"success": True, "rule_display": rule_display, "rule": {"domain_pattern": domain, "path_pattern": path, "action": rule.get("action")}}
+        rule = create_or_update_global_rule_surf(url=url, action=action, scope=scope, updated_by_user_id=admin.get("id"))
     except ValueError as e:
-        return {"success": False, "error": str(e)}
-
-
-def _surf_rule_apply_logic(token: str, url: str, action: str, scope: str):
-    """Shared logic: verify token, check admin, create/update rule. Returns (success, rule_display_or_error, rule_dict_or_none)."""
-    ctx = _verify_surf_token(token)
-    if not ctx:
-        return False, "טוקן לא תקף או שפג תוקפו", None
-    user = get_user_by_id(ctx["user_id"])
-    if not user:
-        return False, "משתמש לא נמצא", None
-    if user.get("is_admin") is not True:
-        return False, "הרשאת מנהל נדרשת", None
-    action = (action or "").strip().lower()
-    scope = (scope or "").strip().lower()
-    if action not in ("allow", "block"):
-        return False, "פעולה חייבת להיות allow או block", None
-    if scope not in ("domain_only", "domain_and_subdomains", "exact_url"):
-        return False, "היקף לא תקף", None
-    try:
-        rule = create_or_update_global_rule_surf(
-            url=url,
-            action=action,
-            scope=scope,
-            updated_by_user_id=user.get("id"),
-        )
-        sync_crm_rules_to_core(None)
-        domain = str(rule.get("domain_pattern") or "").strip()
-        path = str(rule.get("path_pattern") or "/").strip() or "/"
-        try:
-            action_heb = "חסימה" if rule.get("action") == "block" else "פתיחה"
-            if domain.startswith("*."):
-                scope_heb = "דומיין + תת-דומיינים"
-            elif path != "/":
-                scope_heb = "כתובת ישירה"
-            else:
-                scope_heb = "רק הדומיין"
-            rule_display = f"{action_heb}: {domain}{path if path != '/' else ''} ({scope_heb})"
-        except Exception:
-            rule_display = "נוסף בהצלחה"
-        return True, rule_display, rule
-    except ValueError as e:
-        return False, str(e), None
-
-
-def _escape_html(s: str) -> str:
-    if not s:
-        return ""
-    return (
-        str(s)
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-    )
-
-
-@app.get("/surf-rule-apply", response_class=HTMLResponse)
-async def surf_rule_apply_page(
-    token: str = Query(..., description="Surf token"),
-    url: str = Query(..., description="URL to apply rule for"),
-    action: str = Query(..., description="allow or block"),
-    scope: str = Query(..., description="domain_only, domain_and_subdomains, exact_url"),
-):
-    """Apply quick-rule and show result in a new page (opened from surf widget 'החל' button)."""
-    success, message, rule = _surf_rule_apply_logic(token, url, action, scope)
-    msg_esc = _escape_html(message)
-    if success and rule:
-        domain = _escape_html(str(rule.get("domain_pattern") or ""))
-        path = _escape_html(str(rule.get("path_pattern") or "/"))
-        act = rule.get("action") or "allow"
-        state_heb = "חסימה" if act == "block" else "פתיחה"
-        inc = rule.get("include_subdomains")
-        if domain.startswith("*."):
-            scope_heb = "דומיין + תת-דומיינים"
-        elif path and path != "/":
-            scope_heb = "כתובת ישירה"
-        else:
-            scope_heb = "רק הדומיין"
-        url_esc = _escape_html(url or "")
-        title = "הכלל נוסף בהצלחה"
-        content = f"""
-  <p class="ok">הכלל נשמר במערכת.</p>
-  <div class="rule-box">
-    <h2 class="rule-title">פרטי הכלל</h2>
-    <table class="rule-table">
-      <tr><td class="label">מצב</td><td>{_escape_html(state_heb)}</td></tr>
-      <tr><td class="label">דומיין</td><td>{domain}</td></tr>
-      <tr><td class="label">נתיב</td><td>{path}</td></tr>
-      <tr><td class="label">היקף</td><td>{_escape_html(scope_heb)}</td></tr>
-      <tr><td class="label">כתובת מקור</td><td class="url-cell">{url_esc}</td></tr>
-    </table>
-    <p class="rule-summary">{msg_esc}</p>
-  </div>"""
-    else:
-        title = "שגיאה"
-        content = f"""
-  <p class="err">הפעולה נכשלה.</p>
-  <div class="error-box">
-    <h2 class="error-title">פרטי השגיאה</h2>
-    <p class="error-msg">{msg_esc}</p>
-  </div>"""
-    html_content = f"""<!DOCTYPE html>
-<html dir="rtl" lang="he">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{_escape_html(title)}</title>
-  <style>
-    body {{ font-family: system-ui, -apple-system, sans-serif; margin: 2rem; max-width: 520px; line-height: 1.5; color: #1a1a1a; }}
-    .ok {{ color: #16a34a; font-weight: 600; }}
-    .err {{ color: #dc2626; font-weight: 600; }}
-    .rule-box, .error-box {{ margin-top: 1.25rem; padding: 1rem 1.25rem; border-radius: 12px; text-align: right; }}
-    .rule-box {{ background: #f0fdf4; border: 1px solid #bbf7d0; }}
-    .error-box {{ background: #fef2f2; border: 1px solid #fecaca; }}
-    .rule-title, .error-title {{ margin: 0 0 0.75rem; font-size: 1rem; font-weight: 600; color: #0D1A3B; }}
-    .rule-table {{ width: 100%; border-collapse: collapse; }}
-    .rule-table td {{ padding: 0.4rem 0.5rem 0.4rem 0; vertical-align: top; }}
-    .rule-table .label {{ color: #64748b; font-weight: 500; width: 7em; }}
-    .rule-table .url-cell {{ word-break: break-all; font-size: 0.9em; }}
-    .rule-summary {{ margin: 0.75rem 0 0; padding-top: 0.75rem; border-top: 1px solid #bbf7d0; font-size: 0.95rem; color: #166534; }}
-    .error-msg {{ margin: 0; font-size: 1rem; color: #b91c1c; }}
-    .close-link {{ display: inline-block; margin-top: 1.5rem; padding: 0.5rem 1rem; background: #0D1A3B; color: #fff; text-decoration: none; border-radius: 8px; font-weight: 500; }}
-    .close-link:hover {{ background: #1e3a5f; }}
-  </style>
-</head>
-<body>
-  <h1>{_escape_html(title)}</h1>
-  {content}
-  <a href="#" class="close-link" onclick="window.close(); return false;">סגור חלון</a>
-</body>
-</html>"""
-    return HTMLResponse(html_content)
+        raise HTTPException(status_code=400, detail=str(e))
+    sync_crm_rules_to_core(None)
+    return {
+        "success": True,
+        "rule_display": _surf_rule_display(rule),
+        "rule": {
+            "domain_pattern": rule.get("domain_pattern"),
+            "path_pattern": rule.get("path_pattern") or "/",
+            "action": rule.get("action"),
+        },
+    }
 
 
 @app.post("/api/rule-requests", response_model=RuleRequestResponse, status_code=status.HTTP_201_CREATED)
@@ -1761,8 +1589,9 @@ async def support_upload_endpoint(
     current_user: dict = Depends(get_current_user),
 ):
     """Upload a file for support ticket/reply. Returns { url, name }."""
+    from data.upload_config import SUPPORT_MAX_BYTES
     try:
-        content = await file.read()
+        content = await file.read(SUPPORT_MAX_BYTES + 1)
         info = save_support_file(content, file.filename or "file", current_user["id"])
         return info
     except ValueError as e:
@@ -2396,6 +2225,8 @@ async def admin_add_locked_setting(
     key = body.get("setting_key")
     if not key:
         raise HTTPException(status_code=400, detail="חסר setting_key")
+    if key not in LOCKABLE_SETTINGS:
+        raise HTTPException(status_code=400, detail=f"setting_key לא מוכר. אפשרויות: {', '.join(LOCKABLE_SETTINGS)}")
     try:
         set_locked_setting(user_id, key)
         return {"locked_settings": get_locked_settings(user_id)}
@@ -2430,14 +2261,25 @@ async def get_me(current_user: dict = Depends(get_current_user)):
     }
 
 
+def _filtered_user_id(request: Request) -> Optional[int]:
+    """User whose filtered connection this request came through: signed header from our proxy
+    (personal credentials), else the user bound to the client IP."""
+    uid = verify_proxy_user(request.headers.get(PROXY_USER_HEADER))
+    if uid is not None:
+        return uid
+    ip = _client_ip(request)
+    return get_user_id_for_ip(ip) if ip else None
+
+
 def _client_ip(request: Request) -> str:
-    """Client IP from X-Forwarded-For (when behind proxy) or request.client."""
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    if request.client:
-        return request.client.host or ""
-    return ""
+    """Real client IP. X-Forwarded-For is honored only from TRUSTED_PROXY_IPS (anyone can send the header)."""
+    peer = request.client.host if request.client else None
+    ip = resolve_client_ip(
+        peer,
+        request.headers.get("x-forwarded-for"),
+        request.headers.get("x-real-ip"),
+    )
+    return ip or ""
 
 
 # ---------- IP bindings (שיוך כתובת IP לחשבון – לסינון לפי משתמש) ----------
@@ -2461,6 +2303,9 @@ async def bind_my_ip(
     ip = _client_ip(request)
     if not ip:
         raise HTTPException(status_code=400, detail="לא ניתן לזהות את כתובת ה-IP")
+    if is_trusted_proxy(ip):
+        # Never bind the address of our own proxy / reverse proxy (would capture everyone's traffic).
+        raise HTTPException(status_code=400, detail="לא ניתן לשייך כתובת זו. התחבר דרך הפרוקסי או השתמש בפרטי התחברות אישיים.")
     try:
         binding = add_ip_binding(current_user["id"], ip)
         sync_ip_bindings_to_core()
@@ -2489,6 +2334,36 @@ async def delete_my_binding(
     sync_crm_rules_to_core(current_user["id"])
 
 
+# ---------- Personal proxy credentials (זיהוי לפי פרטי התחברות – לא לפי IP) ----------
+
+def _proxy_endpoint_info() -> dict:
+    from urllib.parse import urlparse
+    from data.constants import CRM_BASE_URL, PROXY_PUBLIC_HOST, PROXY_PUBLIC_PORT
+    host = PROXY_PUBLIC_HOST or (urlparse(CRM_BASE_URL).hostname or "")
+    return {"proxy_host": host, "proxy_port": PROXY_PUBLIC_PORT}
+
+
+@app.get("/api/me/proxy-credentials")
+async def my_proxy_credentials(current_user: dict = Depends(get_current_user)):
+    """Username + whether a password exists (the password itself is shown only once, on creation)."""
+    try:
+        creds = get_proxy_credentials(current_user["id"])
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {**creds, **_proxy_endpoint_info()}
+
+
+@app.post("/api/me/proxy-credentials/rotate")
+@limiter.limit("10/hour")
+async def rotate_my_proxy_credentials(request: Request, current_user: dict = Depends(get_current_user)):
+    """Create or replace the personal proxy password. Devices using the old password must be updated."""
+    try:
+        creds = rotate_proxy_credentials(current_user["id"])
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {**creds, **_proxy_endpoint_info()}
+
+
 # ---------- Traffic recording (הקלטת תעבורה – התחל/סיום/קבלת לוג) ----------
 
 @app.post("/api/traffic/start", status_code=status.HTTP_201_CREATED)
@@ -2499,10 +2374,7 @@ async def traffic_start(
     """Start traffic recording for the current user. Proxy will log requests until stop.
     Only allowed when the client IP is bound to some account (traffic goes through the proxy)."""
     from core.policy.policy_database import start_traffic_session, get_active_traffic_session_id
-    client_ip = _client_ip(request)
-    if not client_ip:
-        raise HTTPException(status_code=400, detail="לא ניתן לזהות את כתובת ה-IP.")
-    bound_user_id = get_user_id_for_ip(client_ip)
+    bound_user_id = _filtered_user_id(request)
     if bound_user_id is None:
         raise HTTPException(
             status_code=403,
@@ -2588,20 +2460,6 @@ async def admin_list_traffic_recording_views(
     return {"views": rows}
 
 
-@app.get("/api/internal/surf-user-info")
-async def internal_surf_user_info(
-    user_id: int = Query(..., description="User ID bound to the surfer IP"),
-    secret: str = Query(..., description="CRM_PROXY_SECRET"),
-):
-    """Return { is_admin } for the given user. Called by proxy when injecting surf widget. Requires CRM_PROXY_SECRET."""
-    if not CRM_PROXY_SECRET or secret != CRM_PROXY_SECRET:
-        raise HTTPException(status_code=403, detail="גישה נדחתה")
-    user = get_user_by_id(user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return {"is_admin": user.get("is_admin") is True}
-
-
 @app.post("/api/internal/touch-ip")
 async def internal_touch_ip(request: Request):
     """Update last_used_at for an IP binding. Called by proxy. Requires CRM_PROXY_SECRET."""
@@ -2612,13 +2470,178 @@ async def internal_touch_ip(request: Request):
     if not isinstance(body, dict):
         body = {}
     secret = body.get("secret")
-    if not CRM_PROXY_SECRET or secret != CRM_PROXY_SECRET:
+    if not CRM_PROXY_SECRET or not isinstance(secret, str) or not hmac.compare_digest(secret, CRM_PROXY_SECRET):
         raise HTTPException(status_code=403, detail="גישה נדחתה")
     ip = (body.get("ip") or "").strip()
     if not ip:
         raise HTTPException(status_code=400, detail="חסר ip")
     touch_ip_binding(ip)
     return {"status": "ok"}
+
+
+# ---------- Per-video review (בדיקת סרטון בודד) ----------
+
+def _video_review_out(r: Optional[dict]) -> dict:
+    if not r:
+        return {"status": None}
+    return {k: r.get(k) for k in ("video_key", "source_url", "page_url", "status", "requested_at", "updated_at",
+                                   "duration_sec", "frames_sampled", "frames_analyzed", "blocked_at_sec", "reason")}
+
+
+@app.post("/api/video-reviews")
+@limiter.limit("30/hour")
+async def request_video_review_endpoint(request: Request, current_user: dict = Depends(get_current_user)):
+    """Send a video for review. Once approved it is open for every user (like NetFree)."""
+    from urllib.parse import urlsplit
+    from core.policy.policy_database import request_video_review
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    url = (body.get("url") or "").strip()
+    page_url = (body.get("page_url") or "").strip() or None
+    if urlsplit(url).scheme not in ("http", "https") or len(url) > 4000:
+        raise HTTPException(status_code=400, detail="כתובת וידאו לא תקינה (http/https בלבד)")
+    return _video_review_out(request_video_review(url, page_url, current_user["id"]))
+
+
+@app.get("/api/video-reviews/status")
+async def video_review_status_endpoint(url: str = Query(...), current_user: dict = Depends(get_current_user)):
+    from core.policy.policy_database import canonical_media_key, get_video_review
+    return _video_review_out(get_video_review(canonical_media_key(url)))
+
+
+@app.get("/api/video-reviews/recent-blocked")
+async def recent_blocked_media_endpoint(page_url: Optional[str] = Query(None), current_user: dict = Depends(get_current_user)):
+    """Videos the filter blocked for this user in the last 24h (optionally on one page)."""
+    from core.policy.policy_database import list_recent_blocked_media
+    return {"items": list_recent_blocked_media(current_user["id"], page_url)}
+
+
+# ---------- Admin: human review queue (images the model was unsure about, failed analyses, videos) ----------
+
+_HASH_RE = __import__("re").compile(r"^[0-9a-f]{64}$")
+
+
+@app.get("/api/admin/review/summary")
+async def admin_review_summary(admin: dict = Depends(get_current_admin)):
+    from core.filters.image.image_status_db import count_by_status, list_images_by_status
+    from core.policy.policy_database import list_video_reviews
+    from data.constants import MAX_ANALYSIS_ATTEMPTS
+    images = count_by_status()
+    failed = len(list_images_by_status("error", limit=1000, min_attempts=MAX_ANALYSIS_ATTEMPTS))
+    videos = {st: len(list_video_reviews(st, limit=1000)) for st in ("pending", "processing", "review", "error")}
+    return {"images_review": images.get("review", 0), "images_failed": failed, "videos": videos}
+
+
+@app.get("/api/admin/review/images")
+async def admin_review_images(
+    status_filter: str = Query("review", alias="status"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    admin: dict = Depends(get_current_admin),
+):
+    from core.filters.image.image_status_db import list_images_by_status
+    from core.filters.review_store import thumbnail_path
+    from data.constants import MAX_ANALYSIS_ATTEMPTS
+    try:
+        rows = list_images_by_status(
+            status_filter, limit=limit, offset=offset,
+            min_attempts=MAX_ANALYSIS_ATTEMPTS if status_filter == "error" else 0,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    for r in rows:
+        r["has_thumb"] = thumbnail_path("images", r["image_hash"]) is not None
+    return {"items": rows}
+
+
+@app.get("/api/admin/review/images/{image_hash}/thumb")
+async def admin_review_image_thumb(image_hash: str, admin: dict = Depends(get_current_admin)):
+    from core.filters.review_store import thumbnail_path
+    path = thumbnail_path("images", image_hash) if _HASH_RE.match(image_hash) else None
+    if not path:
+        raise HTTPException(status_code=404, detail="אין תמונה שמורה")
+    return FileResponse(str(path), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/admin/review/images/{image_hash}")
+async def admin_review_image_decide(image_hash: str, request: Request, admin: dict = Depends(get_current_admin)):
+    from core.filters.image.image_status_db import set_image_status
+    from core.filters.review_store import delete_thumbnail
+    body = await request.json()
+    decision = (body.get("decision") or "").strip()
+    if decision not in ("allow", "block") or not _HASH_RE.match(image_hash):
+        raise HTTPException(status_code=400, detail="decision חייב להיות allow או block")
+    if not set_image_status(image_hash, "allowed" if decision == "allow" else "blocked"):
+        raise HTTPException(status_code=404, detail="תמונה לא נמצאה")
+    delete_thumbnail("images", image_hash)
+    logger.info("Admin %s decided image %s → %s", admin.get("id"), image_hash[:12], decision)
+    return {"ok": True}
+
+
+@app.get("/api/admin/review/videos")
+async def admin_review_videos(
+    status_filter: Optional[str] = Query(None, alias="status"),
+    limit: int = Query(100, ge=1, le=500),
+    admin: dict = Depends(get_current_admin),
+):
+    from core.filters.review_store import thumbnail_path
+    from core.policy.policy_database import list_video_reviews
+    items = [_video_review_out(r) for r in list_video_reviews(status_filter or None, limit=limit)]
+    for it in items:
+        it["has_thumb"] = thumbnail_path("videos", it["video_key"]) is not None
+    return {"items": items}
+
+
+@app.get("/api/admin/review/videos/thumb")
+async def admin_review_video_thumb(key: str = Query(...), admin: dict = Depends(get_current_admin)):
+    from core.filters.review_store import thumbnail_path
+    path = thumbnail_path("videos", key)
+    if not path:
+        raise HTTPException(status_code=404, detail="אין פריים שמור")
+    return FileResponse(str(path), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/admin/review/videos/decide")
+async def admin_review_video_decide(request: Request, admin: dict = Depends(get_current_admin)):
+    """Admin override: allow / block a video, or send it back to the automatic queue."""
+    from core.filters.review_store import delete_thumbnail
+    from core.policy.policy_database import finish_video_review, get_video_review
+    body = await request.json()
+    key = (body.get("key") or "").strip()
+    decision = (body.get("decision") or "").strip()
+    review = get_video_review(key)
+    if not review:
+        raise HTTPException(status_code=404, detail="סרטון לא נמצא")
+    if decision == "allow":
+        finish_video_review(key, "allowed", reason="אושר ידנית", decided_by=admin["id"])
+        delete_thumbnail("videos", key)
+    elif decision == "block":
+        finish_video_review(key, "blocked", reason="נחסם ידנית", decided_by=admin["id"], blocked_at_sec=review.get("blocked_at_sec"))
+    elif decision == "requeue":
+        finish_video_review(key, "pending", reason=None)
+    else:
+        raise HTTPException(status_code=400, detail="decision חייב להיות allow / block / requeue")
+    logger.info("Admin %s decided video %s → %s", admin.get("id"), key, decision)
+    return _video_review_out(get_video_review(key))
+
+
+# ---------- Admin: hosts passed through because their apps reject the proxy certificate (pinning) ----------
+
+@app.get("/api/admin/learned-passthrough")
+async def admin_list_learned_passthrough(admin: dict = Depends(get_current_admin)):
+    from core.policy.policy_database import get_learned_passthrough_hosts
+    from data.constants import AUTO_PASSTHROUGH_PINNED_APPS
+    return {"enabled": AUTO_PASSTHROUGH_PINNED_APPS, "hosts": sorted(get_learned_passthrough_hosts())}
+
+
+@app.delete("/api/admin/learned-passthrough/{host}")
+async def admin_forget_learned_passthrough(host: str, admin: dict = Depends(get_current_admin)):
+    from core.policy.policy_database import forget_learned_passthrough
+    forget_learned_passthrough(host)
+    logger.info("Admin %s removed learned passthrough host %s", admin.get("id"), host)
+    return {"ok": True}
 
 
 # ---------- SPA catch-all (for React router paths like /schedules, /rules, etc.) ----------

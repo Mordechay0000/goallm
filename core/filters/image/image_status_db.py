@@ -5,21 +5,17 @@ Uses project-root .storage so proxy (run from any CWD) and CRM share the same DB
 import logging
 import sqlite3
 import time
-from pathlib import Path
 from typing import Any
 
-from data.constants import IMAGE_STATUS_TABLE_NAME
+from core.db_utils import ThreadLocalSQLite
+from data.constants import IMAGE_STATUS_TABLE_NAME, STORAGE_DIR
 
 logger = logging.getLogger(__name__)
 
-# core/filters/image/ -> project root is 4 levels up
-_project_root = Path(__file__).resolve().parent.parent.parent.parent
-_storage_dir = _project_root / ".storage"
-_storage_dir.mkdir(parents=True, exist_ok=True)
-_db_path = _storage_dir / "image_status.db"
-_db = sqlite3.connect(str(_db_path), check_same_thread=False)
-_db.execute("PRAGMA journal_mode=WAL;")
-_db.execute("PRAGMA synchronous=NORMAL;")
+STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+_db_path = STORAGE_DIR / "image_status.db"
+# One connection per thread: the proxy thread pool and the analysis workers write concurrently.
+_db = ThreadLocalSQLite(str(_db_path))
 
 
 # גרסת אלגוריתם ה־hash: 1 = raw bytes, 2 = normalized (strip meta, canonical format)
@@ -69,7 +65,7 @@ def init_schema() -> None:
     )
     logger.debug("Created table if not exists")
 
-    for col, ctype in (("mime_type", "TEXT"), ("width", "INTEGER"), ("height", "INTEGER")):
+    for col, ctype in (("mime_type", "TEXT"), ("width", "INTEGER"), ("height", "INTEGER"), ("attempts", "INTEGER NOT NULL DEFAULT 0")):
         try:
             _db.execute(
                 f"ALTER TABLE {IMAGE_STATUS_TABLE_NAME} ADD COLUMN {col} {ctype}"
@@ -101,7 +97,7 @@ def get_image_status(image_hash: str) -> dict[str, Any] | None:
     """Return status dict (status, mime_type, width, height) or None."""
     logger.debug("Checking image status for hash: %s...", _h8(image_hash))
     cur = _db.execute(
-        f"SELECT status, mime_type, width, height FROM {IMAGE_STATUS_TABLE_NAME} "
+        f"SELECT status, mime_type, width, height, updated_at, COALESCE(attempts, 0) FROM {IMAGE_STATUS_TABLE_NAME} "
         "WHERE image_hash = ?",
         (image_hash,),
     )
@@ -114,6 +110,8 @@ def get_image_status(image_hash: str) -> dict[str, Any] | None:
         "mime_type": row[1],
         "width": row[2],
         "height": row[3],
+        "updated_at": row[4],
+        "attempts": row[5],
     }
     logger.debug("Found status for hash %s: %s", _h8(image_hash), out)
     return out
@@ -126,6 +124,7 @@ def save_analysis_result(
     mime_type: str | None = None,
     width: int | None = None,
     height: int | None = None,
+    status_override: str | None = None,
 ) -> None:
     """Persist analysis result and set status to blocked/allowed. Validates result shape."""
     logger.info("Saving analysis result for hash: %s...", _h8(image_hash))
@@ -168,7 +167,7 @@ def save_analysis_result(
         (
             image_hash,
             image_url,
-            "blocked" if blocked else "allowed",
+            status_override or ("blocked" if blocked else "allowed"),
             mime_type,
             width,
             height,
@@ -202,10 +201,11 @@ def mark_pending(
     _db.execute(
         f"""
         INSERT INTO {IMAGE_STATUS_TABLE_NAME} (
-            image_hash, status, image_url, mime_type, width, height, updated_at
-        ) VALUES (?, 'pending', ?, ?, ?, ?, ?)
+            image_hash, status, image_url, mime_type, width, height, updated_at, attempts
+        ) VALUES (?, 'pending', ?, ?, ?, ?, ?, 1)
         ON CONFLICT(image_hash) DO UPDATE SET
             status = 'pending',
+            attempts = COALESCE(attempts, 0) + 1,
             image_url = COALESCE(excluded.image_url, image_url),
             mime_type = COALESCE(excluded.mime_type, mime_type),
             width = COALESCE(excluded.width, width),
@@ -248,6 +248,49 @@ def mark_error(
         (image_hash, image_url, mime_type, width, height, int(time.time())),
     )
     _db.commit()
+
+
+REVIEWABLE_STATUSES = ("review", "error", "blocked", "allowed", "pending")
+
+
+def list_images_by_status(status: str, limit: int = 50, offset: int = 0, min_attempts: int = 0) -> list[dict]:
+    """For the admin review queue."""
+    if status not in REVIEWABLE_STATUSES:
+        raise ValueError("invalid status")
+    cur = _db.execute(
+        f"""SELECT image_hash, image_url, status, mime_type, width, height, updated_at, COALESCE(attempts, 0),
+                   female_visible_9_plus, female_3_to_9_partial_clothing, female_under_3_minimal_clothing,
+                   boys_teens_men_exposed_or_bathing, any_visible_body_exposure
+            FROM {IMAGE_STATUS_TABLE_NAME}
+            WHERE status = ? AND COALESCE(attempts, 0) >= ?
+            ORDER BY updated_at DESC LIMIT ? OFFSET ?""",
+        (status, int(min_attempts), int(limit), int(offset)),
+    )
+    out = []
+    for r in cur.fetchall():
+        out.append({
+            "image_hash": r[0], "image_url": r[1], "status": r[2], "mime_type": r[3], "width": r[4], "height": r[5],
+            "updated_at": r[6], "attempts": r[7],
+            "flags": {k: bool(v) for k, v in zip(EXPECTED_RESULT_KEYS, r[8:13]) if v},
+        })
+    return out
+
+
+def set_image_status(image_hash: str, status: str) -> bool:
+    """Admin decision (allowed / blocked). Returns False if the hash is unknown."""
+    if status not in ("allowed", "blocked"):
+        raise ValueError("status must be allowed or blocked")
+    cur = _db.execute(
+        f"UPDATE {IMAGE_STATUS_TABLE_NAME} SET status = ?, updated_at = ? WHERE image_hash = ?",
+        (status, int(time.time()), image_hash),
+    )
+    _db.commit()
+    return (cur.rowcount or 0) > 0
+
+
+def count_by_status() -> dict:
+    cur = _db.execute(f"SELECT status, COUNT(*) FROM {IMAGE_STATUS_TABLE_NAME} GROUP BY status")
+    return {r[0]: r[1] for r in cur.fetchall()}
 
 
 def _h8(h: str) -> str:

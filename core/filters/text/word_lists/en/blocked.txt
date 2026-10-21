@@ -1,53 +1,49 @@
-# Blocked words – sexuality, explicit romance, LGBTQ+, immodest content.
-# Charedi filter: no exceptions for medical/educational context. Always block.
+# Hard words – English. Masked (XXX) in any context; weigh TEXT_HARD_WEIGHT (5) in the score.
+# A word with an innocent meaning, or one used in Torah translations / halacha / news, is not here – it is in
+# scored.txt (hidden score) or out. Exception, by decision: LGBTQ+ terms are hard in every context.
+# Stemming applies (pornographic → pornograph…). "=word" = exact. Several words = a phrase. A trailing number = weight.
+# Check every change against permitted text:  python -m tools.check_word_list <files>
 #
-# REMOVED (innocent meanings): intimate, intimacy, affair, gross, tempting,
-# temptation, aroused, queer. These appear often in kosher content.
-#
-# KEPT: sex, sexual, gay, lesbian – 99% of occurrences are not kosher.
+# Not here (permitted contexts – measured): sex, sexual, naked, nakedness, adultery, lust, lover, seduce, intercourse,
+# nude (a colour), genital(s), mistress, fetish (idols in the Prophets), gay ("cheerful" – it is in scored.txt).
 
-# Explicit sexual content – no innocent use
-sex
-sexual
-intercourse
-orgasm
-masturbation
-pornography
+# Explicit sexual content
 porn
-nude
-naked
-nudity
-lust
-lustful
-arousal
-buttocks
-genitals
-genital
-penis
-vagina
-
-# Suggestive / seductive
+porno
+pornography
+pornographic
+erotic
+erotica
 sexy
-seductive
-arousing
+sexting
+nsfw
+hentai
+striptease
+stripper
+camgirl
+onlyfans
+blowjob
+handjob
+dildo
 
-# Explicit romance / adultery
-lover
-mistress
-adultery
-adulterous
-seduction
-seduce
-
-# LGBTQ+ – always block (no political/social exception)
-gay
+# LGBTQ+ – in every context
+=gays
 lesbian
 homosexual
 homosexuality
 transgender
+transsexual
+bisexual
+pansexual
 lgbt
 lgbtq
-bisexual
-
-
-fetish
+lgbtqia
+nonbinary
+queer
+gay pride
+gay marriage
+gay rights
+gay couple
+same sex
+pride parade
+pride month

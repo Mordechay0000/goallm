@@ -1,0 +1,33 @@
+# Torah / halacha context markers – English. A page with at least TEXT_CONTEXT_MIN_MARKERS markers at a density of
+# TEXT_CONTEXT_MIN_DENSITY per 1000 words: suspicious (scored) words count TEXT_CONTEXT_FACTOR. Hard words: always full.
+# Only markers with no everyday meaning (not "forbidden", "genesis") – otherwise a secular page "looks Torah".
+torah
+talmud
+gemara
+mishnah
+mishna
+halacha
+halachah
+halakha
+halakhah
+rashi
+rambam
+hashem
+lord
+rabbi
+rav
+yeshiva
+mitzvah
+mitzvos
+mitzvot
+tznius
+tzniut
+kedusha
+shulchan aruch
+kitzur
+mishnah berurah
+leviticus
+deuteronomy
+yetzer hara
+teshuvah
+parsha

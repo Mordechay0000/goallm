@@ -21,7 +21,9 @@ class UserUpdate(BaseModel):
     first_name: Optional[str] = Field(None, min_length=1, max_length=100)
     last_name: Optional[str] = Field(None, min_length=1, max_length=100)
     phone: Optional[str] = Field(None, max_length=20, pattern="^[0-9\\-\\+\\s\\(\\)]+$")
-    avatar_url: Optional[str] = Field(None, max_length=500)
+    # Only our own uploaded avatars (or "" to clear). An arbitrary URL would let a user make every admin
+    # who opens their ticket load an external tracker.
+    avatar_url: Optional[str] = Field(None, max_length=500, pattern=r"^(|/uploads/avatars/[A-Za-z0-9_.\-]+)$")
 
 
 class PasswordChange(BaseModel):
@@ -468,10 +470,16 @@ class SupportAttachmentItem(BaseModel):
     url: str
 
 
+class SupportAttachmentInput(BaseModel):
+    name: str = Field(..., max_length=200)
+    # Must point at a file uploaded through /api/support/upload – never javascript:, data: or external links.
+    url: str = Field(..., max_length=300, pattern=r"^/uploads/support/[A-Za-z0-9_.\-]+$")
+
+
 class SupportTicketCreate(BaseModel):
     subject: str = Field(..., min_length=1, max_length=500)
     content: str = Field(default="")
-    attachments: Optional[List[SupportAttachmentItem]] = None
+    attachments: Optional[List[SupportAttachmentInput]] = None
     """Optional: attach a rule request (בקשה לפתיחה). Creates rule_request and ticket with snapshot for client."""
     attached_request: Optional[RuleRequestCreate] = None
 
@@ -507,7 +515,7 @@ class SupportTicketResponse(BaseModel):
 
 class SupportReplyCreate(BaseModel):
     content: str = Field(default="")
-    attachments: Optional[List[SupportAttachmentItem]] = None
+    attachments: Optional[List[SupportAttachmentInput]] = None
     """Optional: user sends edited copy of request as reply (JSON snapshot)."""
     attached_request_snapshot: Optional[str] = None
     """True = תגובת תמיכה (נשלח מפניות שהתקבלו), False = תגובת משתמש (נשלח מפניות שלי)."""

@@ -17,13 +17,22 @@ from core.flow.site_policy_pages import (
     get_send_for_review_file_page_bytes,
 )
 from core.flow.traffic_utils import blocked_traffic_status
-from core.filters.image.embedded_image_filter import filter_embedded_images_in_html
+from core.proxy.csp import add_nonce, prepare_csp_nonce, rewrite_meta_csp
+from core.filters.video import youtube_policy
+from core.filters.video.video_filter import video_allowed_for_rule
+from core.proxy.video_overlay import OVERLAY_SCRIPT
+from core.proxy.image_refresh import REFRESH_SCRIPT
+from core.filters.image.data_uri_filter import filter_data_uri_images
 from core.filters.text.text_filter import filter_text_content, _encode_debug_b64, format_text_filter_debug_readable
 from core.filters.image.image_status_manager import get_image_with_status
 from core.filters.pdf.pdf_filter import filter_pdf_response
 from core.filters.search.google_search_filter import filter_google_search_html, is_google_search_page
-from core.policy.policy_loader import get_policy_resolver
-from core.policy.policy_database import get_profile_mode, get_filter_switches, get_site_injection_for_url
+from core.policy.policy_cache import (
+    get_filter_switches,
+    get_policy_resolver,
+    get_profile_mode,
+    get_site_injection_for_url,
+)
 from data.constants import CRM_FRONTEND_URL, PUBLIC_FILE_SHARE_DOMAINS, FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS
 
 logger = logging.getLogger(__name__)
@@ -56,6 +65,21 @@ def _is_crm_frontend_request(url: str) -> bool:
         return False
 
 
+_UNANALYZABLE_ACCEPT_TYPES = ("image/avif", "image/jxl", "image/heic", "image/heif")
+
+
+def rewrite_request_accept_header(flow: http.HTTPFlow) -> None:
+    """Ask servers for JPEG/PNG/WebP instead of AVIF/JPEG-XL/HEIC (content negotiation).
+    Those formats are still detected and filtered if a server sends them anyway, but the common formats
+    are cheaper to decode and every VLM server accepts them."""
+    accept = flow.request.headers.get("accept")
+    if not accept or "image/" not in accept:
+        return
+    parts = [p for p in accept.split(",") if p.strip().split(";")[0].strip().lower() not in _UNANALYZABLE_ACCEPT_TYPES]
+    if len(parts) != len(accept.split(",")):
+        flow.request.headers["accept"] = ",".join(p.strip() for p in parts) or "*/*"
+
+
 def _is_html_response(flow: http.HTTPFlow) -> bool:
     ct = (flow.response.headers.get("content-type") or "").lower()
     return "text/html" in ct or (flow.response.raw_content and ct.startswith("text/") and "html" in ct)
@@ -65,6 +89,66 @@ def _is_text_or_json_response(flow: http.HTTPFlow) -> bool:
     """True for text/plain or application/json (and variants)."""
     ct = (flow.response.headers.get("content-type") or "").lower()
     return "text/plain" in ct or "application/json" in ct or ct.strip().startswith("application/json")
+
+
+def _is_javascript_response(flow: http.HTTPFlow) -> bool:
+    ct = (flow.response.headers.get("content-type") or "").lower().split(";")[0].strip()
+    return ct in ("application/javascript", "text/javascript", "application/x-javascript", "application/ecmascript")
+
+
+def _filter_embedded_data_uris(flow: http.HTTPFlow, url: str, referer_url, switches: dict, rule) -> None:
+    """Replace base64 data-URI images in a non-HTML body (JSON / text / JavaScript) in place."""
+    if not (switches.get("image_filter", True) and switches.get("embedded_image_filter", True)):
+        return
+    if rule is not None and not rule.get("image_filter_enabled", True):
+        return
+    try:
+        body = flow.response.content
+    except ValueError:
+        return
+    if not body or b"data:image/" not in body:
+        return
+    try:
+        new_body, n = filter_data_uri_images(body, page_url=url, referer_url=referer_url)
+    except Exception as e:
+        logger.warning("data-uri filter failed for %s: %s", url, e)
+        return
+    if n:
+        flow.response.headers.pop("transfer-encoding", None)
+        flow.response.headers.pop("content-encoding", None)
+        flow.response.raw_content = new_body
+        flow.response.headers["Content-Length"] = str(len(new_body))
+
+
+def _response_charset(flow: http.HTTPFlow) -> str:
+    ct = (flow.response.headers.get("content-type") or "")
+    for part in ct.split(";"):
+        part = part.strip().lower()
+        if part.startswith("charset="):
+            return part.split("=", 1)[1].strip().strip('"') or "utf-8"
+    return "utf-8"
+
+
+def _filter_youtube_json(flow: http.HTTPFlow, url: str, referer_url, user_id) -> None:
+    """YouTube player responses (youtubei API): not-approved videos become unplayable with our message."""
+    try:
+        body = flow.response.content
+    except ValueError:
+        return
+    if not body:
+        return
+    try:
+        new_body = youtube_policy.filter_json(body, flow.request.content or b"", url, referer_url, user_id)
+    except Exception as e:
+        # The streams of a video we failed to decide on are not registered, so they stay blocked (fail-closed).
+        logger.warning("YouTube JSON filter failed for %s: %s", url, e)
+        return
+    if new_body is not None:
+        flow.response.headers.pop("transfer-encoding", None)
+        flow.response.headers.pop("content-encoding", None)
+        flow.response.raw_content = new_body
+        flow.response.headers["Content-Length"] = str(len(new_body))
+        flow.metadata["traffic_status"] = "video_blocked"
 
 
 def _is_file_download_response(flow: http.HTTPFlow) -> bool:
@@ -232,7 +316,31 @@ def _apply_site_policy_for_html(flow: http.HTTPFlow, user_id: Optional[int] = No
         logger.info("No policy for site (treat as review), showing send-for-review - URL: %s", url)
         return (True, None)
     except Exception as e:
+        # Fail closed (this used to return None, which crashed the caller into a 500).
         logger.warning("Policy resolution failed for HTML %s: %s; showing send-for-review", url, e)
+        body = get_send_for_review_page_bytes(request_url=url)
+        flow.response = http.Response.make(
+            FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS,
+            body,
+            {"Content-Type": "text/html; charset=utf-8", "Content-Length": str(len(body)), "Cache-Control": "no-store"},
+        )
+        if getattr(flow, "metadata", None) is not None:
+            flow.metadata["traffic_status"] = "error"
+        return (True, None)
+
+
+def _inject_before_body_end(body: bytes, encoding: str, snippet: str) -> bytes:
+    try:
+        text = body.decode(encoding, errors="replace")
+    except LookupError:
+        encoding = "utf-8"
+        text = body.decode(encoding, errors="replace")
+    idx = text.lower().rfind("</body")
+    text = text[:idx] + snippet + text[idx:] if idx >= 0 else text + snippet
+    try:
+        return text.encode(encoding, errors="replace")
+    except LookupError:
+        return text.encode("utf-8", errors="replace")
 
 
 def _strip_elements_by_selectors(html_text: str, selectors: list) -> str:
@@ -261,14 +369,14 @@ def _strip_elements_by_selectors(html_text: str, selectors: list) -> str:
         return html_text
 
 
-def _apply_site_injections(html_body: bytes, url: str, encoding: str, injection: dict) -> bytes:
+def _apply_site_injections(html_body: bytes, url: str, encoding: str, injection: dict, nonce: Optional[str] = None) -> bytes:
     """Apply site injection: (1) strip hide_selectors from HTML in proxy, (2) head_code, (3) body_code, (4) hide script as fallback for dynamic content."""
     try:
         text = html_body.decode(encoding, errors="replace")
     except Exception:
         text = html_body.decode("utf-8", errors="replace")
-    head_code = (injection.get("head_code") or "").strip()
-    body_code = (injection.get("body_code") or "").strip()
+    head_code = add_nonce((injection.get("head_code") or "").strip(), nonce)
+    body_code = add_nonce((injection.get("body_code") or "").strip(), nonce)
     hide_selectors = injection.get("hide_selectors") or []
     if not head_code and not body_code and not hide_selectors:
         return html_body
@@ -300,6 +408,7 @@ def _apply_site_injections(html_body: bytes, url: str, encoding: str, injection:
             "if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',run);}else{setTimeout(run,0);}"
             "})();</script>"
         ) % selectors_js
+    hide_script = add_nonce(hide_script, nonce)
     body_inject = (body_code + "\n" + hide_script) if (body_code and hide_script) else (body_code or hide_script)
     if body_inject:
         body_close = re.compile(re.escape("</body>"), re.IGNORECASE)
@@ -321,6 +430,8 @@ def process_http_response(flow: http.HTTPFlow) -> None:
     url = flow.request.url
     referer_url = flow.request.headers.get("Referer")
     method = flow.request.method
+    if getattr(flow.response, "stream", False):
+        return  # body was streamed (allowed media) or discarded (blocked video) at headers time
     switches = get_filter_switches()
     user_id: Optional[int] = None
     if getattr(flow, "metadata", None) is not None:
@@ -369,6 +480,11 @@ def process_http_response(flow: http.HTTPFlow) -> None:
             )
             return
         logger.debug("Public file-share: skipped (file_filter_enabled=False for rule) - URL: %s", url[:80] if url else "")
+
+    extracted = extract_image_content(flow)
+    if extracted is not None:
+        _process_image(flow, extracted, url, referer_url, switches, user_id)
+        return
 
     logger.info("Processing HTTP response - Method: %s, URL: %s (user_id=%s)", method, url, user_id)
     logger.debug(
@@ -459,25 +575,23 @@ def process_http_response(flow: http.HTTPFlow) -> None:
                 body_to_send = flow.response.raw_content
         embedded_switch = switches.get("embedded_image_filter", True)
         rule_image_ok = (rule is None) or rule.get("image_filter_enabled", True)
-        if body_to_send and embedded_switch and rule_image_ok:
+        if body_to_send and embedded_switch and rule_image_ok and not replaced:
+            # base64 images anywhere in the page: <img>/srcset, inline <script> (search thumbnails), <style>.
             try:
-                content_type = (flow.response.headers.get("content-type") or "").strip()
-                enc = "utf-8"
-                if "charset=" in content_type:
-                    for part in content_type.split(";"):
-                        part = part.strip().lower()
-                        if part.startswith("charset="):
-                            enc = part.split("=", 1)[1].strip().strip('"')
-                            break
-                body_to_send = filter_embedded_images_in_html(
-                    body_to_send,
-                    page_url=url,
-                    referer_url=referer_url,
-                    encoding=enc,
-                )
+                body_to_send, _n = filter_data_uri_images(body_to_send, page_url=url, referer_url=referer_url)
             except Exception as e:
                 logger.warning("Embedded image filter failed for %s: %s", url, e)
+        if body_to_send and not replaced and youtube_policy.applies(url, rule, switches):
+            try:
+                yt_body = youtube_policy.filter_html(body_to_send, _response_charset(flow), url, user_id)
+                if yt_body is not None:
+                    body_to_send = yt_body
+            except Exception as e:
+                logger.warning("YouTube page filter failed for %s: %s", url, e)
         if body_to_send:
+            # Strict CSP pages: give our injected scripts a nonce (None when no CSP or inline already allowed).
+            csp_nonce = prepare_csp_nonce(flow)
+            body_to_send, csp_nonce = rewrite_meta_csp(body_to_send, csp_nonce)
             content_type_h = (flow.response.headers.get("content-type") or "").strip()
             enc = "utf-8"
             if "charset=" in content_type_h:
@@ -503,7 +617,8 @@ def process_http_response(flow: http.HTTPFlow) -> None:
                 inject_video = rule is None or rule.get("video_filter_enabled", True)
                 body_before_len = len(body_to_send)
                 body_to_send = inject_surf_widget(
-                    body_to_send, url, user_id, rule, encoding=enc, is_admin=is_admin, inject_video=inject_video
+                    body_to_send, url, user_id, rule, encoding=enc, is_admin=is_admin, inject_video=inject_video,
+                    nonce=csp_nonce,
                 )
                 logger.info(
                     "surf_widget: injected url=%s user_id=%s is_admin=%s body_before=%s body_after=%s",
@@ -513,11 +628,27 @@ def process_http_response(flow: http.HTTPFlow) -> None:
                     body_before_len,
                     len(body_to_send),
                 )
+            # Reload "checking" placeholders automatically once their analysis finishes.
+            if (
+                not replaced
+                and user_id is not None
+                and switches.get("image_filter", True)
+                and (rule is None or rule.get("image_filter_enabled", True))
+            ):
+                body_to_send = _inject_before_body_end(body_to_send, enc, add_nonce(REFRESH_SCRIPT, csp_nonce))
+            # "Send for review" button over blocked videos (the script only acts on videos the proxy confirms blocked).
+            if (
+                not replaced
+                and user_id is not None
+                and switches.get("video_filter", True)
+                and not video_allowed_for_rule(rule, True)
+            ):
+                body_to_send = _inject_before_body_end(body_to_send, enc, add_nonce(OVERLAY_SCRIPT, csp_nonce))
             # Site injections (admin-defined head/body code and hide selectors per site)
             try:
                 injection = get_site_injection_for_url(url)
                 if injection:
-                    body_to_send = _apply_site_injections(body_to_send, url, enc, injection)
+                    body_to_send = _apply_site_injections(body_to_send, url, enc, injection, nonce=csp_nonce)
                     logger.debug("site_injection applied for url=%s", url[:80] if url else "")
             except Exception as e:
                 logger.warning("Site injection failed for %s: %s", url[:80] if url else "", e)
@@ -536,11 +667,17 @@ def process_http_response(flow: http.HTTPFlow) -> None:
             try:
                 resolver = get_policy_resolver(user_id)
                 rule = resolver.resolve(url, "html")
-                if rule is not None and rule.get("state") in ("block", "review"):
-                    logger.debug("Text/JSON response: policy block/review - URL: %s (pass through)", url)
-                    rule = None
             except Exception as e:
-                logger.warning("Policy resolution failed for text/json %s: %s", url, e)
+                logger.warning("Policy resolution failed for text/json %s: %s – blocking", url, e)
+                rule = {"state": "review"}
+            if rule is not None and rule.get("state") in ("block", "review"):
+                # Normally stopped at request time; if not (e.g. that check failed), never pass it through.
+                flow.response = http.Response.make(
+                    FILTER_BLOCKED_OR_REVIEW_HTTP_STATUS, b"", {"Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store"}
+                )
+                flow.metadata["traffic_status"] = "blocked_global" if rule.get("state") == "block" else "review"
+                logger.debug("Text/JSON response blocked by policy - URL: %s", url)
+                return
         text_switch_on = switches.get("text_filter", True)
         if not url_policy_on:
             text_filter_on = text_switch_on
@@ -552,6 +689,10 @@ def process_http_response(flow: http.HTTPFlow) -> None:
                 and rule.get("text_filter_enabled", True)
             )
         has_content = bool(flow.response.raw_content)
+        if has_content and youtube_policy.applies(url, rule, switches):
+            _filter_youtube_json(flow, url, referer_url, user_id)
+        if has_content:
+            _filter_embedded_data_uris(flow, url, referer_url, switches, rule)
         if text_filter_on and has_content:
             try:
                 try:
@@ -661,6 +802,16 @@ def process_http_response(flow: http.HTTPFlow) -> None:
                 logger.warning("PDF filter failed for %s: %s", url, e, exc_info=True)
         return
 
+    # JavaScript (and other text) responses: base64 images inside strings (single-page apps, search widgets)
+    if _is_javascript_response(flow) and flow.response.raw_content:
+        rule = None
+        try:
+            rule = get_policy_resolver(user_id).resolve(url, "*")
+        except Exception:
+            pass
+        _filter_embedded_data_uris(flow, url, referer_url, switches, rule)
+        return
+
     # File download (non-image): return send-for-review page unless global switch or per-rule file_filter_enabled is off
     if _is_file_download_response(flow) and not _is_content_type_already_filtered(flow):
         if get_filter_switches().get("file_download_filter", True):
@@ -695,11 +846,12 @@ def process_http_response(flow: http.HTTPFlow) -> None:
                 return
         logger.debug("File download: passed through (file_download_filter off or file_filter_enabled=False for rule) - URL: %s", url[:80] if url else "")
 
-    # Direct image responses
-    extracted = extract_image_content(flow)
-    if extracted is None:
-        logger.debug("Response is not an image, skipping processing for URL: %s", url)
-        return
+    return
+
+
+def _process_image(flow: http.HTTPFlow, extracted, url: str, referer_url, switches: dict, user_id) -> None:
+    """Images (any declared content type – detection is by content, so an image labelled text/html or
+    application/octet-stream does not skip the filter)."""
 
     # URL policy for images: when url_policy is on and site is block/review, image filter still runs and returns placeholder.
     # When site is "allow" we no longer skip – image filter always runs when its switch is on (independent).
@@ -740,7 +892,7 @@ def process_http_response(flow: http.HTTPFlow) -> None:
         referer_url,
     )
 
-    image_result, _, image_status = get_image_with_status(
+    image_result, content_type_override, image_status = get_image_with_status(
         image_data=image_content,
         image_url=url,
         referer_url=referer_url,
@@ -748,6 +900,11 @@ def process_http_response(flow: http.HTTPFlow) -> None:
     )
     logger.debug("Got image result, size: %s bytes, status: %s", len(image_result), image_status)
 
+    if image_status != "allowed":
+        flow.response.headers.pop("content-encoding", None)
+        if content_type_override:
+            flow.response.headers["Content-Type"] = content_type_override
+        flow.response.headers["X-Goallm-Image-Status"] = image_status
     flow.response.raw_content = image_result
     flow.response.headers["Content-Length"] = str(len(image_result))
     if image_status in ("checking", "pending", "error"):

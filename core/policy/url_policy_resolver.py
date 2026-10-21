@@ -1,6 +1,7 @@
 import re
+from collections import defaultdict
 from urllib.parse import urlparse, unquote
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 
 
 class URLPolicyResolverError(ValueError):
@@ -22,6 +23,7 @@ class URLPolicyResolver:
         default_mode: Optional[str] = None,
         global_policies: Optional[List[Dict]] = None,
         user_policies: Optional[List[Dict]] = None,
+        debug: bool = False,
     ):
         # Two-phase: global (base whitelist) + user (overrides)
         self._two_phase = global_policies is not None and user_policies is not None
@@ -42,12 +44,50 @@ class URLPolicyResolver:
             for r in self.tag_rules
             if r.get("tag") and r.get("state") in ("allow", "block")
         }
+        # Debug log is opt-in: building the messages is costly, and a shared (cached) resolver
+        # must not mutate state during resolve() so it stays safe to use from several threads.
+        self._debug = bool(debug)
         self._debug_log = []
+        self._global_index = self._build_index(self.global_policies)
+        self._user_index = self._build_index(self.user_policies)
+
+    # ---------- Domain index (O(labels) lookup instead of scanning every rule) ----------
+
+    @staticmethod
+    def _rule_key(rule_domain: str) -> Tuple[bool, str]:
+        r = (rule_domain or "").strip().lower()
+        if r.startswith("www."):
+            r = r[4:]
+        if r.startswith("*."):
+            base = r[2:]
+            if base.startswith("www."):
+                base = base[4:]
+            return True, base
+        return False, r
+
+    @classmethod
+    def _build_index(cls, policies: List[Dict]) -> Tuple[Dict[str, List[Dict]], Dict[str, List[Dict]]]:
+        exact: Dict[str, List[Dict]] = defaultdict(list)
+        wildcard: Dict[str, List[Dict]] = defaultdict(list)
+        for rule in policies:
+            is_wild, key = cls._rule_key(rule.get("domain"))
+            (wildcard if is_wild else exact)[key].append(rule)
+        return dict(exact), dict(wildcard)
+
+    @staticmethod
+    def _indexed_candidates(index, domain: str) -> List[Dict]:
+        exact, wildcard = index
+        out = list(exact.get(domain, ()))
+        labels = domain.split(".")
+        for i in range(len(labels)):
+            out.extend(wildcard.get(".".join(labels[i:]), ()))
+        return out
 
     # ---------- Debug helpers ----------
 
     def _log(self, message: str) -> None:
-        self._debug_log.append(message)
+        if self._debug:
+            self._debug_log.append(message)
 
     def get_debug_log(self) -> List[str]:
         return self._debug_log.copy()
@@ -138,11 +178,21 @@ class URLPolicyResolver:
                 f"Path wildcard match: rule={rule_path}, target={path}, result={match}"
             )
             return match
-        match = path.startswith(rp) or (rp == "/" and path.startswith("/"))
+        match = self._prefix_match(rp, path)
         self._log(
             f"Path prefix match: rule={rule_path}, target={path}, result={match}"
         )
         return match
+
+    @staticmethod
+    def _prefix_match(rule_path: str, path: str) -> bool:
+        """Prefix match on a path-segment boundary: /forum matches /forum, /forum/x, /forum?x – not /forums.
+        (Plain startswith let an allow rule for /kosher open /kosher-anything.)"""
+        if rule_path == "/":
+            return path.startswith("/")
+        if "?" in rule_path:
+            return path == rule_path or path.startswith(rule_path + "&")
+        return path == rule_path or path.startswith(rule_path + "/") or path.startswith(rule_path + "?")
 
     def _segments_match(self, rule: list[str], path: list[str]) -> bool:
         """Match path segments; * in rule = exactly one segment."""
@@ -180,8 +230,14 @@ class URLPolicyResolver:
 
     def _match_candidates(self, policies: List[Dict], domain: str, path: str, req_type: str) -> Optional[Dict]:
         """Find best matching rule in policies for domain, path, req_type. Returns rule or None."""
+        if policies is self.global_policies:
+            pool = self._indexed_candidates(self._global_index, domain)
+        elif policies is self.user_policies:
+            pool = self._indexed_candidates(self._user_index, domain)
+        else:
+            pool = policies
         candidates = []
-        for rule in policies:
+        for rule in pool:
             if not self._domain_matches(rule["domain"], domain):
                 continue
             if not self._path_matches(rule.get("path"), path):
@@ -210,7 +266,8 @@ class URLPolicyResolver:
         return rule
 
     def resolve(self, url: str, req_type: str) -> Optional[Dict]:
-        self.clear_debug()
+        if self._debug:
+            self.clear_debug()
         self._log(f"Resolving policy for url={url}, type={req_type}")
 
         domain, path = self._normalize_url(url)

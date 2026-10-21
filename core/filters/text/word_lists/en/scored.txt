@@ -1,0 +1,88 @@
+# Suspicious words / phrases – English. Never masked: a hidden score (scoring.py). Number = weight.
+# Repeats of the same word count less; several different words together count more; on a Torah page less.
+# Weight 0 = a neutral phrase that absorbs its words. Reference: hard word = 5, a 250-word window blocks at 12,
+# a block on a page (comment / item) is hidden at 10.
+
+# Medical-sexual / semi-explicit
+libido 3
+orgasm 4
+masturbation 4
+masturbate 4
+foreplay 5
+kinky 4
+sex life 3
+sexual intercourse 3
+sexual orientation 3
+gender identity 3
+sexual 1
+sex 1
+sexuality 2
+sensual 3
+sensuality 3
+seductive 2
+seduce 2
+seduction 2
+arousal 2
+erotically 4
+lust 1
+lustful 1
+
+# Body and clothing
+naked 2
+nudity 2
+nude 1
+topless 4
+lingerie 4
+panties 4
+bra 2
+cleavage 3
+swimsuit 3
+swimwear 3
+bikini 4
+underwear model 4
+provocative 1
+revealing outfit 3
+
+# Romance and dating
+adultery 1
+lover 1
+lovers 1
+kiss 1
+kissing 2
+making out 3
+romance 1
+romantic 1
+intimate 1
+intimacy 2
+dating app 4
+online dating 3
+hookup 2
+one night stand 4
+flirt 3
+flirting 3
+sexual attraction 3
+sexually attractive 3
+girlfriend 1
+boyfriend 1
+gay 3
+
+# Modelling and shows
+supermodel 3
+beauty pageant 3
+fashion show 2
+runway model 3
+cheerleader 2
+
+# Neutral – absorb (weight 0)
+sex male 0
+sex female 0
+sex of the 0
+carbon dating 0
+dating back 0
+dating from 0
+music lover 0
+nature lover 0
+animal lover 0
+lover of 0
+kiss the mezuzah 0
+kissed the mezuzah 0

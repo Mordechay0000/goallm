@@ -16,7 +16,9 @@ CONDITIONS_CHECK = (
 
 
 class SimulatedImageAnalyzer(ImageAnalyzer):
+    """DEVELOPMENT ONLY: answers are derived from a hash of the bytes, not from the picture."""
     CONDITIONS_CHECK = CONDITIONS_CHECK
+    accepts_raw = True
 
     def __init__(self) -> None:
         logger.info("Initializing SimulatedImageAnalyzer")
