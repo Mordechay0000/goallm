@@ -240,15 +240,18 @@ AUTO_PASSTHROUGH_PINNED_APPS = (os.environ.get("AUTO_PASSTHROUGH_PINNED_APPS") o
 AUTO_PASSTHROUGH_MIN_FAILURES = int(os.environ.get("AUTO_PASSTHROUGH_MIN_FAILURES", "2"))
 
 # ========== סינון מלל – ניקוד (בלי מודל שפה) ==========
-# משקל ברירת מחדל של מילה קשה (blocked.txt). מילים חשודות (scored.txt) – המשקל כתוב ליד כל מילה.
-TEXT_HARD_WEIGHT = float(os.environ.get("TEXT_HARD_WEIGHT", "5"))
-# חלון מקומי: הניקוד הגבוה בכל רצף של כך וכך מילים. חסימת דף: חלון ≥ / דף שלם ≥.
-TEXT_WINDOW_WORDS = int(os.environ.get("TEXT_WINDOW_WORDS", "250"))
-TEXT_WINDOW_BLOCK_SCORE = float(os.environ.get("TEXT_WINDOW_BLOCK_SCORE", "12"))
-TEXT_PAGE_BLOCK_SCORE = float(os.environ.get("TEXT_PAGE_BLOCK_SCORE", "30"))
-# בלוק (כתבה / תגובה / פריט) עם ניקוד ≥ זה מוסתר לבדו – אם הוא לא יותר מ-TEXT_HIDE_MAX_SHARE מהדף.
-TEXT_HIDE_SCORE = float(os.environ.get("TEXT_HIDE_SCORE", "10"))
-TEXT_HIDE_MAX_SHARE = float(os.environ.get("TEXT_HIDE_MAX_SHARE", "0.5"))
+# משקל ברירת מחדל של מילה קשה (blocked.txt) – לפחות פי 2 מכל מילה חשודה (scored.txt, המשקל כתוב ליד כל מילה).
+TEXT_HARD_WEIGHT = float(os.environ.get("TEXT_HARD_WEIGHT", "8"))
+# כלל אחד בכל רמה – משפט, רכיב (כותרת / תוצאת חיפוש / כתבה / תגובה / פסקה / רשימה), קטע (רצף מילים) ודף:
+# יחידה "חמה" כשהניקוד שלה ל-TEXT_DENSITY_WORDS מילים ≥ TEXT_DENSITY_SCORE. יחידה קצרה נספרת כאילו היא באורך
+# TEXT_DENSITY_WORDS (מילה חשודה אחת בכותרת קצרה אינה "צפיפות"). משפט / רכיב / קטע חם הופך ל-X.
+TEXT_DENSITY_WORDS = int(os.environ.get("TEXT_DENSITY_WORDS", "250"))
+TEXT_DENSITY_SCORE = float(os.environ.get("TEXT_DENSITY_SCORE", "12"))
+# הדף נחסם לפי יחס: כשחלק כזה ממנו הפך ל-X, או כשמה שנשאר בטקסט שלו אחרי ה-X (בלי קישורים – אותם שופטים
+# בדף שהם מובילים אליו) עדיין בצפיפות כזו ל-TEXT_DENSITY_WORDS מילים ומצטבר לפחות ל-TEXT_DENSITY_SCORE:
+# כתבה שכל-כולה בנושא, לא כמה תוצאות / כתבות / תגובות בעייתיות בדף.
+TEXT_PAGE_HIDDEN_SHARE = float(os.environ.get("TEXT_PAGE_HIDDEN_SHARE", "0.25"))
+TEXT_PAGE_DENSITY_SCORE = float(os.environ.get("TEXT_PAGE_DENSITY_SCORE", "3"))
 # 3 מילים שונות ויותר יחד → הניקוד מוכפל.
 TEXT_DIVERSITY_BONUS = float(os.environ.get("TEXT_DIVERSITY_BONUS", "1.3"))
 # הקשר תורני (context.txt): לפחות כך וכך סמנים, ובצפיפות של לפחות כך וכך ל-1000 מילים → מילים חשודות (לא קשות)
