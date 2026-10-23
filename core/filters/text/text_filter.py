@@ -7,7 +7,7 @@
 ההחלטה (scoring.py) היא כלל צפיפות אחד בכל רמה, מהקטן לגדול:
 - משפט חם → המשפט כולו הופך ל-X (כותרת עם מילה קשה אחת כבר חמה – כותרות שוקלות פי 1.5).
 - רכיב חם (כותרת, תוצאת חיפוש, כרטיס כתבה, תגובה, פסקה, רשימת קישורים) → הרכיב כולו הופך ל-X.
-- קטע חם (רצף מילים צפוף, גם כשהוא חוצה כמה פסקאות) → הקטע הופך ל-X, גם כשהדף כולו נקי.
+- קטע חם (מילים בעייתיות קרובות זו לזו, גם כשהן חוצות כמה פסקאות) → הקטע הופך ל-X, גם כשהדף כולו נקי.
 - הדף נחסם רק לפי יחס: מה שנשאר בו עדיין צפוף, או שרובו כבר הפך ל-X. כמה תוצאות או כתבות בעייתיות
   בדף חיפוש / דף בית לא חוסמות את הדף – רק הופכות ל-X.
 התאמה (lexicon.py): עברית – המילה ונטיותיה + אותיות שימוש; אנגלית – stemming; ביטויים; עקיפות (s.e.x, תווים נסתרים).
@@ -25,11 +25,14 @@ from urllib.parse import unquote, urlsplit
 
 from core.filters.text.lexicon import HARD, MARKER, MEDICAL, SCORED, Match, find_terms, normalize_hebrew as _normalize_hebrew  # noqa: F401
 from core.filters.text.lexicon import tokenize as _tokenize_words
-from core.filters.text.scoring import Scored, best_window, context_factor, density, hot_windows, is_hot, set_score, weighted
+from core.filters.text.scoring import (
+    DIVERSE_TERMS, Scored, best_window, context_factor, density, hot_sections, is_hot, set_score, weighted,
+)
 from data.constants import (
     SUPPORTED_LANGS,
     TEXT_DENSITY_SCORE,
     TEXT_DENSITY_WORDS,
+    TEXT_MIN_MATCHES,
     TEXT_PAGE_DENSITY_SCORE,
     TEXT_PAGE_HIDDEN_SHARE,
     TEXT_TITLE_FACTOR,
@@ -156,7 +159,7 @@ def _decide(groups: List[_Group], comp_words: Callable[[Any], int], extra: List[
         w = weighted(g.items)
         for s, e in (sentences(gi) if w else ()):
             score, sub = take([it for it in w if s <= it.off < e])
-            if score >= TEXT_DENSITY_SCORE and is_hot(score, len(_tokenize_words(g.text[s:e]))):
+            if score >= TEXT_DENSITY_SCORE and is_hot(score, len(_tokenize_words(g.text[s:e])), len(sub)):
                 g.xs.append((s, e))
                 live.difference_update(map(id, sub))
                 units += 1
@@ -172,7 +175,7 @@ def _decide(groups: List[_Group], comp_words: Callable[[Any], int], extra: List[
     hot_comps: List[Any] = []
     for c in sorted(comp_items, key=lambda c: -depth[c]):
         score, sub = take(comp_items[c])
-        if score >= TEXT_DENSITY_SCORE and is_hot(score, comp_words(c)):
+        if score >= TEXT_DENSITY_SCORE and is_hot(score, comp_words(c), len(sub)):
             hot_comps.append(c)
             live.difference_update(map(id, sub))
             units += 1
@@ -182,9 +185,9 @@ def _decide(groups: List[_Group], comp_words: Callable[[Any], int], extra: List[
             if hot.intersection(g.comps):
                 g.xs.append((0, len(g.text)))
 
-    # 3. sections: a dense run of words, also across components
+    # 3. sections: problem words close together, also across components
     rest = sorted((it for g in groups for it in weighted(g.items) if id(it) in live), key=lambda it: it.pos)
-    for i, j in hot_windows(rest, ctx):
+    for i, j in hot_sections(rest, ctx):
         a, b = rest[i], rest[j - 1]
         start = _sentence_at(sentences(a.group), a.off)[0]
         end = _sentence_at(sentences(b.group), b.off)[1]
@@ -205,7 +208,8 @@ def _decide(groups: List[_Group], comp_words: Callable[[Any], int], extra: List[
         g.xs = _merge(g.xs)
         x_words += sum(len(_tokenize_words(g.text[s:e])) for s, e in g.xs)
     share = x_words / max(words, 1)
-    left, _ = take([it for it in all_items if it.own])
+    left, left_items = take([it for it in all_items if it.own])
+    left_terms = len({it.match.term.key for it in left_items})
     dens = density(left, words if content_words is None else content_words)
     w_all = weighted(all_items)
     total, per_term = set_score(w_all, ctx)
@@ -213,7 +217,8 @@ def _decide(groups: List[_Group], comp_words: Callable[[Any], int], extra: List[
     block_page, block_reason = False, ""
     if x_words and share >= TEXT_PAGE_HIDDEN_SHARE:
         block_page, block_reason = True, f"score: {100 * share:.0f}% of the text turned into X's ({units} units) – {terms}"
-    elif dens >= TEXT_PAGE_DENSITY_SCORE and left >= TEXT_DENSITY_SCORE:  # spread out, and adding up to a hot unit
+    elif dens >= TEXT_PAGE_DENSITY_SCORE and left >= TEXT_DENSITY_SCORE and left_terms >= DIVERSE_TERMS:
+        # many different words spread through the page's own text, adding up to a hot unit
         ctx_txt = f", context ×{ctx:g}" if ctx != 1.0 else ""
         block_page, block_reason = True, f"score: density {dens:.1f} / {TEXT_PAGE_DENSITY_SCORE:g} per {TEXT_DENSITY_WORDS} words{ctx_txt} – {terms}"
     snippet = ""
@@ -458,6 +463,7 @@ def _is_inside_skip_tag(node) -> bool:
 _BLOCK_TAGS = frozenset((
     "div", "section", "article", "aside", "nav", "header", "footer", "ul", "ol", "li", "table", "tbody", "thead",
     "tr", "td", "th", "p", "blockquote", "figure", "figcaption", "dl", "dt", "dd", "details", "form",
+    "title", "h1", "h2", "h3", "h4", "h5", "h6", "main", "caption",
 ))
 _HEADING_TAGS = frozenset(("title", "h1", "h2", "h3"))
 

@@ -145,13 +145,26 @@ def test_search_results_page_with_bad_results_is_not_blocked():
     assert "חינם" not in html and "חשופות" not in html and "נערות" not in html
 
 
-def test_a_heading_with_one_hard_word_is_xd_entirely_the_body_only_on_the_word():
-    body = ('<h2>הכנס בנושא להט"ב נערך בעיר</h2>'
-            '<p>' + " ".join(["העירייה פרסמה הודעה על שינויים בתנועה בשל הכנס."] * 8) + '</p>'
-            '<p>בהודעה נכתב כי פעילי הלהט"ב יגיעו לאולם בשעות הבוקר.</p>')
+def test_one_problem_word_in_a_short_heading_is_masked_alone_two_turn_the_heading_into_xs():
+    body = ('<h2>סרטי סקס חינם</h2><h2>הדוגמנית בבגד ים חושני</h2>'
+            '<p>' + " ".join(["העירייה פרסמה הודעה על שינויים בתנועה בשל הכנס."] * 8) + '</p>')
     html, block, _r, _d = _filter(body)
-    assert not block and "הכנס בנושא" not in html and "נערך בעיר" not in html  # the whole heading
-    assert "בהודעה נכתב כי פעילי" in html and "יגיעו לאולם" in html  # in the body: the word only
+    assert not block and "סרטי XXX חינם" in html  # one word of three: only the word
+    assert "הדוגמנית" not in html and "חושני" not in html  # three problem words: the whole heading
+    assert html.count("העירייה פרסמה הודעה") == 8
+
+
+def test_two_lone_words_far_apart_are_not_a_section():
+    filler = " ".join(["העירייה פרסמה הודעה על שינויים בתנועה בשל הכנס."] * 30)
+    text = f"נמצא חומר פורנוגרפי במחשב. {filler} המשטרה עצרה חשוד בהפצת סרטי סקס. {filler}"
+    out, block, _r, debug = _filter_plain_text(text)
+    assert debug["score"]["sections"] == 0 and out.count("העירייה פרסמה הודעה") == 60
+    assert "נמצא חומר" in out and "המשטרה עצרה חשוד" in out and not block
+
+
+def test_one_word_never_blocks_a_short_page():
+    html, block, _r, _d = _filter('<h1>הכנס בנושא להט"ב בוטל</h1><p>העירייה הודיעה על ביטול הכנס.</p>')
+    assert not block and "הכנס בנושא" in html and "בוטל" in html
 
 
 def test_a_list_of_bad_links_is_hidden_as_one_unit():

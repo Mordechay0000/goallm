@@ -247,9 +247,15 @@ TEXT_HARD_WEIGHT = float(os.environ.get("TEXT_HARD_WEIGHT", "8"))
 # TEXT_DENSITY_WORDS (מילה חשודה אחת בכותרת קצרה אינה "צפיפות"). משפט / רכיב / קטע חם הופך ל-X.
 TEXT_DENSITY_WORDS = int(os.environ.get("TEXT_DENSITY_WORDS", "250"))
 TEXT_DENSITY_SCORE = float(os.environ.get("TEXT_DENSITY_SCORE", "12"))
+# ...ובתנאי שיש בה לפחות כך וכך מילים בעייתיות: מילה אחת לבדה לא הופכת את סביבתה ל-X (מילה קשה מוחלפת לבדה,
+# חשודה רק נספרת) – גם לא בכותרת קצרה, וגם לא דף שלם.
+TEXT_MIN_MATCHES = int(os.environ.get("TEXT_MIN_MATCHES", "2"))
+# קטע = רצף של מילים בעייתיות שבין כל אחת לבאה אחריה לכל היותר כך וכך מילים (שתי מילים בודדות רחוקות זו מזו
+# אינן קטע, והטקסט הנקי שביניהן לא הופך ל-X).
+TEXT_SECTION_GAP_WORDS = int(os.environ.get("TEXT_SECTION_GAP_WORDS", "50"))
 # הדף נחסם לפי יחס: כשחלק כזה ממנו הפך ל-X, או כשמה שנשאר בטקסט שלו אחרי ה-X (בלי קישורים – אותם שופטים
-# בדף שהם מובילים אליו) עדיין בצפיפות כזו ל-TEXT_DENSITY_WORDS מילים ומצטבר לפחות ל-TEXT_DENSITY_SCORE:
-# כתבה שכל-כולה בנושא, לא כמה תוצאות / כתבות / תגובות בעייתיות בדף.
+# בדף שהם מובילים אליו) עדיין בצפיפות כזו ל-TEXT_DENSITY_WORDS מילים, מצטבר לפחות ל-TEXT_DENSITY_SCORE ובנוי
+# מ-3 מילים שונות לפחות: כתבה שכל-כולה בנושא, לא כמה תוצאות / כתבות / תגובות בעייתיות, ולא שתי מילים בודדות.
 TEXT_PAGE_HIDDEN_SHARE = float(os.environ.get("TEXT_PAGE_HIDDEN_SHARE", "0.25"))
 TEXT_PAGE_DENSITY_SCORE = float(os.environ.get("TEXT_PAGE_DENSITY_SCORE", "3"))
 # 3 מילים שונות ויותר יחד → הניקוד מוכפל.

@@ -13,9 +13,11 @@ twice any suspicious word. The score of a set of matches:
 4. Titles and headings: TEXT_TITLE_FACTOR.
 
 One rule at every level – a sentence, a component (heading, search result, teaser, comment, paragraph, list), a
-section (TEXT_DENSITY_WORDS consecutive words) and the page: a unit is HOT when its score per TEXT_DENSITY_WORDS
+section (a run of problem words, each within TEXT_SECTION_GAP_WORDS words of the next) and the page: a unit is HOT when its score per TEXT_DENSITY_WORDS
 words reaches TEXT_DENSITY_SCORE. A unit shorter than TEXT_DENSITY_WORDS counts as that long – one mild word in a
-three-word heading is not "dense" – and a long one is judged by its ratio, not by an absolute sum.
+three-word heading is not "dense" – and a long one is judged by its ratio, not by an absolute sum. In other words
+the share of problem words a unit needs grows as the unit gets shorter. And a unit needs at least TEXT_MIN_MATCHES
+problem words: one word alone never turns its heading / sentence / page into X's.
 text_filter.py turns hot units into X's, smallest first, and blocks the page when what is left is still dense
 or when most of it was X'd.
 """
@@ -34,10 +36,13 @@ from data.constants import (
     TEXT_DENSITY_WORDS,
     TEXT_DIVERSITY_BONUS,
     TEXT_MEDICAL_FACTOR,
+    TEXT_MIN_MATCHES,
+    TEXT_SECTION_GAP_WORDS,
 )
 
 _REPEAT_FACTOR = 0.5
 _TERM_CAP = 2.5
+DIVERSE_TERMS = 3  # this many different terms together are "many different words" (diversity bonus, page decision)
 
 
 @dataclass
@@ -83,7 +88,7 @@ def set_score(items: Sequence[Scored], ctx: float) -> Tuple[float, Dict[str, flo
         seen[term.key] += 1
         per_term[term.key] = min(per_term[term.key] + add, _TERM_CAP * w)
     score = sum(per_term.values())
-    if len(per_term) >= 3:
+    if len(per_term) >= DIVERSE_TERMS:
         score *= TEXT_DIVERSITY_BONUS
     return score, dict(per_term)
 
@@ -93,8 +98,8 @@ def density(score: float, words: int) -> float:
     return score * TEXT_DENSITY_WORDS / max(words, TEXT_DENSITY_WORDS)
 
 
-def is_hot(score: float, words: int) -> bool:
-    return density(score, words) >= TEXT_DENSITY_SCORE
+def is_hot(score: float, words: int, matches: int) -> bool:
+    return matches >= TEXT_MIN_MATCHES and density(score, words) >= TEXT_DENSITY_SCORE
 
 
 def _window_end(items: Sequence[Scored], i: int, j: int) -> int:
@@ -103,17 +108,18 @@ def _window_end(items: Sequence[Scored], i: int, j: int) -> int:
     return j
 
 
-def hot_windows(items: Sequence[Scored], ctx: float) -> List[Tuple[int, int]]:
-    """Non-overlapping [i, j) ranges of position-sorted weighted items that fit in TEXT_DENSITY_WORDS words and are hot."""
+def hot_sections(items: Sequence[Scored], ctx: float) -> List[Tuple[int, int]]:
+    """[i, j) runs of position-sorted weighted items, each within TEXT_SECTION_GAP_WORDS words of the next, that are hot
+    (a run longer than TEXT_DENSITY_WORDS words is judged by its density)."""
     out: List[Tuple[int, int]] = []
-    i = j = 0
+    i = 0
     while i < len(items):
-        j = _window_end(items, i, max(j, i))
-        if is_hot(set_score(items[i:j], ctx)[0], 0):
+        j = i + 1
+        while j < len(items) and items[j].pos - items[j - 1].pos <= TEXT_SECTION_GAP_WORDS:
+            j += 1
+        if is_hot(set_score(items[i:j], ctx)[0], items[j - 1].pos - items[i].pos + 1, j - i):
             out.append((i, j))
-            i = j
-        else:
-            i += 1
+        i = j
     return out
 
 
