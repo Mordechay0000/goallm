@@ -1,4 +1,4 @@
-# Hard words – English. Masked (XXX) in any context; weigh TEXT_HARD_WEIGHT (5) in the score.
+# Hard words – English. Masked (XXX) in any context; weigh TEXT_HARD_WEIGHT (8, at least 2× any suspicious word) in the score.
 # A word with an innocent meaning, or one used in Torah translations / halacha / news, is not here – it is in
 # scored.txt (hidden score) or out. Exception, by decision: LGBTQ+ terms are hard in every context.
 # Stemming applies (pornographic → pornograph…). "=word" = exact. Several words = a phrase. A trailing number = weight.

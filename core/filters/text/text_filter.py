@@ -1,14 +1,15 @@
 """
 סינון מלל (text filtering) – סינון לחרדים, בלי מודל שפה.
 
-שתי רמות:
-- מילים קשות (word_lists/*/blocked.txt): מוחלפות ב-XXX בכל הקשר (כולל להט"ב), ומשקלן גבוה בניקוד.
+שתי רמות של מילים:
+- מילים קשות (word_lists/*/blocked.txt): מוחלפות ב-XXX בכל הקשר (כולל להט"ב), ומשקלן לפחות כפול מכל מילה חשודה.
 - מילים חשודות (word_lists/*/scored.txt): לא מוסתרות – ניקוד נסתר שמצטבר (ליבידו, עירום, "בגד ים"…).
-ההחלטה (scoring.py): ניקוד יורד לחזרות של אותה מילה, בונוס לכמה מילים שונות יחד, ניקוד מקומי (חלון מילים),
-הקשר תורני מפחית מילים חשודות (לא קשות), כותרות שוקלות יותר.
-
-בדף HTML (אתרים מעורבים שחייבים לפתוח): בלוק (כתבה / תגובה / פריט / כרטיס) שעבר את הסף מוסתר לבדו;
-הדף כולו נחסם רק כשהניקוד גבוה בדף עצמו.
+ההחלטה (scoring.py) היא כלל צפיפות אחד בכל רמה, מהקטן לגדול:
+- משפט חם → המשפט כולו הופך ל-X (כותרת עם מילה קשה אחת כבר חמה – כותרות שוקלות פי 1.5).
+- רכיב חם (כותרת, תוצאת חיפוש, כרטיס כתבה, תגובה, פסקה, רשימת קישורים) → הרכיב כולו הופך ל-X.
+- קטע חם (מילים בעייתיות קרובות זו לזו, גם כשהן חוצות כמה פסקאות) → הקטע הופך ל-X, גם כשהדף כולו נקי.
+- הדף נחסם רק לפי יחס: מה שנשאר בו עדיין צפוף, או שרובו כבר הפך ל-X. כמה תוצאות או כתבות בעייתיות
+  בדף חיפוש / דף בית לא חוסמות את הדף – רק הופכות ל-X.
 התאמה (lexicon.py): עברית – המילה ונטיותיה + אותיות שימוש; אנגלית – stemming; ביטויים; עקיפות (s.e.x, תווים נסתרים).
 בדיקת רשימות מול טקסט מותר: python -m tools.check_word_list <קבצים>.
 """
@@ -16,13 +17,26 @@ import base64
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from bisect import bisect_right
+from collections import defaultdict
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import unquote, urlsplit
 
 from core.filters.text.lexicon import HARD, MARKER, MEDICAL, SCORED, Match, find_terms, normalize_hebrew as _normalize_hebrew  # noqa: F401
 from core.filters.text.lexicon import tokenize as _tokenize_words
-from core.filters.text.scoring import PageScore, Scored, context_factor, score_page, set_score
-from data.constants import SUPPORTED_LANGS, TEXT_HIDE_MAX_SHARE, TEXT_HIDE_SCORE, TEXT_TITLE_FACTOR
+from core.filters.text.scoring import (
+    DIVERSE_TERMS, Scored, best_window, context_factor, density, hot_sections, is_hot, set_score, weighted,
+)
+from data.constants import (
+    SUPPORTED_LANGS,
+    TEXT_DENSITY_SCORE,
+    TEXT_DENSITY_WORDS,
+    TEXT_MIN_MATCHES,
+    TEXT_PAGE_DENSITY_SCORE,
+    TEXT_PAGE_HIDDEN_SHARE,
+    TEXT_TITLE_FACTOR,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,14 +63,11 @@ def _mask_string(s: str, keep_spaces: bool = True) -> str:
 
 
 def filter_paragraph_for_pdf(text: str, lang_hint: Optional[str] = None) -> Tuple[str, bool]:
-    """PDF block / paragraph: hard words → X's. Returns (text, any_hard_word)."""
+    """PDF block / paragraph: hard words → X's, and a hot sentence or the whole block → X's. Returns (text, changed)."""
     if not text or not text.strip():
         return text, False
-    langs = list(SUPPORTED_LANGS) if lang_hint is None else [lang_hint]
-    ranges = _find_matches(text, langs)
-    if not ranges:
-        return text, False
-    return _mask(text, ranges), True
+    out = _filter_plain_text(text, lang_hint)[0]
+    return out, out != text
 
 
 def _snippet_around_match(text: str, start: int, end: int, max_before: int = 120, max_after: int = 120, max_total: int = 400) -> str:
@@ -73,17 +84,170 @@ def _snippet_around_match(text: str, start: int, end: int, max_before: int = 120
     return s
 
 
-def _debug(ps: PageScore, items: List[Scored], hidden: int = 0) -> Dict[str, Any]:
-    weighted = [it for it in items if it.match.term.kind in (HARD, SCORED) and it.match.term.weight > 0]
-    return {
-        "matched": [{"w": it.match.text, "s": it.match.term.weight} for it in weighted[:30]],
-        "counts": {"matched": len(weighted), "total": ps.words},
-        "snippet": "",
+# ---------- the decision: hot units → X's, then the page (scoring.py) ----------
+
+
+@dataclass
+class _Group:
+    """Text read as one run: a plain-text paragraph, or the consecutive text nodes of one HTML block."""
+    text: str
+    comps: Tuple[Any, ...]                                         # enclosing components, smallest first
+    key: Any = None
+    items: List[Scored] = field(default_factory=list)              # it.off = character offset in text
+    segs: List[Tuple[Any, int, list]] = field(default_factory=list)  # HTML: (text node, offset in text, hard matches)
+    xs: List[Tuple[int, int]] = field(default_factory=list)        # ranges that become X's
+
+
+_SENTENCE_END_RE = re.compile(r"[.!?…]+(?=\s|$)|\n")
+
+
+def _sentences(text: str) -> List[Tuple[int, int]]:
+    spans, start = [], 0
+    for m in _SENTENCE_END_RE.finditer(text):
+        if text[start:m.end()].strip():
+            spans.append((start, m.end()))
+        start = m.end()
+    if text[start:].strip():
+        spans.append((start, len(text)))
+    return spans or [(0, len(text))]
+
+
+def _sentence_at(spans: List[Tuple[int, int]], off: int) -> Tuple[int, int]:
+    return spans[max(0, bisect_right([s for s, _ in spans], off) - 1)]
+
+
+def _merge(ranges: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+    out: List[Tuple[int, int]] = []
+    for s, e in sorted(ranges):
+        if out and s <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], e))
+        else:
+            out.append((s, e))
+    return out
+
+
+def _x_into(chars: List[str], start: int, end: int) -> None:
+    for i in range(start, end):
+        if not chars[i].isspace():
+            chars[i] = "X"
+
+
+def _decide(groups: List[_Group], comp_words: Callable[[Any], int], extra: List[Scored], words: int,
+            content_words: Optional[int] = None) -> Tuple[bool, str, Dict[str, Any], List[Any]]:
+    """Mark hot sentences, then hot components (smallest first), then hot sections as X ranges on the groups, each
+    unit counting only what a smaller one did not take; then decide the page by ratio: what was X'd, and the density
+    of what is left in the page's own text (content_words: words outside links).
+    Returns (block_page, block_reason, debug_info, hot components)."""
+    all_items = [it for g in groups for it in g.items] + extra
+    markers = sum(1 for it in all_items if it.match.term.kind == MARKER)
+    ctx = context_factor(markers, words, sum(1 for it in all_items if it.match.term.kind == MEDICAL))
+    live = {id(it) for it in weighted(all_items)}
+    units = sections = 0
+    sentence_cache: Dict[int, List[Tuple[int, int]]] = {}
+
+    def sentences(gi: int) -> List[Tuple[int, int]]:
+        if gi not in sentence_cache:
+            sentence_cache[gi] = _sentences(groups[gi].text)
+        return sentence_cache[gi]
+
+    def take(items: List[Scored]) -> Tuple[float, List[Scored]]:
+        sub = [it for it in items if id(it) in live]
+        return (set_score(sub, ctx)[0] if sub else 0.0), sub
+
+    # 1. sentences
+    for gi, g in enumerate(groups):
+        w = weighted(g.items)
+        for s, e in (sentences(gi) if w else ()):
+            score, sub = take([it for it in w if s <= it.off < e])
+            if score >= TEXT_DENSITY_SCORE and is_hot(score, len(_tokenize_words(g.text[s:e])), len(sub)):
+                g.xs.append((s, e))
+                live.difference_update(map(id, sub))
+                units += 1
+
+    # 2. components, smallest first
+    comp_items: Dict[Any, List[Scored]] = defaultdict(list)
+    depth: Dict[Any, int] = {}
+    for g in groups:
+        w = weighted(g.items)
+        for k, c in enumerate(g.comps if w else ()):
+            depth[c] = len(g.comps) - k
+            comp_items[c].extend(w)
+    hot_comps: List[Any] = []
+    for c in sorted(comp_items, key=lambda c: -depth[c]):
+        score, sub = take(comp_items[c])
+        if score >= TEXT_DENSITY_SCORE and is_hot(score, comp_words(c), len(sub)):
+            hot_comps.append(c)
+            live.difference_update(map(id, sub))
+            units += 1
+    if hot_comps:
+        hot = set(hot_comps)
+        for g in groups:
+            if hot.intersection(g.comps):
+                g.xs.append((0, len(g.text)))
+
+    # 3. sections: problem words close together, also across components
+    rest = sorted((it for g in groups for it in weighted(g.items) if id(it) in live), key=lambda it: it.pos)
+    for i, j in hot_sections(rest, ctx):
+        a, b = rest[i], rest[j - 1]
+        start = _sentence_at(sentences(a.group), a.off)[0]
+        end = _sentence_at(sentences(b.group), b.off)[1]
+        if a.group == b.group:
+            groups[a.group].xs.append((start, end))
+        else:
+            groups[a.group].xs.append((start, len(groups[a.group].text)))
+            for gi in range(a.group + 1, b.group):
+                groups[gi].xs.append((0, len(groups[gi].text)))
+            groups[b.group].xs.append((0, end))
+        live.difference_update(map(id, rest[i:j]))
+        units += 1
+        sections += 1
+
+    # 4. the page – by ratio
+    x_words = 0
+    for g in groups:
+        g.xs = _merge(g.xs)
+        x_words += sum(len(_tokenize_words(g.text[s:e])) for s, e in g.xs)
+    share = x_words / max(words, 1)
+    left, left_items = take([it for it in all_items if it.own])
+    left_terms = len({it.match.term.key for it in left_items})
+    dens = density(left, words if content_words is None else content_words)
+    w_all = weighted(all_items)
+    total, per_term = set_score(w_all, ctx)
+    terms = ", ".join(f"{t} ({v:.1f})" for t, v in sorted(per_term.items(), key=lambda kv: -kv[1])[:6])
+    block_page, block_reason = False, ""
+    if x_words and share >= TEXT_PAGE_HIDDEN_SHARE:
+        block_page, block_reason = True, f"score: {100 * share:.0f}% of the text turned into X's ({units} units) – {terms}"
+    elif dens >= TEXT_PAGE_DENSITY_SCORE and left >= TEXT_DENSITY_SCORE and left_terms >= DIVERSE_TERMS:
+        # many different words spread through the page's own text, adding up to a hot unit
+        ctx_txt = f", context ×{ctx:g}" if ctx != 1.0 else ""
+        block_page, block_reason = True, f"score: density {dens:.1f} / {TEXT_PAGE_DENSITY_SCORE:g} per {TEXT_DENSITY_WORDS} words{ctx_txt} – {terms}"
+    snippet = ""
+    first = next((it for it in w_all if it.group >= 0), None)
+    if block_page and first is not None:
+        snippet = _snippet_around_match(groups[first.group].text, first.off, first.off + first.match.end - first.match.start)
+    debug_info = {
+        "matched": [{"w": it.match.text, "s": it.match.term.weight} for it in w_all[:30]],
+        "counts": {"matched": len(w_all), "total": words},
+        "snippet": snippet,
         "score": {
-            "window_max": round(ps.window_max, 2), "page": round(ps.total, 2), "context_factor": ps.context_factor,
-            "markers": ps.markers, "top_terms": [[t, round(s, 2)] for t, s in ps.top_terms[:10]], "hidden_blocks": hidden,
+            "page": round(total, 2), "window_max": round(best_window(sorted(w_all, key=lambda it: it.pos), ctx), 2),
+            "density": round(dens, 2), "left": round(left, 2), "hidden_share": round(share, 3), "hidden_blocks": units, "sections": sections,
+            "context_factor": ctx, "markers": markers,
+            "top_terms": [[t, round(v, 2)] for t, v in sorted(per_term.items(), key=lambda kv: -kv[1])[:10]],
         },
     }
+    return block_page, block_reason, debug_info, hot_comps
+
+
+def _paragraph_spans(text: str) -> List[Tuple[int, int]]:
+    spans, start = [], 0
+    for m in re.finditer(r"\n[ \t\r]*\n", text):
+        if text[start:m.start()].strip():
+            spans.append((start, m.start()))
+        start = m.end()
+    if text[start:].strip():
+        spans.append((start, len(text)))
+    return spans
 
 
 def _filter_plain_text(
@@ -91,23 +255,33 @@ def _filter_plain_text(
     lang_hint: Optional[str] = None,
 ) -> Tuple[str, bool, str, Dict[str, Any]]:
     """Filter plain text. Returns (filtered_text, block_page, block_reason, debug_info).
-    Hard words are masked; the block decision is the hidden score (scoring.py)."""
+    Hard words are masked; hot sentences / paragraphs / sections become X's; the page decision is by ratio."""
     if not text.strip():
         return text, False, "", {"matched": [], "counts": {"matched": 0, "total": 0}, "snippet": ""}
     langs = list(SUPPORTED_LANGS) if lang_hint is None else [lang_hint]
-    matches, words = find_terms(text, langs)
-    items = [Scored(m, m.token) for m in matches]
-    ps = score_page(items, words)
-    debug_info = _debug(ps, items)
-    block_page = ps.blocked
-    block_reason = ps.reason() if block_page else ""
+    spans = _paragraph_spans(text)
+    groups: List[_Group] = []
+    para_words: List[int] = []
+    hard: List[Tuple[int, int]] = []
+    pos = 0
+    for k, (start, end) in enumerate(spans):
+        ms, n = find_terms(text[start:end], langs)
+        groups.append(_Group(text[start:end], (k,), items=[Scored(m, pos + m.token, group=k, off=m.start) for m in ms]))
+        hard.extend((start + m.start, start + m.end) for m in ms if m.term.kind == HARD)
+        para_words.append(n)
+        pos += n
+    block_page, block_reason, debug_info, _hot = _decide(groups, lambda k: para_words[k], [], pos)
     if block_page:
-        first = next((it.match for it in items if it.pos >= ps.window_start and it.match.term.kind in (HARD, SCORED)), None)
-        if first is not None:
-            debug_info["snippet"] = _snippet_around_match(text, first.start, first.end)
         logger.debug("text_filter: block_page=True %s", block_reason)
-    hard = [m for m in matches if m.term.kind == HARD]
-    return (_mask(text, hard) if hard else text), block_page, block_reason, debug_info
+    if not hard and not any(g.xs for g in groups):
+        return text, block_page, block_reason, debug_info
+    chars = list(text)
+    for start, end in hard:
+        chars[start:end] = "X" * (end - start)
+    for (start, _end), g in zip(spans, groups):
+        for s, e in g.xs:
+            _x_into(chars, start + s, start + e)
+    return "".join(chars), block_page, block_reason, debug_info
 
 
 _META_CHARSET_RE = re.compile(rb"""<meta[^>]+charset=["']?\s*([A-Za-z0-9_\-]+)""", re.IGNORECASE)
@@ -192,9 +366,10 @@ def format_text_filter_debug_readable(block_reason: str, debug_info: Dict[str, A
         parts.append("סיבת חסימה: " + block_reason)
     score = debug_info.get("score") or {}
     if score:
-        parts.append("ניקוד: חלון %s, דף %s%s" % (
+        parts.append("ניקוד: צפיפות %s ל-%d מילים, %s%% הפך ל-X (%s יחידות), חלון %s, דף %s%s" % (
+            score.get("density"), TEXT_DENSITY_WORDS, round(100 * (score.get("hidden_share") or 0)), score.get("hidden_blocks", 0),
             score.get("window_max"), score.get("page"),
-            "" if score.get("context_factor", 1) == 1 else ", הקשר תורני ×%s" % score.get("context_factor"),
+            "" if score.get("context_factor", 1) == 1 else ", הקשר ×%s" % score.get("context_factor"),
         ))
     counts = debug_info.get("counts") or {}
     matched_count = counts.get("matched", 0)
@@ -282,15 +457,15 @@ def _is_inside_skip_tag(node) -> bool:
     return False
 
 
-# Elements a reader sees as a unit. Scores add up the tree, and the SMALLEST element whose accumulated score
-# passes TEXT_HIDE_SCORE is hidden – a comment, a teaser card, a whole list of links (a navigation box whose items
-# each hold one word) – unless it is the bulk of the page.
+# Elements a reader sees as a unit (components). Scores add up the tree, and the SMALLEST hot element turns into X's –
+# a heading, a search result, a teaser card, a comment, a whole list of links (a navigation box whose items each hold
+# one word).
 _BLOCK_TAGS = frozenset((
     "div", "section", "article", "aside", "nav", "header", "footer", "ul", "ol", "li", "table", "tbody", "thead",
     "tr", "td", "th", "p", "blockquote", "figure", "figcaption", "dl", "dt", "dd", "details", "form",
+    "title", "h1", "h2", "h3", "h4", "h5", "h6", "main", "caption",
 ))
 _HEADING_TAGS = frozenset(("title", "h1", "h2", "h3"))
-HIDDEN_PLACEHOLDER = "⊘ תוכן הוסתר בסינון"
 
 
 def _block_chain(node) -> list:
@@ -323,10 +498,8 @@ def _url_words(url: str) -> str:
 
 def _filter_html(html_text: str, url: str, content_type: str, encoding: str = "utf-8") -> Tuple[Optional[bytes], bool, str, Dict[str, Any]]:
     """
-    Mask hard words in every visible text node and image alt/title; score the page.
-    A block (post / comment / item / card) whose own score passes TEXT_HIDE_SCORE is hidden by itself, if it is not
-    the bulk of the page; the page is blocked only if what remains still scores high.
-    Returns None instead of bytes when nothing was masked or hidden.
+    Mask hard words in every visible text node and image alt/title; turn hot sentences, components and sections into
+    X's (_decide); block the page by ratio. Returns None instead of bytes when nothing changed.
     """
     try:
         from bs4 import BeautifulSoup
@@ -338,82 +511,79 @@ def _filter_html(html_text: str, url: str, content_type: str, encoding: str = "u
 
     soup = BeautifulSoup(html_text, "html.parser")
     langs = list(SUPPORTED_LANGS)
-    items: List[Scored] = []
-    blocks: Dict[int, list] = {}  # id(element) → [element, depth (bigger = smaller element), [Scored]]
-    pos = 0
+    extra: List[Scored] = []  # URL words and image texts: no sentence to X
+    groups: List[_Group] = []
+    elements: Dict[int, Any] = {}
+    pos = content_words = 0
+    changed = False
 
     slug = _url_words(url)
     if slug:
         ms, n = find_terms(slug, langs)
-        items += [Scored(m, pos + m.token) for m in ms]
+        extra += [Scored(m, pos + m.token) for m in ms]
         pos += n
 
     skip_types = (Comment, Declaration, Doctype, ProcessingInstruction)
-    masked = False
     for node in [n for n in soup.descendants if isinstance(n, NavigableString)]:
         if isinstance(node, skip_types) or not node.strip() or _is_inside_skip_tag(node):
             continue
         s = str(node)
+        chain = _block_chain(node)
+        in_link = node.find_parent("a") is not None
+        leaf = id(chain[0]) if chain else None
+        if not groups or groups[-1].key != leaf:
+            elements.update((id(el), el) for el in chain)
+            groups.append(_Group("", tuple(id(el) for el in chain), key=leaf))
+        g = groups[-1]
         ms, n = find_terms(s, langs)
         if ms:
             factor = TEXT_TITLE_FACTOR if _in_heading(node) else 1.0
-            placed = [Scored(m, pos + m.token, factor) for m in ms]
-            items.extend(placed)
-            chain = _block_chain(node)
-            for k, el in enumerate(chain):
-                blocks.setdefault(id(el), [el, len(chain) - k, []])[2].extend(placed)
-            hard = [m for m in ms if m.term.kind == HARD]
-            if hard:
-                node.replace_with(_mask(s, hard))
-                masked = True
+            g.items.extend(Scored(m, pos + m.token, factor, len(groups) - 1, len(g.text) + m.start, not in_link) for m in ms)
+        g.segs.append((node, len(g.text), [m for m in ms if m.term.kind == HARD]))
+        g.text += s
         pos += n
+        content_words += 0 if in_link else n
 
     for img in soup.find_all("img"):
+        own = img.find_parent("a") is None  # a teaser image is judged with the page it links to
         for attr in ("alt", "title"):
             val = img.get(attr)
             if not val or not isinstance(val, str):
                 continue
             ms, n = find_terms(val, langs)
-            items += [Scored(m, pos + m.token) for m in ms]
+            extra += [Scored(m, pos + m.token, own=own) for m in ms]
             hard = [m for m in ms if m.term.kind == HARD]
             if hard:
                 img[attr] = _mask(val, hard)
-                masked = True
+                changed = True
             pos += n
 
-    words = pos
-    ctx = context_factor(sum(1 for it in items if it.match.term.kind == MARKER), words,
-                         sum(1 for it in items if it.match.term.kind == MEDICAL))
-    removed: set = set()
-    hidden = 0
-    hidden_words = 0
-    # smallest elements first: hide the minimal unit that carries the score
-    for el, _depth, bitems in sorted(blocks.values(), key=lambda b: -b[1]):
-        live = [it for it in bitems if id(it) not in removed]
-        if not live or set_score(live, ctx)[0] < TEXT_HIDE_SCORE:
-            continue
-        el_words = len(_tokenize_words(el.get_text(" ")))
-        if el_words > TEXT_HIDE_MAX_SHARE * max(words, 1):
-            continue  # the main content itself – the page decision handles it
-        removed.update(id(it) for it in live)
-        el.clear()
-        el.append(HIDDEN_PLACEHOLDER)
-        hidden += 1
-        hidden_words += el_words
-    if hidden:  # an element hidden first may sit inside a bigger one hidden later – count what the reader sees
-        hidden = len(soup.find_all(string=HIDDEN_PLACEHOLDER))
-    remaining = [it for it in items if id(it) not in removed]
-    ps = score_page(remaining, words)
-    block_page = ps.blocked
-    block_reason = ps.reason() if block_page else ""
-    if not block_page and hidden_words > TEXT_HIDE_MAX_SHARE * max(words, 1):
-        # paragraph after paragraph was hidden: the page itself is the problem, not a block on it
-        block_page = True
-        block_reason = f"score: {hidden} hidden blocks = {100 * hidden_words // max(words, 1)}% of the page"
-    debug_info = _debug(ps, remaining, hidden)
-    if hidden:
-        logger.info("text_filter: %d block(s) hidden on %s", hidden, url[:100])
-    if not masked and not hidden:
+    block_page, block_reason, debug_info, hot_comps = _decide(
+        groups, lambda c: len(_tokenize_words(elements[c].get_text(" "))), extra, pos, content_words)
+
+    for c in hot_comps:
+        for img in elements[c].find_all("img"):
+            for attr in ("alt", "title"):
+                if isinstance(img.get(attr), str) and img[attr].strip():
+                    img[attr] = _mask_string(img[attr])
+                    changed = True
+    for g in groups:
+        for node, base, hard in g.segs:
+            s = str(node)
+            xs = [(max(a, base) - base, min(b, base + len(s)) - base) for a, b in g.xs if a < base + len(s) and b > base]
+            if not hard and not xs:
+                continue
+            chars = list(s)
+            for m in hard:
+                chars[m.start:m.end] = "X" * (m.end - m.start)
+            for a, b in xs:
+                _x_into(chars, a, b)
+            node.replace_with("".join(chars))
+            changed = True
+    units = debug_info["score"]["hidden_blocks"]
+    if units:
+        logger.info("text_filter: %d unit(s) turned into X's on %s", units, url[:100])
+    if not changed:
         return None, block_page, block_reason, debug_info  # nothing changed: the caller keeps the original bytes
     out = soup.decode(eventual_encoding=encoding)  # keeps <meta charset> consistent with the bytes we emit
     # Re-encode in the charset the page declared (windows-1255 Hebrew sites used to come back as UTF-8

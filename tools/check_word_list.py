@@ -11,8 +11,9 @@ It reports two things:
 1. Hard-word matches (masked text) with their context. In permitted text each one is a word to fix – except
    LGBTQ+ terms, which are hard in every context by decision.
 2. The hidden score of every document (a file, or each part after a line starting with "### "): which documents
-   would be BLOCKED, and the highest scores. In permitted text a blocked document is a false block to fix.
-Exit code 1 when a document would be blocked.
+   would be BLOCKED, which would get sentences / paragraphs turned into X's, and the highest scores. In permitted
+   text both are false positives to fix.
+Exit code 1 when a document would be blocked or X'd.
 Run it after every edit of core/filters/text/word_lists/*.
 """
 from __future__ import annotations
@@ -70,14 +71,15 @@ def main(argv=None) -> int:
             _out, blocked, _reason, debug = _filter_plain_text(part)
             score = debug.get("score") or {}
             docs.append((blocked, score.get("window_max", 0), score.get("page", 0), score.get("context_factor", 1),
-                         f"{Path(name).name}: {title}", score.get("top_terms", [])))
+                         f"{Path(name).name}: {title}", score.get("top_terms", []), score.get("hidden_blocks", 0)))
     blocked_docs = [d for d in docs if d[0]]
-    print(f"\nScore: {len(docs)} documents, {len(blocked_docs)} would be BLOCKED")
-    for d in sorted(docs, key=lambda d: -d[1])[: args.top]:
-        flag = "BLOCK" if d[0] else "     "
+    xd_docs = [d for d in docs if d[6] and not d[0]]
+    print(f"\nScore: {len(docs)} documents, {len(blocked_docs)} would be BLOCKED, {len(xd_docs)} would get parts X'd")
+    for d in sorted(docs, key=lambda d: (-bool(d[0] or d[6]), -d[1]))[: args.top]:
+        flag = "BLOCK" if d[0] else (f"X×{d[6]:<3}" if d[6] else "     ")
         terms = ", ".join(f"{t} {v}" for t, v in d[5][:5])
         print(f"  {flag} window {d[1]:5.1f} page {d[2]:5.1f} ctx×{d[3]:<3g} {d[4]}  [{terms}]")
-    return 1 if blocked_docs else 0
+    return 1 if blocked_docs or xd_docs else 0
 
 
 if __name__ == "__main__":

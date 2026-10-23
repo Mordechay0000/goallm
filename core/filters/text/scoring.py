@@ -1,68 +1,65 @@
 """
-Hidden score of a page – how the text filter decides without a language model.
+Hidden score – how the text filter decides without a language model.
 
-Every hard or suspicious word / phrase has a weight (lexicon.py). The decision is built from:
+Every hard or suspicious word / phrase has a weight (lexicon.py): a hard word weighs TEXT_HARD_WEIGHT, at least
+twice any suspicious word. The score of a set of matches:
 1. Diminishing returns per term: the first occurrence counts fully, each further one half, up to 2.5× the
    weight. A news story that says "הטרדה מינית" five times is not five suspicious words – immodest text
    uses MANY DIFFERENT such words.
 2. Diversity: three or more different terms together multiply the score (TEXT_DIVERSITY_BONUS).
-3. Locality: the highest score in any window of TEXT_WINDOW_WORDS words. A cluster in one article or one
-   comment counts in full; the same words scattered across a long portal page do not add up to a block.
-4. Context: on a page dense with Torah / halacha markers (פסוק, רש"י, Leviticus…) suspicious – not hard – words count
+3. Context: on a page dense with Torah / halacha markers (פסוק, רש"י, Leviticus…) suspicious – not hard – words count
    TEXT_CONTEXT_FACTOR of their weight; with medical markers TEXT_MEDICAL_FACTOR (weaker, so a "sex-ed" page in
    medical dress still counts most). Hard words (להט"ב…) count fully in any context.
-5. Titles and headings: TEXT_TITLE_FACTOR.
+4. Titles and headings: TEXT_TITLE_FACTOR.
 
-Decision: window score ≥ TEXT_WINDOW_BLOCK_SCORE, or whole-page score ≥ TEXT_PAGE_BLOCK_SCORE.
+One rule at every level – a sentence, a component (heading, search result, teaser, comment, paragraph, list), a
+section (a run of problem words, each within TEXT_SECTION_GAP_WORDS words of the next) and the page: a unit is HOT when its score per TEXT_DENSITY_WORDS
+words reaches TEXT_DENSITY_SCORE. A unit shorter than TEXT_DENSITY_WORDS counts as that long – one mild word in a
+three-word heading is not "dense" – and a long one is judged by its ratio, not by an absolute sum. In other words
+the share of problem words a unit needs grows as the unit gets shorter. And a unit needs at least TEXT_MIN_MATCHES
+problem words: one word alone never turns its heading / sentence / page into X's.
+text_filter.py turns hot units into X's, smallest first, and blocks the page when what is left is still dense
+or when most of it was X'd.
 """
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Sequence, Tuple
 
-from core.filters.text.lexicon import HARD, MARKER, MEDICAL, SCORED, Match
+from core.filters.text.lexicon import HARD, SCORED, Match
 from data.constants import (
     TEXT_CONTEXT_FACTOR,
     TEXT_CONTEXT_MIN_DENSITY,
     TEXT_CONTEXT_MIN_MARKERS,
+    TEXT_DENSITY_SCORE,
+    TEXT_DENSITY_WORDS,
     TEXT_DIVERSITY_BONUS,
     TEXT_MEDICAL_FACTOR,
-    TEXT_PAGE_BLOCK_SCORE,
-    TEXT_WINDOW_BLOCK_SCORE,
-    TEXT_WINDOW_WORDS,
+    TEXT_MIN_MATCHES,
+    TEXT_SECTION_GAP_WORDS,
 )
 
 _REPEAT_FACTOR = 0.5
 _TERM_CAP = 2.5
+DIVERSE_TERMS = 3  # this many different terms together are "many different words" (diversity bonus, page decision)
 
 
 @dataclass
 class Scored:
-    """A match placed in the document: global token position and an extra factor (title / heading)."""
+    """A match placed in the document: global token position, an extra factor (title / heading), and where it sits
+    for X-ing (index of its text group and character offset in it)."""
     match: Match
     pos: int
     factor: float = 1.0
+    group: int = -1
+    off: int = 0
+    own: bool = True  # the page's own text; False inside a link (text or image description): judged on the page it
+    #                   leads to – X'd all the same, not counted for this page
 
 
-@dataclass
-class PageScore:
-    total: float = 0.0
-    window_max: float = 0.0
-    window_start: int = 0
-    context_factor: float = 1.0
-    markers: int = 0
-    words: int = 0
-    top_terms: List[Tuple[str, float]] = field(default_factory=list)
-
-    @property
-    def blocked(self) -> bool:
-        return self.window_max >= TEXT_WINDOW_BLOCK_SCORE or self.total >= TEXT_PAGE_BLOCK_SCORE
-
-    def reason(self) -> str:
-        terms = ", ".join(f"{t} ({s:.1f})" for t, s in self.top_terms[:6])
-        ctx = f", context ×{self.context_factor:g}" if self.context_factor != 1.0 else ""
-        return f"score: window {self.window_max:.1f} / {TEXT_WINDOW_BLOCK_SCORE:g}, page {self.total:.1f} / {TEXT_PAGE_BLOCK_SCORE:g}{ctx} – {terms}"
+def weighted(items: Sequence[Scored]) -> List[Scored]:
+    return [it for it in items if it.match.term.kind in (HARD, SCORED) and it.match.term.weight > 0]
 
 
 def _dense(markers: int, words: int) -> bool:
@@ -91,27 +88,45 @@ def set_score(items: Sequence[Scored], ctx: float) -> Tuple[float, Dict[str, flo
         seen[term.key] += 1
         per_term[term.key] = min(per_term[term.key] + add, _TERM_CAP * w)
     score = sum(per_term.values())
-    if len(per_term) >= 3:
+    if len(per_term) >= DIVERSE_TERMS:
         score *= TEXT_DIVERSITY_BONUS
     return score, dict(per_term)
 
 
-def score_page(items: Sequence[Scored], words: int) -> PageScore:
-    items = sorted(items, key=lambda it: it.pos)
-    markers = sum(1 for it in items if it.match.term.kind == MARKER)
-    ctx = context_factor(markers, words, sum(1 for it in items if it.match.term.kind == MEDICAL))
-    weighted = [it for it in items if it.match.term.kind in (HARD, SCORED) and it.match.term.weight > 0]
-    total, per_term = set_score(weighted, ctx)
-    best, best_start = 0.0, 0
-    j = 0
-    for i, first in enumerate(weighted):  # windows that start at each match
-        if j < i:
-            j = i
-        while j < len(weighted) and weighted[j].pos < first.pos + TEXT_WINDOW_WORDS:
+def density(score: float, words: int) -> float:
+    """Score per TEXT_DENSITY_WORDS words; a unit shorter than that counts as that long."""
+    return score * TEXT_DENSITY_WORDS / max(words, TEXT_DENSITY_WORDS)
+
+
+def is_hot(score: float, words: int, matches: int) -> bool:
+    return matches >= TEXT_MIN_MATCHES and density(score, words) >= TEXT_DENSITY_SCORE
+
+
+def _window_end(items: Sequence[Scored], i: int, j: int) -> int:
+    while j < len(items) and items[j].pos < items[i].pos + TEXT_DENSITY_WORDS:
+        j += 1
+    return j
+
+
+def hot_sections(items: Sequence[Scored], ctx: float) -> List[Tuple[int, int]]:
+    """[i, j) runs of position-sorted weighted items, each within TEXT_SECTION_GAP_WORDS words of the next, that are hot
+    (a run longer than TEXT_DENSITY_WORDS words is judged by its density)."""
+    out: List[Tuple[int, int]] = []
+    i = 0
+    while i < len(items):
+        j = i + 1
+        while j < len(items) and items[j].pos - items[j - 1].pos <= TEXT_SECTION_GAP_WORDS:
             j += 1
-        s, _ = set_score(weighted[i:j], ctx)
-        if s > best:
-            best, best_start = s, first.pos
-    top = sorted(per_term.items(), key=lambda kv: -kv[1])
-    return PageScore(total=total, window_max=best, window_start=best_start, context_factor=ctx,
-                     markers=markers, words=words, top_terms=top)
+        if is_hot(set_score(items[i:j], ctx)[0], items[j - 1].pos - items[i].pos + 1, j - i):
+            out.append((i, j))
+        i = j
+    return out
+
+
+def best_window(items: Sequence[Scored], ctx: float) -> float:
+    """Highest score of any TEXT_DENSITY_WORDS-word window (reporting)."""
+    best, j = 0.0, 0
+    for i in range(len(items)):
+        j = _window_end(items, i, max(j, i))
+        best = max(best, set_score(items[i:j], ctx)[0])
+    return best

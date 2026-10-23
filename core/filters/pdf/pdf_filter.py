@@ -116,9 +116,13 @@ def _apply_pdf_text_filter(
                 blocks_with_detection, total_blocks, pct * 100,
             )
     if not block_page and all_text:
-        _masked, score_block, score_reason, _debug = _filter_plain_text("\n".join(all_text))
-        if score_block:
-            block_page, block_reason = True, "pdf_" + score_reason
+        # each PDF block is a paragraph; a hot section spanning several blocks cannot be redacted block by block,
+        # so in a PDF it blocks the document
+        _masked, score_block, score_reason, debug = _filter_plain_text("\n\n".join(all_text))
+        sections = (debug.get("score") or {}).get("sections", 0)
+        if score_block or sections:
+            block_page = True
+            block_reason = "pdf_" + (score_reason or f"score: {sections} dense section(s) across text blocks")
     return block_page, block_reason
 
 
